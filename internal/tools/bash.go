@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -149,14 +150,97 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 }
 
 // shellConfig returns the shell and its command-string flag for the current OS.
+//
+// On Windows we must NOT use exec.LookPath("bash"): that resolves to
+// C:\Windows\System32\bash.exe, the WSL launcher stub, which runs commands
+// inside a Linux environment (failing entirely when WSL isn't installed, and
+// operating on the wrong filesystem even when it is). Instead we resolve, in
+// priority order:
+//
+//  1. the MYAGENT_SHELL env var (used verbatim), for full user control;
+//  2. a real Git Bash / MSYS2 bash, explicitly excluding the System32 and
+//     WindowsApps WSL stubs, so bash-style commands keep working;
+//  3. cmd.exe via %ComSpec% as a guaranteed native fallback.
 func shellConfig() (string, []string) {
+	if shell := strings.TrimSpace(os.Getenv("MYAGENT_SHELL")); shell != "" {
+		return shell, shellArgsFor(shell)
+	}
 	if runtime.GOOS == "windows" {
-		if bash, err := exec.LookPath("bash"); err == nil {
+		if bash := findWindowsBash(); bash != "" {
 			return bash, []string{"-c"}
 		}
-		return "cmd", []string{"/C"}
+		comspec := os.Getenv("ComSpec")
+		if comspec == "" {
+			comspec = "cmd.exe"
+		}
+		return comspec, []string{"/C"}
 	}
 	return "/bin/sh", []string{"-c"}
+}
+
+// shellArgsFor picks the command-string flag for a shell path: "/C" for
+// cmd.exe, "-Command" for PowerShell, and "-c" for everything else (bash/sh).
+func shellArgsFor(shell string) []string {
+	base := strings.ToLower(filepath.Base(shell))
+	base = strings.TrimSuffix(base, ".exe")
+	switch base {
+	case "cmd":
+		return []string{"/C"}
+	case "powershell", "pwsh":
+		return []string{"-Command"}
+	default:
+		return []string{"-c"}
+	}
+}
+
+// isWSLStub reports whether a bash path is actually the Windows WSL launcher
+// stub (System32\bash.exe) or a WindowsApps alias rather than a real bash.
+func isWSLStub(path string) bool {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	return strings.Contains(lower, "/system32/") || strings.Contains(lower, "/windowsapps/")
+}
+
+// findWindowsBash locates a real Git Bash / MSYS2 bash on Windows, explicitly
+// skipping the System32/WindowsApps WSL stub. Returns "" if none is found.
+func findWindowsBash() string {
+	// 1. Common Git-for-Windows / MSYS2 install locations.
+	var candidates []string
+	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"} {
+		if root := os.Getenv(env); root != "" {
+			candidates = append(candidates,
+				filepath.Join(root, "Git", "bin", "bash.exe"),
+				filepath.Join(root, "Git", "usr", "bin", "bash.exe"),
+			)
+		}
+	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		candidates = append(candidates,
+			filepath.Join(local, "Programs", "Git", "bin", "bash.exe"),
+		)
+	}
+	for _, c := range candidates {
+		if !isWSLStub(c) && fileExists(c) {
+			return c
+		}
+	}
+
+	// 2. Walk PATH, skipping the System32/WindowsApps stubs.
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, "bash.exe")
+		if !isWSLStub(candidate) && fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// fileExists reports whether path exists and is a regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // writeFullOutput persists the complete command output to a temp file and

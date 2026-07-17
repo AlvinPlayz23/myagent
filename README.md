@@ -65,6 +65,7 @@ There are no other install steps.
 | `OPENAI_BASE_URL`  | Endpoint base URL                    | `https://api.openai.com/v1` |
 | `MYAGENT_MODEL`    | Model id                             | `gpt-4o`                    |
 | `MYAGENT_DIR`      | Config + session directory           | `~/.myagent`                |
+| `MYAGENT_SHELL`    | Shell used by the `bash` tool        | auto-detected (see below)   |
 
 ### Optional config file (`$MYAGENT_DIR/config.json`)
 
@@ -80,6 +81,26 @@ A missing file is not an error: env vars + defaults still produce a
 working config. Env vars always win over file values.
 
 > Prefer the env var for the API key on shared machines.
+
+### Shell selection for the `bash` tool
+
+The `bash` tool runs commands through a real shell. It resolves one in
+this order:
+
+1. **`MYAGENT_SHELL`** — used verbatim if set (e.g.
+   `C:\Program Files\Git\bin\bash.exe`, `pwsh`, `/bin/bash`).
+2. On **Windows**, a real **Git Bash / MSYS2 `bash.exe`** — probed in the
+   usual Git-for-Windows install locations and on `PATH`. The
+   `C:\Windows\System32\bash.exe` **WSL launcher stub is deliberately
+   skipped**, so the tool never shells into WSL.
+3. On **Windows** with no real bash found, **`cmd.exe`** (via `%ComSpec%`).
+4. On macOS / Linux, `/bin/sh`.
+
+Install [Git for Windows][gitwin] to get bash-style commands
+(`ls`, `grep`, `rg`, `&&` chains) working natively; otherwise commands
+run under `cmd.exe`.
+
+[gitwin]: https://git-scm.com/download/win
 
 ---
 
@@ -247,6 +268,12 @@ supports ConPTY. Use **Windows Terminal** or run under WSL.
 The TUI deliberately uses bubbletea's alt screen — output goes to the
 buffer and is restored on exit. For CI-friendly logs, capture the
 binary's stdout via `go run . -p "..."` instead.
+
+**On Windows, the `bash` tool errors with "wsl is not available" (or runs in the wrong environment)**
+That means it found `C:\Windows\System32\bash.exe`, the WSL launcher
+stub. myagent now skips that stub automatically and prefers Git Bash,
+falling back to `cmd.exe`. Install [Git for Windows][gitwin] for full
+bash-style commands, or set `MYAGENT_SHELL` to the shell you want.
 
 **`go run . --continue` says "no sessions found"**
 Either none exist yet (run an interactive session first), or
