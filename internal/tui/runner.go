@@ -40,7 +40,7 @@ type runner struct {
 	// before the event is forwarded to the UI channel). Used to persist
 	// messages and compactions to the session file as they complete, so the
 	// session stays in sync with the loop's in-memory history.
-	onEvent func(types.AgentEvent)
+	onEvent func(types.AgentEvent) error
 }
 
 // newRunner builds a runner over the given agent config and initial history.
@@ -68,7 +68,9 @@ func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 			// Persist messages/compactions to the session before forwarding to
 			// the UI, so the session stays in sync with the loop's history.
 			if r.onEvent != nil {
-				r.onEvent(ev)
+				if err := r.onEvent(ev); err != nil {
+					return err
+				}
 			}
 			select {
 			case r.events <- ev:

@@ -47,7 +47,9 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 			// Persist each message as it completes so the session stays in sync
 			// with the loop's in-memory history (needed for compaction).
 			if ev.Message != nil && sess != nil {
-				_ = sess.AppendMessage(*ev.Message)
+				if err := sess.AppendMessage(*ev.Message); err != nil {
+					return err
+				}
 			}
 		case types.EventCompactionStart:
 			if ev.Compaction != nil {
@@ -58,7 +60,9 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 				fmt.Fprintf(stderr, "[compaction] done: %d → %d tokens\n", ev.Compaction.TokensBefore, ev.Compaction.TokensAfter)
 			}
 			if ev.Compaction != nil && ev.Message != nil && sess != nil {
-				_ = sess.ApplyCompaction(*ev.Compaction, *ev.Message)
+				if err := sess.ApplyCompaction(*ev.Compaction, *ev.Message); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

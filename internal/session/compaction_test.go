@@ -274,3 +274,43 @@ func TestCompactionDetailsPersisted(t *testing.T) {
 		t.Error("compaction entry should contain c.go in details")
 	}
 }
+
+// TestApplyCompactionWriteFailurePreservesInMemoryState verifies that a failed
+// compaction append does not make the session's memory diverge from its JSONL
+// history.
+func TestApplyCompactionWriteFailurePreservesInMemoryState(t *testing.T) {
+	withTempDir(t)
+
+	s, err := Create("/work")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer s.Close()
+	for _, m := range []types.Message{userMsg("first"), assistantMsg("second"), userMsg("third")} {
+		if err := s.AppendMessage(m); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	before := append([]types.Message(nil), s.Messages()...)
+	if err := s.f.Close(); err != nil {
+		t.Fatalf("close session file: %v", err)
+	}
+	if err := s.ApplyCompaction(types.CompactionInfo{
+		Summary:        "## Goal\nsummary",
+		FirstKeptIndex: 2,
+		TokensBefore:   300,
+	}, compaction.BuildSummaryMessage("## Goal\nsummary", 1000)); err == nil {
+		t.Fatal("ApplyCompaction succeeded after the session file was closed")
+	}
+
+	after := s.Messages()
+	if len(after) != len(before) {
+		t.Fatalf("message count after failed compaction: got %d want %d", len(after), len(before))
+	}
+	for i := range before {
+		if after[i].Role != before[i].Role || after[i].Content[0].Text != before[i].Content[0].Text {
+			t.Errorf("message %d changed after failed compaction: got %+v want %+v", i, after[i], before[i])
+		}
+	}
+}

@@ -30,20 +30,21 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 	// on the loop goroutine, before it reaches the UI. This keeps the session
 	// file in sync with the loop's in-memory history so that compaction's
 	// FirstKeptIndex maps correctly to session entry ids.
-	r.onEvent = func(ev types.AgentEvent) {
+	r.onEvent = func(ev types.AgentEvent) error {
 		if sess == nil {
-			return
+			return nil
 		}
 		switch ev.Type {
 		case types.EventMessageEnd:
 			if ev.Message != nil {
-				_ = sess.AppendMessage(*ev.Message)
+				return sess.AppendMessage(*ev.Message)
 			}
 		case types.EventCompactionEnd:
 			if ev.Compaction != nil && ev.Message != nil {
-				_ = sess.ApplyCompaction(*ev.Compaction, *ev.Message)
+				return sess.ApplyCompaction(*ev.Compaction, *ev.Message)
 			}
 		}
+		return nil
 	}
 
 	p := tea.NewProgram(m, tea.WithContext(ctx))

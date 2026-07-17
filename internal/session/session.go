@@ -275,11 +275,13 @@ func (s *Session) AppendMessage(m types.Message) error {
 // in-memory message still represented verbatim after this compaction;
 // messages before it remain on disk for audit but are not loaded by Open.
 //
-// The in-memory message history MUST already have been replaced by the caller
-// with [summary-as-user-message] + [kept messages]; this method only persists
-// the compaction record. tokensBefore is the estimated context-token count
-// that triggered compaction. details is an optional JSON blob (e.g. file
-// lists accumulated across the summarized span); pass nil to omit it.
+// This method only persists the compaction record and advances lastID. It does
+// not rewrite s.messages / s.entryIDs — callers (typically ApplyCompaction)
+// must update in-memory history only after this write succeeds, so a failed
+// append cannot leave memory compacted while the JSONL log is not.
+// tokensBefore is the estimated context-token count that triggered compaction.
+// details is an optional JSON blob (e.g. file lists accumulated across the
+// summarized span); pass nil to omit it.
 func (s *Session) AppendCompaction(summary, firstKeptEntryID string, tokensBefore int, details json.RawMessage) error {
 	if summary == "" {
 		return fmt.Errorf("session: AppendCompaction requires a summary")
@@ -341,17 +343,26 @@ func (s *Session) ApplyCompaction(info types.CompactionInfo, summaryMsg types.Me
 		firstKeptEntryID = s.entryIDs[info.FirstKeptIndex]
 	}
 
-	// Replace in-memory state: [summary] + [kept messages].
+	// Build the replacement state before writing, but do not apply it until the
+	// compaction record is durable. A failed append must leave this session's
+	// in-memory history aligned with its on-disk log.
 	keptMsgs := append([]types.Message(nil), s.messages[info.FirstKeptIndex:]...)
 	keptIDs := append([]string{}, s.entryIDs[info.FirstKeptIndex:]...)
-	s.messages = append([]types.Message{summaryMsg}, keptMsgs...)
-	s.entryIDs = append([]string{""}, keptIDs...)
 
-	details, _ := json.Marshal(compactionDetailsJSON{
+	details, err := json.Marshal(compactionDetailsJSON{
 		ReadFiles:     info.ReadFiles,
 		ModifiedFiles: info.ModifiedFiles,
 	})
-	return s.AppendCompaction(info.Summary, firstKeptEntryID, info.TokensBefore, details)
+	if err != nil {
+		return fmt.Errorf("session: marshal compaction details: %w", err)
+	}
+	if err := s.AppendCompaction(info.Summary, firstKeptEntryID, info.TokensBefore, details); err != nil {
+		return err
+	}
+
+	s.messages = append([]types.Message{summaryMsg}, keptMsgs...)
+	s.entryIDs = append([]string{""}, keptIDs...)
+	return nil
 }
 
 // Close flushes and closes the underlying file.
