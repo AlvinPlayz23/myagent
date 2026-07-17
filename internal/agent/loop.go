@@ -95,13 +95,6 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 	pending := l.steering()
 
 	for {
-		// Auto-compact before each turn if the context window is nearly full.
-		// This catches both resumed sessions that are already over the limit
-		// and sessions that grew past it during the previous turn.
-		if err := l.maybeCompact(ctx); err != nil {
-			return err
-		}
-
 		hasMoreToolCalls := true
 
 		for hasMoreToolCalls || len(pending) > 0 {
@@ -127,6 +120,14 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 					*produced = append(*produced, m)
 				}
 				pending = nil
+			}
+
+			// Compact immediately before every provider request. In particular,
+			// this runs after an assistant tool-call and all of its tool results
+			// have been appended, keeping that exchange intact before the next
+			// model request can exceed the context window.
+			if err := l.maybeCompact(ctx); err != nil {
+				return err
 			}
 
 			message, err := l.streamAssistant(ctx)

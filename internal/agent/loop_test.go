@@ -350,6 +350,126 @@ func TestLoopCompactionPreservesToolResultGroup(t *testing.T) {
 	}
 }
 
+// TestLoopCompactsBeforeToolFollowUpRequest verifies that a tool result which
+// pushes the context over the threshold is compacted before the next provider
+// request. The kept history must retain the assistant tool-call and its result
+// together.
+func TestLoopCompactsBeforeToolFollowUpRequest(t *testing.T) {
+	provider := &toolLoopCompactionProvider{summaryText: "## Goal\nsummary"}
+	var events []types.AgentEvent
+	cfg := Config{
+		Provider: provider,
+		Model:    llm.Model{ID: "test"},
+		CompactionSettings: compaction.Settings{
+			Enabled:          true,
+			ReserveTokens:    255_800, // threshold = 200 tokens
+			KeepRecentTokens: 10,
+		},
+	}
+
+	// This remains below the threshold for the first provider request. The
+	// synthetic failed tool result from the length-truncated response pushes it
+	// over the threshold before the tool-loop follow-up request.
+	history := []types.Message{{
+		Role:    types.RoleUser,
+		Content: []types.ContentBlock{types.TextBlock(strings.Repeat("x", 650))},
+	}}
+	loop := New(cfg, history, collectEvents(&events))
+	if _, err := loop.Run(context.Background(), []types.Message{{
+		Role:    types.RoleUser,
+		Content: []types.ContentBlock{types.TextBlock("continue")},
+	}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !hasEvent(events, types.EventCompactionEnd) {
+		t.Fatal("compaction_end not emitted after the tool result crossed the threshold")
+	}
+	if provider.numRequests() != 3 {
+		t.Fatalf("expected tool response, summary, and follow-up response; got %d requests", provider.numRequests())
+	}
+
+	followUpReq := provider.request(2)
+	if len(followUpReq.Messages) < 3 {
+		t.Fatalf("follow-up request has %d messages, want summary plus tool exchange", len(followUpReq.Messages))
+	}
+	if !compaction.IsSummaryMessage(followUpReq.Messages[0]) {
+		t.Fatal("follow-up request did not receive the compaction summary")
+	}
+	if followUpReq.Messages[1].Role != types.RoleAssistant || len(followUpReq.Messages[1].ToolCalls()) != 1 {
+		t.Fatal("kept history is missing the assistant tool-call")
+	}
+	if followUpReq.Messages[2].Role != types.RoleToolResult {
+		t.Fatal("kept history is missing the matching tool result")
+	}
+}
+
+// toolLoopCompactionProvider returns a length-truncated tool call first, then
+// a final response. It records the intervening summarization request.
+type toolLoopCompactionProvider struct {
+	mu          sync.Mutex
+	requests    []llm.Request
+	summaryText string
+}
+
+func (p *toolLoopCompactionProvider) Stream(ctx context.Context, model llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, req)
+	regularRequests := 0
+	for _, recorded := range p.requests {
+		if recorded.SystemPrompt != compaction.SummarizationSystemPrompt {
+			regularRequests++
+		}
+	}
+	p.mu.Unlock()
+
+	out := make(chan llm.StreamEvent, 2)
+	go func() {
+		defer close(out)
+		if req.SystemPrompt == compaction.SummarizationSystemPrompt {
+			out <- llm.StreamEvent{Type: "done", Message: &types.Message{
+				Role:       types.RoleAssistant,
+				Content:    []types.ContentBlock{types.TextBlock(p.summaryText)},
+				StopReason: types.StopStop,
+			}}
+			return
+		}
+		if regularRequests == 1 {
+			out <- llm.StreamEvent{Type: "done", Message: &types.Message{
+				Role: types.RoleAssistant,
+				Content: []types.ContentBlock{{
+					Type: types.ContentToolCall,
+					ID:   "tool-1",
+					Name: "read",
+					Arguments: map[string]any{
+						"path": "example.go",
+					},
+				}},
+				StopReason: types.StopLength,
+			}}
+			return
+		}
+		out <- llm.StreamEvent{Type: "done", Message: &types.Message{
+			Role:       types.RoleAssistant,
+			Content:    []types.ContentBlock{types.TextBlock("done")},
+			StopReason: types.StopStop,
+		}}
+	}()
+	return out, nil
+}
+
+func (p *toolLoopCompactionProvider) numRequests() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.requests)
+}
+
+func (p *toolLoopCompactionProvider) request(i int) llm.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.requests[i]
+}
+
 func textOfMsg(m types.Message) string {
 	var parts []string
 	for _, c := range m.Content {
