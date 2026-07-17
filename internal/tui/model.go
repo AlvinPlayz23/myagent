@@ -36,7 +36,7 @@ type model struct {
 	width, height int
 	ready         bool
 
-	working     bool // an agent Run is in progress
+	working      bool // an agent Run is in progress
 	spinnerFrame int
 	startedAt    time.Time
 	statusMsg    string
@@ -267,6 +267,13 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 		m.transcript.startTool(ev.ToolCallID, ev.ToolName, ev.Args)
 	case types.EventToolExecutionEnd:
 		m.transcript.endTool(ev.ToolCallID, ev.Result, ev.IsError)
+	case types.EventCompactionEnd:
+		if ev.Compaction != nil {
+			m.transcript.addNotice(fmt.Sprintf(
+				"∼ Context compacted: %d → %d tokens (kept recent history).",
+				ev.Compaction.TokensBefore, ev.Compaction.TokensAfter,
+			))
+		}
 	}
 	m.refreshViewport()
 	return nil

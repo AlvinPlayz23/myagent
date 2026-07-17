@@ -16,6 +16,7 @@ const (
 	blockAssistant
 	blockTool
 	blockError
+	blockNotice
 )
 
 // block is a single renderable unit in the transcript. Assistant blocks grow
@@ -37,10 +38,10 @@ type block struct {
 	toolDone   bool
 
 	// cache
-	cacheWidth   int
-	cacheExpand  bool
-	cached       string
-	cacheValid   bool
+	cacheWidth  int
+	cacheExpand bool
+	cached      string
+	cacheValid  bool
 }
 
 // transcript is the ordered list of blocks plus render settings.
@@ -114,6 +115,11 @@ func (t *transcript) addErrorText(text string) {
 	t.blocks = append(t.blocks, &block{kind: blockError, text: text})
 }
 
+// addNotice appends a muted system-notice block (e.g. compaction summary).
+func (t *transcript) addNotice(text string) {
+	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text})
+}
+
 // startTool appends a tool block in the pending state.
 func (t *transcript) startTool(callID, name string, args map[string]any) {
 	t.blocks = append(t.blocks, &block{
@@ -173,6 +179,8 @@ func (t *transcript) renderBlock(b *block, width int) string {
 		out = strings.TrimRight(t.md.render(b.text, width), "\n")
 	case blockError:
 		out = t.th.errorText.Render(b.text)
+	case blockNotice:
+		out = t.th.muted.Render(b.text)
 	case blockTool:
 		out = t.renderTool(b, width)
 	}

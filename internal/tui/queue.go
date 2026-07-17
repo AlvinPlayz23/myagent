@@ -21,9 +21,9 @@ import (
 // The agent loop polls Steering()/FollowUp() between turns; the UI goroutine
 // enqueues from key handlers. All access is mutex-guarded.
 type msgQueue struct {
-	mu        sync.Mutex
-	steering  []types.Message
-	followUp  []types.Message
+	mu       sync.Mutex
+	steering []types.Message
+	followUp []types.Message
 }
 
 // newMsgQueue returns an empty queue.

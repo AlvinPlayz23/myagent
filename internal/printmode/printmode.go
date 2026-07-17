@@ -15,7 +15,8 @@ import (
 
 // Run executes a single prompt in print mode. Assistant text is written to
 // stdout; tool activity is written to stderr. Every produced message is
-// appended to sess (if non-nil).
+// appended to sess (if non-nil) as it completes, and compactions are
+// persisted when they occur.
 func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history []types.Message, prompt string, stdout, stderr io.Writer) error {
 	var textStreamed bool
 	sink := func(_ context.Context, ev types.AgentEvent) error {
@@ -43,24 +44,29 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 				fmt.Fprintln(stdout)
 				textStreamed = false
 			}
+			// Persist each message as it completes so the session stays in sync
+			// with the loop's in-memory history (needed for compaction).
+			if ev.Message != nil && sess != nil {
+				_ = sess.AppendMessage(*ev.Message)
+			}
+		case types.EventCompactionStart:
+			if ev.Compaction != nil {
+				fmt.Fprintf(stderr, "\n[compaction] summarizing context (%d tokens)...\n", ev.Compaction.TokensBefore)
+			}
+		case types.EventCompactionEnd:
+			if ev.Compaction != nil {
+				fmt.Fprintf(stderr, "[compaction] done: %d → %d tokens\n", ev.Compaction.TokensBefore, ev.Compaction.TokensAfter)
+			}
+			if ev.Compaction != nil && ev.Message != nil && sess != nil {
+				_ = sess.ApplyCompaction(*ev.Compaction, *ev.Message)
+			}
 		}
 		return nil
 	}
 
 	loop := agent.New(cfg, history, sink)
-	produced, err := loop.Run(ctx, []types.Message{userMessage(prompt)})
-	if err != nil {
-		return err
-	}
-
-	if sess != nil {
-		for _, m := range produced {
-			if perr := sess.AppendMessage(m); perr != nil {
-				return perr
-			}
-		}
-	}
-	return nil
+	_, err := loop.Run(ctx, []types.Message{userMessage(prompt)})
+	return err
 }
 
 func userMessage(text string) types.Message {

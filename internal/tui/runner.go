@@ -36,9 +36,11 @@ type runner struct {
 	// drains it continuously via waitForEvent.
 	events chan types.AgentEvent
 
-	// persist, if set, is called with the messages produced by each completed
-	// Run so they can be appended to the session file.
-	persist func([]types.Message)
+	// onEvent, if set, is called for every AgentEvent (on the loop goroutine,
+	// before the event is forwarded to the UI channel). Used to persist
+	// messages and compactions to the session file as they complete, so the
+	// session stays in sync with the loop's in-memory history.
+	onEvent func(types.AgentEvent)
 }
 
 // newRunner builds a runner over the given agent config and initial history.
@@ -63,6 +65,11 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 	return func() tea.Msg {
 		sink := func(sctx context.Context, ev types.AgentEvent) error {
+			// Persist messages/compactions to the session before forwarding to
+			// the UI, so the session stays in sync with the loop's history.
+			if r.onEvent != nil {
+				r.onEvent(ev)
+			}
 			select {
 			case r.events <- ev:
 				return nil
@@ -71,12 +78,9 @@ func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 			}
 		}
 		loop := agent.New(r.cfg, r.history, sink)
-		produced, err := loop.Run(ctx, []types.Message{prompt})
+		_, err := loop.Run(ctx, []types.Message{prompt})
 		// Persist the full conversation so subsequent prompts continue it.
 		r.history = loop.Messages()
-		if r.persist != nil {
-			r.persist(produced)
-		}
 		return agentDoneMsg{err: err}
 	}
 }

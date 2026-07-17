@@ -1,10 +1,11 @@
 // Command myagent is a coding agent.
 //
 // Usage:
-//   myagent                       enter the interactive TUI (default)
-//   myagent tui                   same; explicit
-//   myagent -p "prompt"           non-interactive: stream a single reply to stdout
-//   myagent sessions              list persisted sessions, newest first
+//
+//	myagent                       enter the interactive TUI (default)
+//	myagent tui                   same; explicit
+//	myagent -p "prompt"           non-interactive: stream a single reply to stdout
+//	myagent sessions              list persisted sessions, newest first
 //
 // Flags for print/resume mode: -p / -print, --continue, --resume <path>,
 // --resume-id <id>, --model, --base-url.
@@ -20,6 +21,7 @@ import (
 	"syscall"
 
 	"github.com/myagent/myagent/internal/agent"
+	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/config"
 	"github.com/myagent/myagent/internal/llm"
 	"github.com/myagent/myagent/internal/printmode"
@@ -122,10 +124,11 @@ func run(argv []string) error {
 	registry := tools.DefaultRegistry(cwd)
 	provider := llm.NewOpenAIProvider(cfg.APIKey)
 	agentCfg := agent.Config{
-		Provider:     provider,
-		Model:        llm.Model{ID: cfg.Model, Provider: "openai", BaseURL: cfg.BaseURL},
-		Registry:     registry,
-		SystemPrompt: agent.BuildSystemPrompt(registry, cwd),
+		Provider:           provider,
+		Model:              llm.Model{ID: cfg.Model, Provider: "openai", BaseURL: cfg.BaseURL},
+		Registry:           registry,
+		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
+		CompactionSettings: compaction.DefaultSettings,
 	}
 
 	// Prior conversation (empty for a fresh session).

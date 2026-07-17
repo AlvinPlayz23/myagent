@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/llm"
 	"github.com/myagent/myagent/internal/tools"
 	"github.com/myagent/myagent/internal/types"
@@ -28,13 +29,14 @@ type MessageQueue interface {
 
 // Config bundles the dependencies a single agent run needs.
 type Config struct {
-	Provider     llm.Provider
-	Model        llm.Model
-	Registry     *tools.Registry
-	SystemPrompt string
-	Temperature  *float64
-	MaxTokens    *int
-	Queue        MessageQueue // optional
+	Provider           llm.Provider
+	Model              llm.Model
+	Registry           *tools.Registry
+	SystemPrompt       string
+	Temperature        *float64
+	MaxTokens          *int
+	Queue              MessageQueue // optional
+	CompactionSettings compaction.Settings
 }
 
 // Loop is a reusable agent driver over a fixed Config and conversation.
@@ -93,6 +95,13 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 	pending := l.steering()
 
 	for {
+		// Auto-compact before each turn if the context window is nearly full.
+		// This catches both resumed sessions that are already over the limit
+		// and sessions that grew past it during the previous turn.
+		if err := l.maybeCompact(ctx); err != nil {
+			return err
+		}
+
 		hasMoreToolCalls := true
 
 		for hasMoreToolCalls || len(pending) > 0 {
@@ -370,4 +379,69 @@ func (l *Loop) followUp() []types.Message {
 		return nil
 	}
 	return l.cfg.Queue.FollowUp()
+}
+
+// maybeCompact checks whether the conversation is nearing the context window
+// and, if so, runs auto-compaction: older history is summarized by the same
+// provider/model (with a dedicated summarization prompt, no tools) and
+// replaced by [summary message] + [recent messages]. Ported from pi's
+// compaction trigger in agent-loop.ts.
+//
+// On success, l.messages is replaced in place and a compaction_end event is
+// emitted (carrying the summary message and the cut point). On failure, the
+// history is left untouched and no compaction_end is emitted — the run
+// continues with the full history. Compaction is skipped silently when there
+// is nothing safe to summarize.
+func (l *Loop) maybeCompact(ctx context.Context) error {
+	s := l.cfg.CompactionSettings
+	if !s.Enabled || l.cfg.Provider == nil {
+		return nil
+	}
+
+	est := compaction.EstimateContextTokens(l.messages)
+	if !compaction.ShouldCompact(est.Tokens, compaction.ContextWindow, s) {
+		return nil
+	}
+
+	prep, ok := compaction.PrepareCompaction(l.messages, s)
+	if !ok {
+		return nil // nothing safe to summarize
+	}
+
+	if err := l.emit(ctx, types.AgentEvent{
+		Type:       types.EventCompactionStart,
+		Compaction: &types.CompactionInfo{TokensBefore: est.Tokens},
+	}); err != nil {
+		return err
+	}
+
+	result, err := compaction.Compact(ctx, l.cfg.Provider, l.cfg.Model, prep)
+	if err != nil {
+		// Compaction failed: leave history untouched and continue. The next
+		// provider request may overflow, but we prefer that over corrupting
+		// the conversation with a partial/missing summary.
+		return nil
+	}
+
+	summaryMsg := compaction.BuildSummaryMessage(result.Summary, time.Now().UnixMilli())
+
+	// Replace history: [summary] + [kept messages].
+	l.messages = append([]types.Message{summaryMsg}, l.messages[result.FirstKeptIndex:]...)
+
+	if err := l.emit(ctx, types.AgentEvent{
+		Type:    types.EventCompactionEnd,
+		Message: &summaryMsg,
+		Compaction: &types.CompactionInfo{
+			Summary:        result.Summary,
+			FirstKeptIndex: result.FirstKeptIndex,
+			TokensBefore:   result.TokensBefore,
+			TokensAfter:    result.TokensAfter,
+			ReadFiles:      result.Details.ReadFiles,
+			ModifiedFiles:  result.Details.ModifiedFiles,
+		},
+	}); err != nil {
+		return err
+	}
+
+	return nil
 }

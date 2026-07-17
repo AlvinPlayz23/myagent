@@ -147,9 +147,25 @@ go run . "Write a haiku about Go."   # same thing
 Each run creates or resumes a JSONL file under
 `$MYAGENT_DIR/sessions/<id>.jsonl`. The file is append-only: line 1 is a
 session header (`type`, `version`, `id`, `cwd`, `timestamp`); each
-following line is a message entry linked to the previous one by
-`id` / `parentId`. Killing myagent mid-run is safe — re-running with
+following line is a message or compaction entry linked to the previous one
+by `id` / `parentId`. Killing myagent mid-run is safe — re-running with
 `--continue` (or `--resume-id <id>`) restores the full conversation.
+
+### Context compaction
+
+Long sessions are automatically compacted before they overflow the model's
+context window. When the estimated context size nears **230 000 tokens**
+(the harness limit is 256 000, with a 26 000-token reserve), the agent
+summarizes the older conversation history using the same model and a
+dedicated summarization prompt (no tools), then replaces it with
+`[summary] + [recent messages]`. Approximately 20 000 tokens of recent
+context are kept verbatim so the agent retains its immediate working state.
+
+The compaction is persisted to the session file as a `compaction` entry.
+On resume, only `[summary] + [kept messages]` are loaded — the compacted-away
+messages remain on disk for audit but are not sent to the model. Repeated
+compactions update the existing summary rather than re-summarizing from
+scratch.
 
 List sessions (newest first by file mtime):
 
@@ -177,11 +193,12 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 ├── go.mod / go.sum
 ├── internal/
 │   ├── agent/           # prompt→stream→tools→repeat loop, event emission
+│   │   └── compaction/  # auto context compaction (summarize old history)
 │   ├── config/          # JSON config + env overrides
 │   ├── eventbus/        # guaranteed-delivery pub/sub for agent events
 │   ├── llm/             # Provider interface + OpenAI streaming adapter
 │   ├── printmode/       # non-interactive one-shot driver
-│   ├── session/         # JSONL persistence (v3, id/parentId chain, list, resume)
+│   ├── session/         # JSONL persistence (v4, id/parentId chain, compaction, list, resume)
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
 │   ├── tui/             # bubbletea v2 UI: transcript, input, footer
 │   └── types/           # Message / Content / ToolCall / Usage / Event

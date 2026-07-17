@@ -68,12 +68,12 @@ const (
 // Usage captures token accounting for a single assistant response.
 // Mirrors pi's Usage (packages/ai/src/types.ts).
 type Usage struct {
-	Input       int `json:"input"`
-	Output      int `json:"output"`
-	CacheRead   int `json:"cacheRead"`
-	CacheWrite  int `json:"cacheWrite"`
-	Reasoning   int `json:"reasoning,omitempty"`
-	TotalTokens int `json:"totalTokens"`
+	Input       int  `json:"input"`
+	Output      int  `json:"output"`
+	CacheRead   int  `json:"cacheRead"`
+	CacheWrite  int  `json:"cacheWrite"`
+	Reasoning   int  `json:"reasoning,omitempty"`
+	TotalTokens int  `json:"totalTokens"`
 	Cost        Cost `json:"cost"`
 }
 
@@ -138,16 +138,18 @@ type AssistantMessageEvent struct {
 type AgentEventType string
 
 const (
-	EventAgentStart         AgentEventType = "agent_start"
-	EventAgentEnd           AgentEventType = "agent_end"
-	EventTurnStart          AgentEventType = "turn_start"
-	EventTurnEnd            AgentEventType = "turn_end"
-	EventMessageStart       AgentEventType = "message_start"
-	EventMessageUpdate      AgentEventType = "message_update"
-	EventMessageEnd         AgentEventType = "message_end"
+	EventAgentStart          AgentEventType = "agent_start"
+	EventAgentEnd            AgentEventType = "agent_end"
+	EventTurnStart           AgentEventType = "turn_start"
+	EventTurnEnd             AgentEventType = "turn_end"
+	EventMessageStart        AgentEventType = "message_start"
+	EventMessageUpdate       AgentEventType = "message_update"
+	EventMessageEnd          AgentEventType = "message_end"
 	EventToolExecutionStart  AgentEventType = "tool_execution_start"
 	EventToolExecutionUpdate AgentEventType = "tool_execution_update"
 	EventToolExecutionEnd    AgentEventType = "tool_execution_end"
+	EventCompactionStart     AgentEventType = "compaction_start"
+	EventCompactionEnd       AgentEventType = "compaction_end"
 )
 
 // AgentEvent is a single event emitted by the agent for UIs to render.
@@ -167,12 +169,28 @@ type AgentEvent struct {
 	Messages []Message `json:"messages,omitempty"`
 
 	// tool_execution_*
-	ToolCallID    string          `json:"toolCallId,omitempty"`
-	ToolName      string          `json:"toolName,omitempty"`
-	Args          map[string]any  `json:"args,omitempty"`
-	Result        *ToolResult     `json:"result,omitempty"`
-	PartialResult *ToolResult     `json:"partialResult,omitempty"`
-	IsError       bool            `json:"isError,omitempty"`
+	ToolCallID    string         `json:"toolCallId,omitempty"`
+	ToolName      string         `json:"toolName,omitempty"`
+	Args          map[string]any `json:"args,omitempty"`
+	Result        *ToolResult    `json:"result,omitempty"`
+	PartialResult *ToolResult    `json:"partialResult,omitempty"`
+	IsError       bool           `json:"isError,omitempty"`
+
+	// compaction_start / compaction_end
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
+}
+
+// CompactionInfo carries the result of an auto-compaction. On compaction_end,
+// the AgentEvent's Message field carries the synthesized summary-as-user-message
+// that replaces the compacted history. FirstKeptIndex is the index (in the
+// pre-compaction message list) where the verbatim-kept region begins.
+type CompactionInfo struct {
+	Summary        string   `json:"summary"`
+	FirstKeptIndex int      `json:"firstKeptIndex"`
+	TokensBefore   int      `json:"tokensBefore"`
+	TokensAfter    int      `json:"tokensAfter"`
+	ReadFiles      []string `json:"readFiles,omitempty"`
+	ModifiedFiles  []string `json:"modifiedFiles,omitempty"`
 }
 
 // ToolResult is the value produced by a tool execution.

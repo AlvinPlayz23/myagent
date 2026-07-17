@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/agent"
+	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
@@ -25,15 +26,23 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 	// their history.
 	seedTranscript(m.transcript, history)
 
-	// Persist produced messages by wrapping the runner's history growth: after
-	// each run completes we diff and append. Simpler: persist via a hook on the
-	// runner. We attach a session persister to the runner.
-	r.persist = func(msgs []types.Message) {
+	// Persist produced messages and compactions by intercepting every event
+	// on the loop goroutine, before it reaches the UI. This keeps the session
+	// file in sync with the loop's in-memory history so that compaction's
+	// FirstKeptIndex maps correctly to session entry ids.
+	r.onEvent = func(ev types.AgentEvent) {
 		if sess == nil {
 			return
 		}
-		for _, msg := range msgs {
-			_ = sess.AppendMessage(msg)
+		switch ev.Type {
+		case types.EventMessageEnd:
+			if ev.Message != nil {
+				_ = sess.AppendMessage(*ev.Message)
+			}
+		case types.EventCompactionEnd:
+			if ev.Compaction != nil && ev.Message != nil {
+				_ = sess.ApplyCompaction(*ev.Compaction, *ev.Message)
+			}
 		}
 	}
 
@@ -47,6 +56,10 @@ func seedTranscript(t *transcript, history []types.Message) {
 	for _, msg := range history {
 		switch msg.Role {
 		case types.RoleUser:
+			if compaction.IsSummaryMessage(msg) {
+				t.addNotice("∼ " + textOf(msg))
+				continue
+			}
 			t.addUser(textOf(msg))
 		case types.RoleAssistant:
 			if txt := textOf(msg); txt != "" {

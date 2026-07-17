@@ -20,13 +20,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/config"
 	"github.com/myagent/myagent/internal/types"
 )
 
 // currentVersion is the on-disk session format version. Matches pi's
-// CURRENT_SESSION_VERSION.
-const currentVersion = 3
+// CURRENT_SESSION_VERSION. Bumped 3 → 4 to add the "compaction" entry type.
+// v3 files (no compaction entries) are still read correctly by Open().
+const currentVersion = 4
 
 // header is line 1 of a session file.
 type header struct {
@@ -37,13 +39,21 @@ type header struct {
 	Cwd       string `json:"cwd"`
 }
 
-// entry is a tree entry (lines 2..N). Only the "message" type is persisted.
+// entry is a tree entry (lines 2..N). The "message" type carries a single
+// message; the "compaction" type carries a compaction summary and the id of
+// the first entry kept verbatim after compaction.
 type entry struct {
-	Type      string         `json:"type"` // "message"
+	Type      string         `json:"type"` // "message" | "compaction"
 	ID        string         `json:"id"`
 	ParentID  *string        `json:"parentId"`
 	Timestamp string         `json:"timestamp"`
-	Message   *types.Message `json:"message,omitempty"`
+	Message   *types.Message `json:"message,omitempty"` // type == "message"
+
+	// type == "compaction"
+	Summary          string          `json:"summary,omitempty"`
+	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
+	TokensBefore     int             `json:"tokensBefore,omitempty"`
+	Details          json.RawMessage `json:"details,omitempty"`
 }
 
 // Session is an open, append-only session file.
@@ -55,6 +65,7 @@ type Session struct {
 	f        *os.File
 	w        *bufio.Writer
 	messages []types.Message
+	entryIDs []string // entry id parallel to messages; "" for synthetic summary
 }
 
 // ID returns the session id.
@@ -102,6 +113,12 @@ func Create(cwd string) (*Session, error) {
 
 // Open loads an existing session file for appending, reconstructing its
 // message history and the id/parentId chain.
+//
+// When the file contains one or more "compaction" entries, only the LATEST
+// compaction is applied: the reconstructed message history is
+// [summary-as-user-message] + [messages from the compaction's
+// firstKeptEntryId onwards, in chain order]. Messages before the kept
+// boundary remain in the file for audit but are NOT loaded into memory.
 func Open(path string) (*Session, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -113,6 +130,7 @@ func Open(path string) (*Session, error) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	entriesByID := map[string]entry{}
 	var order []entry
+	var latestCompaction *entry
 	first := true
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -133,28 +151,38 @@ func Open(path string) (*Session, error) {
 		if err := json.Unmarshal(line, &e); err != nil {
 			continue // tolerate unknown/other entry types
 		}
-		if e.Type != "message" {
-			continue
+		switch e.Type {
+		case "message":
+			entriesByID[e.ID] = e
+			order = append(order, e)
+		case "compaction":
+			entriesByID[e.ID] = e
+			order = append(order, e)
+			// Track the latest compaction in file order. Take a copy so the
+			// map entry isn't aliased.
+			c := e
+			latestCompaction = &c
 		}
-		entriesByID[e.ID] = e
-		order = append(order, e)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 
-	// Reconstruct the linear chain by walking parentId from the last entry.
-	// Phase 1 assumption: sessions are linear (no forks), so the last-written
-	// message entry is the conversation leaf. A forked file would reconstruct
-	// only the branch ending at that leaf.
+	// Reconstruct the message history.
 	if len(order) > 0 {
 		last := order[len(order)-1]
 		id := last.ID
 		s.lastID = &id
-		chain := buildChain(entriesByID, last.ID)
-		for _, e := range chain {
-			if e.Message != nil {
-				s.messages = append(s.messages, *e.Message)
+
+		if latestCompaction != nil {
+			s.messages, s.entryIDs = buildCompactedMessages(entriesByID, last.ID, latestCompaction)
+		} else {
+			chain := buildChain(entriesByID, last.ID, "")
+			for _, e := range chain {
+				if e.Type == "message" && e.Message != nil {
+					s.messages = append(s.messages, *e.Message)
+					s.entryIDs = append(s.entryIDs, e.ID)
+				}
 			}
 		}
 	}
@@ -168,9 +196,44 @@ func Open(path string) (*Session, error) {
 	return s, nil
 }
 
+// buildCompactedMessages reconstructs [summaryMessage] + [kept messages] from
+// a session that has been compacted. The kept region starts at the
+// compaction entry's FirstKeptEntryID and runs to the leaf along the
+// parentId chain; the chain walk stops at (and includes) FirstKeptEntryID so
+// compacted-away messages are excluded. Returns the messages and a parallel
+// slice of entry ids ("" for the synthetic summary message).
+func buildCompactedMessages(byID map[string]entry, leafID string, cmp *entry) ([]types.Message, []string) {
+	var msgs []types.Message
+	var ids []string
+	// Synthesize the summary as a user message wrapped with pi's prefix/suffix.
+	msgs = append(msgs, compaction.BuildSummaryMessage(cmp.Summary, parseISOmillis(cmp.Timestamp)))
+	ids = append(ids, "") // synthetic — no on-disk entry
+
+	chain := buildChain(byID, leafID, cmp.FirstKeptEntryID)
+	for _, e := range chain {
+		if e.Type == "message" && e.Message != nil {
+			msgs = append(msgs, *e.Message)
+			ids = append(ids, e.ID)
+		}
+	}
+	return msgs, ids
+}
+
+// parseISOmillis parses an ISO 8601 timestamp into Unix millis, returning 0
+// on failure.
+func parseISOmillis(ts string) int64 {
+	t, err := time.Parse("2006-01-02T15:04:05.000Z", ts)
+	if err != nil {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
 // buildChain walks parentId links from leaf back to root, returning entries in
-// root->leaf order.
-func buildChain(byID map[string]entry, leafID string) []entry {
+// root->leaf order. If stopID is non-empty, the walk includes the entry with
+// that id and stops there (used for compaction: only messages at or after the
+// first-kept entry are loaded).
+func buildChain(byID map[string]entry, leafID, stopID string) []entry {
 	var reversed []entry
 	cur := &leafID
 	seen := map[string]bool{}
@@ -181,6 +244,9 @@ func buildChain(byID map[string]entry, leafID string) []entry {
 		}
 		seen[*cur] = true
 		reversed = append(reversed, e)
+		if stopID != "" && e.ID == stopID {
+			break
+		}
 		cur = e.ParentID
 	}
 	// reverse into root->leaf order
@@ -200,7 +266,92 @@ func (s *Session) AppendMessage(m types.Message) error {
 	}
 	s.lastID = &id
 	s.messages = append(s.messages, m)
+	s.entryIDs = append(s.entryIDs, id)
 	return s.w.Flush()
+}
+
+// AppendCompaction appends a "compaction" entry recording that the session
+// history was compacted. The first-kept entry id identifies the oldest
+// in-memory message still represented verbatim after this compaction;
+// messages before it remain on disk for audit but are not loaded by Open.
+//
+// The in-memory message history MUST already have been replaced by the caller
+// with [summary-as-user-message] + [kept messages]; this method only persists
+// the compaction record. tokensBefore is the estimated context-token count
+// that triggered compaction. details is an optional JSON blob (e.g. file
+// lists accumulated across the summarized span); pass nil to omit it.
+func (s *Session) AppendCompaction(summary, firstKeptEntryID string, tokensBefore int, details json.RawMessage) error {
+	if summary == "" {
+		return fmt.Errorf("session: AppendCompaction requires a summary")
+	}
+	id := shortID()
+	e := entry{
+		Type:             "compaction",
+		ID:               id,
+		ParentID:         s.lastID,
+		Timestamp:        nowISO(),
+		Summary:          summary,
+		FirstKeptEntryID: firstKeptEntryID,
+		TokensBefore:     tokensBefore,
+		Details:          details,
+	}
+	if err := s.writeLine(e); err != nil {
+		return err
+	}
+	s.lastID = &id
+	return s.w.Flush()
+}
+
+// LastEntryID returns the id of the most recent entry (message or compaction),
+// or "" if the session has no entries yet. This is the parent id for the next
+// append and is also the id that a compaction's firstKeptEntryID should point
+// at when the kept region begins at the current tail.
+func (s *Session) LastEntryID() string {
+	if s.lastID == nil {
+		return ""
+	}
+	return *s.lastID
+}
+
+// compactionDetailsJSON is the JSON shape persisted in a compaction entry's
+// details field. Matches compaction.CompactionDetails.
+type compactionDetailsJSON struct {
+	ReadFiles     []string `json:"readFiles,omitempty"`
+	ModifiedFiles []string `json:"modifiedFiles,omitempty"`
+}
+
+// ApplyCompaction replaces the in-memory message history with
+// [summaryMsg] + [messages from info.FirstKeptIndex onwards] and persists a
+// "compaction" entry recording the boundary. The caller (agent loop) has
+// already generated the summary and computed the cut point; this method
+// performs the session-side replacement and persistence.
+//
+// info.FirstKeptIndex is an index into the session's current in-memory
+// messages (which are kept in sync with the loop's message list via
+// per-message AppendMessage calls). The entry id at that index becomes the
+// compaction entry's firstKeptEntryId, so a subsequent Open() reconstructs
+// only [summary] + [kept messages].
+func (s *Session) ApplyCompaction(info types.CompactionInfo, summaryMsg types.Message) error {
+	if info.FirstKeptIndex < 0 || info.FirstKeptIndex > len(s.messages) {
+		return fmt.Errorf("session: ApplyCompaction index %d out of range (messages: %d)", info.FirstKeptIndex, len(s.messages))
+	}
+
+	firstKeptEntryID := ""
+	if info.FirstKeptIndex < len(s.entryIDs) {
+		firstKeptEntryID = s.entryIDs[info.FirstKeptIndex]
+	}
+
+	// Replace in-memory state: [summary] + [kept messages].
+	keptMsgs := append([]types.Message(nil), s.messages[info.FirstKeptIndex:]...)
+	keptIDs := append([]string{}, s.entryIDs[info.FirstKeptIndex:]...)
+	s.messages = append([]types.Message{summaryMsg}, keptMsgs...)
+	s.entryIDs = append([]string{""}, keptIDs...)
+
+	details, _ := json.Marshal(compactionDetailsJSON{
+		ReadFiles:     info.ReadFiles,
+		ModifiedFiles: info.ModifiedFiles,
+	})
+	return s.AppendCompaction(info.Summary, firstKeptEntryID, info.TokensBefore, details)
 }
 
 // Close flushes and closes the underlying file.
