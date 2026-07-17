@@ -1,0 +1,30 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Compiled test binaries
+*.test
+
+# Coverage profiles
+*.out
+coverage.*
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Local build output directories
+/bin/
+/dist/
+
+# Editor / OS junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# ref files
+pi/
+myagent-plan.md
