@@ -4,6 +4,10 @@
 // Matches pi's JSON-everywhere approach. Config lives at
 // ~/.myagent/config.json; environment variables take precedence over file
 // values so a user can override per-invocation without editing the file.
+//
+// On first run (no config.json, or an empty/blank one), the interactive setup
+// wizard collects the required fields and writes the file via Save. Once a
+// non-empty config file exists, setup is skipped.
 package config
 
 import (
@@ -12,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Env var names (see myagent-plan.md, Phase 0).
@@ -104,4 +109,92 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// Exists reports whether a config.json file is present at Path() and is
+// non-empty (i.e. contains at least one non-whitespace byte). A missing or
+// whitespace-only file is treated as not existing, so the setup wizard runs
+// again until real values have been written.
+func Exists() (bool, error) {
+	path, err := Path()
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(string(data)) != "", nil
+}
+
+// NeedsSetup reports whether the interactive setup wizard should run before
+// myagent proceeds with an interactive session. Setup is required when the
+// config file is missing or empty/blank. A non-empty file is left intact; if
+// it is malformed or incomplete, Load() / normal credential validation reports
+// the configuration error rather than overwriting user data.
+func NeedsSetup() (bool, error) {
+	exists, err := Exists()
+	if err != nil {
+		return false, err
+	}
+	return !exists, nil
+}
+
+// Save writes cfg to config.json under Dir(), creating the directory if
+// needed. The file is written with 0600 permissions so it is not
+// world-readable (it contains the API key). tmp+rename is used so the
+// config.json is never left half-written. Save does NOT round-trip the
+// environment: only the explicit cfg fields are persisted, mirroring the
+// documented "env wins" semantics; call Load() afterwards to reapply env
+// overrides and defaults.
+func Save(cfg *Config) error {
+	dir, err := Dir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(dir, ".config-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	// Rename on Windows can leave the moved file with the temp file's mode;
+	// re-assert 0600 on the final path.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	return nil
 }

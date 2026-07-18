@@ -15,11 +15,7 @@ shipped status.
 ## TL;DR
 
 ```bash
-# Pick any OpenAI-compatible endpoint
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://api.openai.com/v1   # default
-export MYAGENT_MODEL=gpt-4o                        # default
-
+# First run opens setup, which creates ~/.myagent/config.json.
 # Interactive TUI (default mode, no args)
 go run .
 
@@ -34,8 +30,9 @@ Everything below assumes you `cd`-ed into this repo.
 ## Prerequisites
 
 - **Go** — see `go.mod` for the minimum toolchain version.
-- An **OpenAI-compatible API key + endpoint**. Defaults assume
-  `https://api.openai.com/v1` and the `gpt-4o` model.
+- An **OpenAI-compatible API key**. First run collects it in the setup wizard.
+  The default endpoint is `https://api.openai.com/v1` and the default model is
+  `gpt-4o`.
 - A real terminal for the TUI:
   - macOS / Linux: any modern terminal.
   - Windows: **Windows Terminal** (ConPTY + 24-bit color). PowerShell
@@ -57,30 +54,47 @@ There are no other install steps.
 
 ## Configuration
 
-### Environment variables (override everything)
+### First-run setup
+
+Configuration is required. When you start interactive myagent and
+`$MYAGENT_DIR/config.json` does not exist or is empty, a terminal wizard asks
+for your API key, base URL, and model, then creates the file. The API-key input
+is masked. Press **Esc** on the blank API-key field or **Ctrl+C** to cancel.
+
+The wizard requires a real terminal; `-p`/`--print` will instead fail with a
+message telling you to run `myagent` once and complete setup.
+
+If `config.json` already contains any non-whitespace content, setup is not
+shown and myagent reads that file normally. Invalid JSON or a missing API key
+in an existing file remains a configuration error, so myagent never overwrites
+an existing configuration unexpectedly.
+
+### Config file (`$MYAGENT_DIR/config.json`)
+
+```json
+{
+  "apiKey": "sk-...",
+  "baseUrl": "https://api.openai.com/v1",
+  "model": "gpt-4o"
+}
+```
+
+The wizard creates parent directories as required. On Unix, the file is stored
+with `0600` permissions because it contains the API key.
+
+### Environment overrides
 
 | Variable           | Purpose                              | Default                     |
 | ------------------ | ------------------------------------ | --------------------------- |
-| `OPENAI_API_KEY`   | API key (required)                   | —                           |
+| `OPENAI_API_KEY`   | API key override                     | —                           |
 | `OPENAI_BASE_URL`  | Endpoint base URL                    | `https://api.openai.com/v1` |
 | `MYAGENT_MODEL`    | Model id                             | `gpt-4o`                    |
 | `MYAGENT_DIR`      | Config + session directory           | `~/.myagent`                |
 | `MYAGENT_SHELL`    | Shell used by the `bash` tool        | auto-detected (see below)   |
 
-### Optional config file (`$MYAGENT_DIR/config.json`)
-
-```json
-{
-  "apiKey":  "sk-...",
-  "baseUrl": "https://api.openai.com/v1",
-  "model":   "gpt-4o"
-}
-```
-
-A missing file is not an error: env vars + defaults still produce a
-working config. Env vars always win over file values.
-
-> Prefer the env var for the API key on shared machines.
+Environment variables override values loaded from `config.json` for that run;
+they do not remove the need to complete first-run setup. This supports CI and
+temporary provider/model changes without changing the saved configuration.
 
 ### Shell selection for the `bash` tool
 
@@ -266,7 +280,13 @@ The agent loop is provider-agnostic; it consumes `types.AgentEvent`s.
 ## Troubleshooting
 
 **`myagent: no API key: set OPENAI_API_KEY (or apiKey in config.json)`**
-Set the env var, or put `apiKey` into `$MYAGENT_DIR/config.json`.
+Complete the first-run wizard by running `myagent`, or add `apiKey` to an
+existing `$MYAGENT_DIR/config.json`. `OPENAI_API_KEY` can override it for one
+run.
+
+**`myagent: no API key configured: run myagent once to complete setup`**
+`-p` / `--print` cannot display the terminal wizard. Run `myagent` with no
+prompt in an interactive terminal, complete setup, then rerun the command.
 
 **Fresh build fails with `glamour: ansi.Style … does not implement …`**
 A transitive dep version conflict between `glamour` and `bubbletea v2`.

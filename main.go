@@ -26,6 +26,7 @@ import (
 	"github.com/myagent/myagent/internal/llm"
 	"github.com/myagent/myagent/internal/printmode"
 	"github.com/myagent/myagent/internal/session"
+	"github.com/myagent/myagent/internal/setup"
 	"github.com/myagent/myagent/internal/tools"
 	"github.com/myagent/myagent/internal/tui"
 	"github.com/myagent/myagent/internal/types"
@@ -75,10 +76,38 @@ func run(argv []string) error {
 		printPrompt = strings.Join(fs.Args(), " ")
 	}
 
-	cfg, err := config.Load()
+	interactive := forceTUI || printPrompt == ""
+	var cfg *config.Config
+
+	// First-run setup: if config.json is missing or blank, walk the user through
+	// an interactive wizard before doing anything that needs credentials. The
+	// wizard writes config.json so subsequent runs skip straight to the TUI.
+	// Non-interactive print mode refuses to run without setup and points the
+	// user at the wizard instead of silently launching a UI they can't use.
+	needsSetup, err := config.NeedsSetup()
 	if err != nil {
 		return err
 	}
+	if needsSetup {
+		if !interactive {
+			return fmt.Errorf("no API key configured: run `myagent` once to complete setup, or set %s / create $MYAGENT_DIR/config.json", config.EnvAPIKey)
+		}
+		var cfg2 *config.Config
+		cfg2, err = setup.RunWizard(context.Background())
+		if err != nil {
+			return err
+		}
+		// Fall through and use cfg2; the wizard leaves env overrides already
+		// applied via config.Load().
+		cfg = cfg2
+	} else {
+		cfg, err = config.Load()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Per-invocation flags override config + env after setup resolves.
 	if modelFlag != "" {
 		cfg.Model = modelFlag
 	}
@@ -86,7 +115,6 @@ func run(argv []string) error {
 		cfg.BaseURL = baseURLFlag
 	}
 
-	interactive := forceTUI || printPrompt == ""
 	if cfg.APIKey == "" {
 		return fmt.Errorf("no API key: set %s (or apiKey in config.json)", config.EnvAPIKey)
 	}
