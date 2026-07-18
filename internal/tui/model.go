@@ -87,9 +87,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 
-	case tea.MouseWheelMsg:
-		return m.onMouseWheel(msg)
-
 	case agentEventMsg:
 		cmd := m.onAgentEvent(msg.ev)
 		// Re-arm the pump to keep consuming events.
@@ -189,16 +186,6 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
-	return m, cmd
-}
-
-// onMouseWheel forwards wheel events over the transcript to its viewport.
-func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if mouse.Y < 0 || mouse.Y >= m.viewport.Height() {
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(mouse)
 	return m, cmd
 }
 
@@ -328,8 +315,7 @@ func (m *model) View() tea.View {
 	sb.WriteString(m.footer())
 
 	v := tea.NewView(sb.String())
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.AltScreen = false
 	return v
 }
 

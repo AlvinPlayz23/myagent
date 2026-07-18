@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -170,34 +169,9 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		err := tui.Run(ctx, agentCfg, sess, history, cfg.Model, cwd)
-		if err != nil && ctx.Err() == nil {
-			return err
-		}
-		fmt.Fprint(os.Stdout, resumeInstructions(sess))
-		return nil
+		return tui.Run(ctx, agentCfg, sess, history, cfg.Model, cwd)
 	}
 	return printmode.Run(ctx, agentCfg, sess, history, printPrompt, os.Stdout, os.Stderr)
-}
-
-// resumeInstructions returns the commands needed to continue a persisted
-// interactive session after the TUI restores the user's terminal.
-func resumeInstructions(sess *session.Session) string {
-	return fmt.Sprintf("\nResume this session:\n  myagent --resume-id %s\n  myagent --resume %s\n", sess.ID(), collapseHomePath(sess.Path()))
-}
-
-// collapseHomePath replaces the home-directory prefix with ~ when path is
-// inside it, keeping paths outside the home directory unambiguous.
-func collapseHomePath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	rel, err := filepath.Rel(home, path)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return path
-	}
-	return "~" + string(filepath.Separator) + rel
 }
 
 // runSessions implements the `myagent sessions` subcommand: it prints the

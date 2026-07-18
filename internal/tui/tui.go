@@ -15,9 +15,6 @@ import (
 // config and prior history, persisting every produced message to sess as it
 // completes. Blocks until the user quits.
 func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history []types.Message, modelID, cwd string) error {
-	if err := enableVTIfRequested(); err != nil {
-		return err
-	}
 	queue := newMsgQueue()
 	r := newRunner(cfg, queue, history)
 
