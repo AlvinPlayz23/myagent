@@ -11,34 +11,38 @@ import (
 // (userMessageBg, toolPending/Success/ErrorBg, muted, accent, error) at a
 // coarse level; we keep a small palette rather than pi's ~50 tokens.
 type theme struct {
-	userBlock    lipgloss.Style
-	assistantTxt lipgloss.Style
-	toolPending  lipgloss.Style
-	toolSuccess  lipgloss.Style
-	toolError    lipgloss.Style
-	toolTitle    lipgloss.Style
-	muted        lipgloss.Style
-	accent       lipgloss.Style
-	errorText    lipgloss.Style
-	footer       lipgloss.Style
-	footerRight  lipgloss.Style
-	spinner      lipgloss.Style
+	userBlock     lipgloss.Style
+	assistantTxt  lipgloss.Style
+	toolPending   lipgloss.Style
+	toolSuccess   lipgloss.Style
+	toolError     lipgloss.Style
+	toolTitle     lipgloss.Style
+	muted         lipgloss.Style
+	accent        lipgloss.Style
+	errorText     lipgloss.Style
+	footer        lipgloss.Style
+	footerRight   lipgloss.Style
+	spinner       lipgloss.Style
+	cmdPickerSel  lipgloss.Style
+	cmdPickerItem lipgloss.Style
 }
 
 func newTheme() *theme {
 	return &theme{
-		userBlock:    lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
-		assistantTxt: lipgloss.NewStyle(),
-		toolPending:  lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		toolSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
-		toolError:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		toolTitle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
-		muted:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		accent:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		errorText:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		footer:       lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		footerRight:  lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		spinner:      lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		userBlock:     lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		assistantTxt:  lipgloss.NewStyle(),
+		toolPending:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		toolSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
+		toolError:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		toolTitle:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		accent:        lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		errorText:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		footer:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		footerRight:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		spinner:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		cmdPickerSel:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+		cmdPickerItem: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 	}
 }
 

@@ -33,6 +33,7 @@ type model struct {
 	transcript *transcript
 	viewport   viewport.Model
 	input      textarea.Model
+	picker     commandPicker
 
 	width, height int
 	ready         bool
@@ -71,6 +72,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		md:         md,
 		transcript: newTranscript(th, md),
 		input:      ta,
+		picker:     newCommandPicker(),
 		modelID:    modelID,
 		cwd:        cwd,
 		newSession: createSession,
@@ -144,14 +146,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // onResize recomputes layout on a window-size change.
 func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	m.width, m.height = w, h
-	inputHeight := 3
-	footerHeight := 2
-	statusHeight := 1
-	separatorHeight := 3
-	vpHeight := h - inputHeight - footerHeight - statusHeight - separatorHeight
-	if vpHeight < 1 {
-		vpHeight = 1
-	}
+	vpHeight := m.viewportHeight()
 	if !m.ready {
 		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
 		m.ready = true
@@ -165,9 +160,50 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// The fixed UI occupies nine rows: three for the textarea, two for the
+// footer, one status row, and three separating newlines. The command picker
+// borrows rows from the transcript while always leaving it at least one row.
+func (m *model) viewportHeight() int {
+	const fixedHeight = 9
+	height := m.height - fixedHeight - m.commandPickerHeight()
+	return max(1, height)
+}
+
+func (m *model) commandPickerHeight() int {
+	const fixedHeight = 9
+	available := m.height - fixedHeight - 1
+	return min(m.picker.height(), max(0, available))
+}
+
+func (m *model) updateLayout() {
+	if !m.ready {
+		return
+	}
+	m.viewport.SetHeight(m.viewportHeight())
+	m.refreshViewport()
+}
+
 // onKey routes key presses. Uses Keystroke() strings for robust v2 matching.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	ks := k.Keystroke()
+	if m.picker.active {
+		switch ks {
+		case "up":
+			m.picker.move(-1)
+			return m, nil
+		case "down":
+			m.picker.move(1)
+			return m, nil
+		case "tab":
+			return m.acceptCommandPicker(false)
+		case "enter":
+			return m.acceptCommandPicker(true)
+		case "esc":
+			m.picker.dismiss(m.input.Value())
+			m.updateLayout()
+			return m, nil
+		}
+	}
 	switch ks {
 	case "ctrl+c":
 		// Abort a running turn if any; otherwise quit.
@@ -206,7 +242,27 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
+	m.picker.sync(m.input.Value())
+	m.updateLayout()
 	return m, cmd
+}
+
+func (m *model) acceptCommandPicker(submit bool) (tea.Model, tea.Cmd) {
+	item, ok := m.picker.selected()
+	if !ok {
+		return m, nil
+	}
+	value := item.name
+	if item.requiresArg {
+		value += " "
+	}
+	m.input.SetValue(value)
+	m.picker.dismiss(value)
+	m.updateLayout()
+	if submit && !item.requiresArg {
+		return m.submit(false)
+	}
+	return m, nil
 }
 
 // onMouseWheel forwards wheel events over the transcript to its viewport.
@@ -227,6 +283,8 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	m.picker.close()
+	m.updateLayout()
 	if strings.HasPrefix(text, "/") {
 		m.input.Reset()
 		return m.runCommand(text)
@@ -393,6 +451,10 @@ func (m *model) View() tea.View {
 	sb.WriteByte('\n')
 	sb.WriteString(m.statusLine())
 	sb.WriteByte('\n')
+	if picker := m.renderCommandPicker(); picker != "" {
+		sb.WriteString(picker)
+		sb.WriteByte('\n')
+	}
 	sb.WriteString(m.input.View())
 	sb.WriteByte('\n')
 	sb.WriteString(m.footer())
@@ -401,6 +463,30 @@ func (m *model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m *model) renderCommandPicker() string {
+	count := m.commandPickerHeight()
+	if count == 0 {
+		return ""
+	}
+	start, end := m.picker.visibleRange(count)
+	var lines []string
+	for i := start; i < end; i++ {
+		item := m.picker.items[m.picker.matched[i]]
+		marker := "  "
+		style := m.th.cmdPickerItem
+		if i == m.picker.sel {
+			marker = "› "
+			style = m.th.cmdPickerSel
+		}
+		line := fmt.Sprintf("%s%-18s %s", marker, item.usage, item.description)
+		if len(m.picker.matched) > count && i == end-1 {
+			line = padBetween(line, fmt.Sprintf("%d/%d", m.picker.sel+1, len(m.picker.matched)), m.width)
+		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // statusLine shows the working spinner + elapsed time, or a transient status.

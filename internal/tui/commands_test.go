@@ -43,6 +43,68 @@ func TestParseSlashCommand(t *testing.T) {
 	}
 }
 
+func TestCommandPickerFilteringAndSelection(t *testing.T) {
+	p := newCommandPicker()
+	p.sync("/")
+	if !p.active || len(p.matched) != len(commandItems) {
+		t.Fatalf("picker = active %v, matches %d; want all commands", p.active, len(p.matched))
+	}
+	p.sync("/cl")
+	item, ok := p.selected()
+	if !ok || item.name != "/clear" {
+		t.Fatalf("selected = %#v, %v; want /clear", item, ok)
+	}
+
+	p.sync("/")
+	p.move(1)
+	item, _ = p.selected()
+	if item.name != "/model-id" {
+		t.Fatalf("selected after down = %q, want /model-id", item.name)
+	}
+	p.move(-1)
+	item, _ = p.selected()
+	if item.name != "/help" {
+		t.Fatalf("selected after up = %q, want /help", item.name)
+	}
+}
+
+func TestCommandPickerDismissesUntilInputChanges(t *testing.T) {
+	p := newCommandPicker()
+	p.sync("/h")
+	p.dismiss("/h")
+	p.sync("/h")
+	if p.active {
+		t.Fatal("picker reopened without an input change")
+	}
+	p.sync("/")
+	if !p.active {
+		t.Fatal("picker did not reopen after input changed")
+	}
+	p.sync("")
+	if p.active {
+		t.Fatal("picker remained active after slash was deleted")
+	}
+}
+
+func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.input.SetValue("/m")
+	m.picker.sync(m.input.Value())
+
+	_, cmd := m.acceptCommandPicker(true)
+	if cmd != nil {
+		t.Fatal("argument command should not submit")
+	}
+	if got := m.input.Value(); got != "/model-id " {
+		t.Fatalf("input = %q, want %q", got, "/model-id ")
+	}
+	if m.picker.active {
+		t.Fatal("picker remained open after accepting a command")
+	}
+}
+
 func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
 	q := newMsgQueue()
 	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
