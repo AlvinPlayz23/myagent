@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/myagent/myagent/internal/agent"
+	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
 
@@ -20,6 +22,7 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/clear", kind: commandClear},
 		{input: "/new", kind: commandNew},
 		{input: "/compact", kind: commandCompact},
+		{input: "/resume", kind: commandResume},
 		{input: "/model-id test-model", kind: commandModelID, arg: "test-model"},
 		{input: "/model-id", want: "usage: /model-id <id>"},
 		{input: "/unknown", want: "unknown command: /unknown"},
@@ -148,5 +151,39 @@ func TestNewCommandResetsConversation(t *testing.T) {
 	}
 	if len(r.history) != 0 || len(m.transcript.blocks) != 0 || m.usage.Input != 0 {
 		t.Fatalf("/new did not reset conversation: history=%d blocks=%d input=%d", len(r.history), len(m.transcript.blocks), m.usage.Input)
+	}
+}
+
+func TestResumeCommandSelectsAndLoadsSession(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, []types.Message{userMessage("current")})
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	info := session.Info{ID: "session-2", Modified: time.Now(), Preview: "resumed prompt"}
+	m.listSessions = func() ([]session.Info, error) {
+		return []session.Info{info}, nil
+	}
+	resumedHistory := []types.Message{userMessage("resumed prompt")}
+	var resumedID string
+	m.resumeSession = func(id string) ([]types.Message, error) {
+		resumedID = id
+		return resumedHistory, nil
+	}
+
+	m.runCommand("/resume")
+	if !m.sessions.active || len(m.sessions.items) != 1 {
+		t.Fatalf("session picker = active %v, items %d", m.sessions.active, len(m.sessions.items))
+	}
+	m.resumeSelectedSession()
+	if resumedID != info.ID {
+		t.Fatalf("resumed id = %q, want %q", resumedID, info.ID)
+	}
+	if m.sessions.active {
+		t.Fatal("session picker remained open")
+	}
+	if len(r.history) != 1 || textOf(r.history[0]) != "resumed prompt" {
+		t.Fatalf("runner history = %#v, want resumed history", r.history)
+	}
+	if len(m.transcript.blocks) != 1 || m.transcript.blocks[0].text != "resumed prompt" {
+		t.Fatalf("transcript was not replaced with resumed history: %#v", m.transcript.blocks)
 	}
 }

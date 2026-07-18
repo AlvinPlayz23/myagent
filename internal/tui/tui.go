@@ -36,6 +36,34 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 		r.reset()
 		return nil
 	})
+	m.listSessions = func() ([]session.Info, error) {
+		infos, err := session.List()
+		if err != nil || sess == nil {
+			return infos, err
+		}
+		available := infos[:0]
+		for _, info := range infos {
+			if info.ID != sess.ID() {
+				available = append(available, info)
+			}
+		}
+		return available, nil
+	}
+	m.resumeSession = func(id string) ([]types.Message, error) {
+		resumed, err := session.ResumeByID(id)
+		if err != nil {
+			return nil, err
+		}
+		if sess != nil {
+			if err := sess.Close(); err != nil {
+				_ = resumed.Close()
+				return nil, err
+			}
+		}
+		sess = resumed
+		history := resumed.Messages()
+		return history, nil
+	}
 
 	// Seed the transcript with prior conversation so resumed sessions show
 	// their history.

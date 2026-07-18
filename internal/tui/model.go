@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
 
@@ -19,6 +20,47 @@ type tickMsg struct{}
 
 // spinnerFrames is the working-state spinner (pi uses an animated Loader).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const sessionPickerMaxVisible = 5
+
+type sessionPicker struct {
+	items  []session.Info
+	sel    int
+	active bool
+}
+
+func (p *sessionPicker) open(items []session.Info) {
+	p.items = items
+	p.sel = 0
+	p.active = len(items) > 0
+}
+
+func (p *sessionPicker) close() {
+	p.items = nil
+	p.sel = 0
+	p.active = false
+}
+
+func (p *sessionPicker) move(delta int) {
+	if !p.active || len(p.items) == 0 {
+		return
+	}
+	p.sel = (p.sel + delta + len(p.items)) % len(p.items)
+}
+
+func (p *sessionPicker) selected() (session.Info, bool) {
+	if !p.active || p.sel < 0 || p.sel >= len(p.items) {
+		return session.Info{}, false
+	}
+	return p.items[p.sel], true
+}
+
+func (p *sessionPicker) height() int {
+	if !p.active {
+		return 0
+	}
+	return 1 + min(sessionPickerMaxVisible, len(p.items))
+}
 
 // model is the bubbletea root model for the interactive TUI.
 type model struct {
@@ -34,6 +76,7 @@ type model struct {
 	viewport   viewport.Model
 	input      textarea.Model
 	picker     commandPicker
+	sessions   sessionPicker
 
 	width, height int
 	ready         bool
@@ -47,7 +90,9 @@ type model struct {
 	cwd     string
 	lastErr error
 
-	newSession func() error
+	newSession    func() error
+	listSessions  func() ([]session.Info, error)
+	resumeSession func(string) ([]types.Message, error)
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
@@ -165,14 +210,18 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // borrows rows from the transcript while always leaving it at least one row.
 func (m *model) viewportHeight() int {
 	const fixedHeight = 9
-	height := m.height - fixedHeight - m.commandPickerHeight()
+	height := m.height - fixedHeight - m.panelHeight()
 	return max(1, height)
 }
 
-func (m *model) commandPickerHeight() int {
+func (m *model) panelHeight() int {
 	const fixedHeight = 9
 	available := m.height - fixedHeight - 1
-	return min(m.picker.height(), max(0, available))
+	desired := m.picker.height()
+	if m.sessions.active {
+		desired = m.sessions.height()
+	}
+	return min(desired, max(0, available))
 }
 
 func (m *model) updateLayout() {
@@ -186,6 +235,27 @@ func (m *model) updateLayout() {
 // onKey routes key presses. Uses Keystroke() strings for robust v2 matching.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	ks := k.Keystroke()
+	if m.sessions.active {
+		switch ks {
+		case "up":
+			m.sessions.move(-1)
+			return m, nil
+		case "down":
+			m.sessions.move(1)
+			return m, nil
+		case "enter":
+			return m.resumeSelectedSession()
+		case "esc":
+			m.sessions.close()
+			m.statusMsg = "Resume cancelled."
+			m.updateLayout()
+			return m, nil
+		case "ctrl+c":
+			// Preserve the global quit behavior below.
+		default:
+			return m, nil
+		}
+	}
 	if m.picker.active {
 		switch ks {
 		case "up":
@@ -262,6 +332,26 @@ func (m *model) acceptCommandPicker(submit bool) (tea.Model, tea.Cmd) {
 	if submit && !item.requiresArg {
 		return m.submit(false)
 	}
+	return m, nil
+}
+
+func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
+	info, ok := m.sessions.selected()
+	if !ok || m.resumeSession == nil {
+		return m, nil
+	}
+	history, err := m.resumeSession(info.ID)
+	if err != nil {
+		m.statusMsg = "Could not resume session: " + err.Error()
+		return m, nil
+	}
+	m.runner.resume(history)
+	m.sessions.close()
+	m.transcript.clear()
+	seedTranscript(m.transcript, history)
+	m.usage = types.Usage{}
+	m.statusMsg = "Resumed session " + info.ID + "."
+	m.updateLayout()
 	return m, nil
 }
 
@@ -365,6 +455,23 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Compacting context…"
 		m.lastErr = nil
 		return m, m.runner.compact(runCtx)
+	case commandResume:
+		if m.listSessions == nil || m.resumeSession == nil {
+			m.statusMsg = "Unable to resume sessions."
+			return m, nil
+		}
+		infos, err := m.listSessions()
+		if err != nil {
+			m.statusMsg = "Could not list sessions: " + err.Error()
+			return m, nil
+		}
+		if len(infos) == 0 {
+			m.statusMsg = "No sessions found."
+			return m, nil
+		}
+		m.sessions.open(infos)
+		m.statusMsg = "Select a session to resume."
+		m.updateLayout()
 	}
 	return m, nil
 }
@@ -451,7 +558,7 @@ func (m *model) View() tea.View {
 	sb.WriteByte('\n')
 	sb.WriteString(m.statusLine())
 	sb.WriteByte('\n')
-	if picker := m.renderCommandPicker(); picker != "" {
+	if picker := m.renderPanel(); picker != "" {
 		sb.WriteString(picker)
 		sb.WriteByte('\n')
 	}
@@ -465,8 +572,11 @@ func (m *model) View() tea.View {
 	return v
 }
 
-func (m *model) renderCommandPicker() string {
-	count := m.commandPickerHeight()
+func (m *model) renderPanel() string {
+	if m.sessions.active {
+		return m.renderSessionPicker()
+	}
+	count := m.panelHeight()
 	if count == 0 {
 		return ""
 	}
@@ -483,6 +593,48 @@ func (m *model) renderCommandPicker() string {
 		line := fmt.Sprintf("%s%-18s %s", marker, item.usage, item.description)
 		if len(m.picker.matched) > count && i == end-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.picker.sel+1, len(m.picker.matched)), m.width)
+		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderSessionPicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Resume session — ↑/↓ select, enter resume, esc cancel")}
+	count := min(height-1, len(m.sessions.items))
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start := m.sessions.sel - count + 1
+	if start < 0 {
+		start = 0
+	}
+	if maxStart := len(m.sessions.items) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		info := m.sessions.items[i]
+		marker := "  "
+		style := m.th.cmdPickerItem
+		if i == m.sessions.sel {
+			marker = "› "
+			style = m.th.cmdPickerSel
+		}
+		id := info.ID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		preview := info.Preview
+		if preview == "" {
+			preview = "(no messages)"
+		}
+		line := fmt.Sprintf("%s%s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, preview)
+		if len(m.sessions.items) > count && i == start+count-1 {
+			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
 	}

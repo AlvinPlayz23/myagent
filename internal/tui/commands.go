@@ -13,6 +13,7 @@ const (
 	commandNew
 	commandCompact
 	commandModelID
+	commandResume
 )
 
 type slashCommand struct {
@@ -34,6 +35,7 @@ var commandItems = []commandItem{
 	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
 	{name: "/clear", usage: "/clear", description: "Clear the visible transcript", kind: commandClear},
 	{name: "/new", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},
+	{name: "/resume", usage: "/resume", description: "Resume a different persisted session", kind: commandResume},
 }
 
 const commandPickerMaxVisible = 5

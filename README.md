@@ -167,6 +167,7 @@ only while the agent is idle.
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
+| `/resume`            | Choose and resume a persisted conversation              |
 
 `/model-id` is a session-only override. It does not update `config.json`.
 `/new` preserves the previous session file and makes the new session the one

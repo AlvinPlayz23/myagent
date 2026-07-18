@@ -139,8 +139,12 @@ func (r *runner) discardEvents() {
 }
 
 func (r *runner) reset() {
+	r.resume(nil)
+}
+
+func (r *runner) resume(history []types.Message) {
 	r.discardEvents()
-	r.history = nil
+	r.history = append([]types.Message(nil), history...)
 	r.queue.DrainAll()
 }
 
