@@ -158,7 +158,9 @@ go run . "Write a haiku about Go."   # same thing
 
 Slash commands run locally in the TUI. They are not sent to the model or
 stored as user messages. Commands that change conversation state are available
-only while the agent is idle.
+only while the agent is idle. Typing `/` opens the command list; continue
+typing to filter it, use **Up / Down** to select, **Tab** to complete, **Enter**
+to run, or **Esc** to dismiss it.
 
 | Command              | Action                                                  |
 | -------------------- | ------------------------------------------------------- |
@@ -167,11 +169,13 @@ only while the agent is idle.
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
-| `/resume`            | Choose and resume a persisted conversation              |
+| `/resume`            | Open the session selector and resume a previous conversation |
 
 `/model-id` is a session-only override. It does not update `config.json`.
 `/new` preserves the previous session file and makes the new session the one
-shown in the exit resume instructions.
+shown in the exit resume instructions. `/resume` lists previous sessions by
+timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
+navigate, resume, or cancel.
 
 ---
 
