@@ -91,6 +91,7 @@ with `0600` permissions because it contains the API key.
 | `MYAGENT_MODEL`    | Model id                             | `gpt-4o`                    |
 | `MYAGENT_DIR`      | Config + session directory           | `~/.myagent`                |
 | `MYAGENT_SHELL`    | Shell used by the `bash` tool        | auto-detected (see below)   |
+| `VT_MYAGENT`       | Force Windows VT output (`true`)     | off                         |
 
 Environment variables override values loaded from `config.json` for that run;
 they do not remove the need to complete first-run setup. This supports CI and
@@ -164,6 +165,10 @@ session header (`type`, `version`, `id`, `cwd`, `timestamp`); each
 following line is a message or compaction entry linked to the previous one
 by `id` / `parentId`. Killing myagent mid-run is safe — re-running with
 `--continue` (or `--resume-id <id>`) restores the full conversation.
+
+After leaving the interactive TUI, myagent prints the session's `--resume-id`
+and `--resume` commands. Session paths inside your home directory are shown
+with a `~` prefix.
 
 ### Context compaction
 
@@ -300,6 +305,20 @@ go mod tidy
 **TUI exits immediately on Windows**
 You're likely under `cmd.exe` or PowerShell ISE, neither of which
 supports ConPTY. Use **Windows Terminal** or run under WSL.
+
+**Colors show as raw escape codes (red text / garbled output) on Windows**
+Bubble Tea should auto-detect VT support, but some console hosts don't
+report it correctly. Force VT output processing:
+
+```powershell
+$env:VT_MYAGENT = "true"
+myagent
+```
+
+This calls `SetConsoleMode` with `ENABLE_VIRTUAL_TERMINAL_PROCESSING`
+before Bubble Tea starts. It only works when the terminal host actually
+supports ANSI (Windows Terminal, modern conhost, WezTerm, etc.).
+PowerShell ISE cannot render ANSI regardless.
 
 **CI logs show nothing for `go run . tui`**
 The TUI deliberately uses bubbletea's alt screen — output goes to the

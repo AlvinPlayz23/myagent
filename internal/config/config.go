@@ -21,9 +21,10 @@ import (
 
 // Env var names (see myagent-plan.md, Phase 0).
 const (
-	EnvAPIKey  = "OPENAI_API_KEY"
-	EnvBaseURL = "OPENAI_BASE_URL"
-	EnvModel   = "MYAGENT_MODEL"
+	EnvAPIKey   = "OPENAI_API_KEY"
+	EnvBaseURL  = "OPENAI_BASE_URL"
+	EnvModel    = "MYAGENT_MODEL"
+	EnvVTMyAgent = "VT_MYAGENT"
 )
 
 // Default values used when neither the config file nor the environment supply
