@@ -27,7 +27,7 @@ Everything below assumes you `cd`-ed into this repo.
 
 ---
 
-## Prerequisites
+## Prerequisites 
 
 - **Go** — see `go.mod` for the minimum toolchain version.
 - An **OpenAI-compatible API key**. First run collects it in the setup wizard.
