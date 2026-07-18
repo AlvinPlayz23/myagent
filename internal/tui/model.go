@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -45,17 +46,23 @@ type model struct {
 	cwd     string
 	lastErr error
 
+	newSession func() error
+
 	// usage accumulates across the session for the footer.
 	usage types.Usage
 }
 
 // newModel constructs the root model.
-func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string) *model {
+func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message (enter to send, ctrl+c to quit)…"
 	ta.ShowLineNumbers = false
 	ta.Focus()
 
+	var createSession func() error
+	if len(newSession) > 0 {
+		createSession = newSession[0]
+	}
 	return &model{
 		ctx:        ctx,
 		runner:     r,
@@ -66,6 +73,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		input:      ta,
 		modelID:    modelID,
 		cwd:        cwd,
+		newSession: createSession,
 	}
 }
 
@@ -91,6 +99,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onMouseWheel(msg)
 
 	case agentEventMsg:
+		if msg.generation != m.runner.generation {
+			return m, m.runner.waitForEvent()
+		}
 		cmd := m.onAgentEvent(msg.ev)
 		// Re-arm the pump to keep consuming events.
 		return m, tea.Batch(cmd, m.runner.waitForEvent())
@@ -99,9 +110,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case agentDoneMsg:
+		if msg.generation != m.runner.generation {
+			return m, nil
+		}
 		m.working = false
 		m.statusMsg = ""
-		if msg.err != nil && m.ctx.Err() == nil {
+		if errors.Is(msg.err, errNothingToCompact) {
+			m.statusMsg = msg.err.Error()
+		} else if msg.err != nil && m.ctx.Err() == nil {
 			m.lastErr = msg.err
 			m.transcript.addErrorText("Error: " + msg.err.Error())
 			m.refreshViewport()
@@ -211,6 +227,10 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	if strings.HasPrefix(text, "/") {
+		m.input.Reset()
+		return m.runCommand(text)
+	}
 	m.input.Reset()
 	um := userMessage(text)
 
@@ -240,6 +260,55 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	m.statusMsg = ""
 	m.lastErr = nil
 	return m, m.runner.start(runCtx, um)
+}
+
+func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
+	cmd, err := parseSlashCommand(text)
+	if err != nil {
+		m.statusMsg = err.Error()
+		return m, nil
+	}
+	if m.working {
+		m.statusMsg = "Cancel the current run before using slash commands."
+		return m, nil
+	}
+
+	switch cmd.kind {
+	case commandHelp:
+		m.transcript.addNotice(helpText)
+		m.refreshViewport()
+	case commandClear:
+		m.runner.discardEvents()
+		m.transcript.clear()
+		m.statusMsg = "Transcript cleared; conversation context is retained."
+		m.refreshViewport()
+	case commandNew:
+		if m.newSession == nil {
+			m.statusMsg = "Unable to create a new session."
+			return m, nil
+		}
+		if err := m.newSession(); err != nil {
+			m.statusMsg = "Could not create a new session: " + err.Error()
+			return m, nil
+		}
+		m.transcript.clear()
+		m.usage = types.Usage{}
+		m.statusMsg = "Started a new conversation."
+		m.refreshViewport()
+	case commandModelID:
+		m.runner.setModelID(cmd.arg)
+		m.modelID = cmd.arg
+		m.statusMsg = "Model set to " + cmd.arg + " for subsequent turns."
+	case commandCompact:
+		runCtx, cancel := context.WithCancel(m.ctx)
+		m.cancel = cancel
+		m.working = true
+		m.startedAt = time.Now()
+		m.statusMsg = "Compacting context…"
+		m.lastErr = nil
+		return m, m.runner.compact(runCtx)
+	}
+	return m, nil
 }
 
 // onAgentEvent updates the transcript from a single AgentEvent, mirroring pi's

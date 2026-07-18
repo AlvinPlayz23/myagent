@@ -67,6 +67,12 @@ func (t *transcript) invalidate() {
 	}
 }
 
+// clear removes displayed blocks without changing the underlying conversation.
+func (t *transcript) clear() {
+	t.blocks = nil
+	t.streamingIdx = -1
+}
+
 // toggleExpand flips the global tool expand state and invalidates tool caches.
 func (t *transcript) toggleExpand() {
 	t.expanded = !t.expanded

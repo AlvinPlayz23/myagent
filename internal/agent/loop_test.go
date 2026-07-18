@@ -175,6 +175,45 @@ func TestLoopAutoCompaction(t *testing.T) {
 	}
 }
 
+func TestLoopManualCompactionBelowThreshold(t *testing.T) {
+	var history []types.Message
+	for i := 0; i < 10; i++ {
+		history = append(history,
+			types.Message{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock(strings.Repeat("x", 500))}},
+			types.Message{Role: types.RoleAssistant, Content: []types.ContentBlock{types.TextBlock(strings.Repeat("y", 500))}},
+		)
+	}
+
+	provider := &fakeCompactionProvider{summaryText: "## Goal\nmanual summary"}
+	var events []types.AgentEvent
+	loop := New(Config{
+		Provider: provider,
+		Model:    llm.Model{ID: "test"},
+		CompactionSettings: compaction.Settings{
+			Enabled:          true,
+			ReserveTokens:    26_000,
+			KeepRecentTokens: 100,
+		},
+	}, history, collectEvents(&events))
+
+	compacted, err := loop.Compact(context.Background())
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if !compacted {
+		t.Fatal("Compact returned false")
+	}
+	if !hasEvent(events, types.EventCompactionStart) || !hasEvent(events, types.EventCompactionEnd) {
+		t.Fatal("manual compaction did not emit compaction lifecycle events")
+	}
+	if provider.numRequests() != 1 {
+		t.Fatalf("provider calls = %d, want one summarization call", provider.numRequests())
+	}
+	if !compaction.IsSummaryMessage(loop.Messages()[0]) {
+		t.Fatal("manual compaction did not replace history with a summary")
+	}
+}
+
 // TestLoopNoCompactionBelowThreshold verifies that compaction does NOT trigger
 // when the context is below the threshold.
 func TestLoopNoCompactionBelowThreshold(t *testing.T) {

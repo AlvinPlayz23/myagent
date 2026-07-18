@@ -148,7 +148,6 @@ func run(argv []string) error {
 	if err != nil {
 		return err
 	}
-	defer sess.Close()
 
 	registry := tools.DefaultRegistry(cwd)
 	provider := llm.NewOpenAIProvider(cfg.APIKey)
@@ -170,13 +169,17 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		err := tui.Run(ctx, agentCfg, sess, history, cfg.Model, cwd)
+		sess, err = tui.Run(ctx, agentCfg, sess, history, cfg.Model, cwd)
+		if sess != nil {
+			defer sess.Close()
+		}
 		if err != nil && ctx.Err() == nil {
 			return err
 		}
 		fmt.Fprint(os.Stdout, resumeInstructions(sess))
 		return nil
 	}
+	defer sess.Close()
 	return printmode.Run(ctx, agentCfg, sess, history, printPrompt, os.Stdout, os.Stderr)
 }
 

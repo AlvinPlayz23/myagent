@@ -154,6 +154,24 @@ go run . "Write a haiku about Go."   # same thing
 | **PgUp / PgDn**      | Scroll transcript                                     |
 | **Tab**              | Focus the input area                                  |
 
+### TUI slash commands
+
+Slash commands run locally in the TUI. They are not sent to the model or
+stored as user messages. Commands that change conversation state are available
+only while the agent is idle.
+
+| Command              | Action                                                  |
+| -------------------- | ------------------------------------------------------- |
+| `/help`              | Show available commands and keybindings                 |
+| `/model-id <id>`     | Use a model for subsequent turns in the current session |
+| `/compact`           | Force context compaction when a safe boundary exists    |
+| `/clear`             | Clear the visible transcript; retain conversation context |
+| `/new`               | Start a fresh persisted conversation                    |
+
+`/model-id` is a session-only override. It does not update `config.json`.
+`/new` preserves the previous session file and makes the new session the one
+shown in the exit resume instructions.
+
 ---
 
 ## Sessions

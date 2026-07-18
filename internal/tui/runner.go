@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -9,12 +10,26 @@ import (
 	"github.com/myagent/myagent/internal/types"
 )
 
+var errNothingToCompact = errors.New("there is not enough conversation history to compact")
+
 // agentEventMsg wraps an AgentEvent for delivery into the bubbletea Update
-// loop. The UI reads one event per waitForEvent command and re-arms.
-type agentEventMsg struct{ ev types.AgentEvent }
+// loop. generation prevents late events from a prior operation repainting a
+// transcript after /clear or /new.
+type agentEventMsg struct {
+	ev         types.AgentEvent
+	generation uint64
+}
 
 // agentDoneMsg signals that the current agent Run finished (or errored).
-type agentDoneMsg struct{ err error }
+type agentDoneMsg struct {
+	err        error
+	generation uint64
+}
+
+type runnerEvent struct {
+	ev         types.AgentEvent
+	generation uint64
+}
 
 // eventChannelClosedMsg is delivered if the event channel is ever closed. In
 // practice r.events is a single long-lived pump that is never closed, so this
@@ -34,7 +49,9 @@ type runner struct {
 	// events carries AgentEvents from the loop goroutine to the UI. It is
 	// buffered generously so streaming deltas rarely block the loop; the UI
 	// drains it continuously via waitForEvent.
-	events chan types.AgentEvent
+	events chan runnerEvent
+
+	generation uint64
 
 	// onEvent, if set, is called for every AgentEvent (on the loop goroutine,
 	// before the event is forwarded to the UI channel). Used to persist
@@ -50,7 +67,7 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 		cfg:     cfg,
 		queue:   queue,
 		history: history,
-		events:  make(chan types.AgentEvent, 1024),
+		events:  make(chan runnerEvent, 1024),
 	}
 }
 
@@ -63,6 +80,31 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 // gates starting a new run on working==false, so runs never overlap and their
 // events never interleave on the shared channel.
 func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
+	r.generation++
+	generation := r.generation
+	return r.run(ctx, generation, func(loop *agent.Loop) error {
+		_, err := loop.Run(ctx, []types.Message{prompt})
+		return err
+	})
+}
+
+// compact runs forced compaction without creating a user message.
+func (r *runner) compact(ctx context.Context) tea.Cmd {
+	r.generation++
+	generation := r.generation
+	return r.run(ctx, generation, func(loop *agent.Loop) error {
+		compacted, err := loop.Compact(ctx)
+		if err != nil {
+			return err
+		}
+		if !compacted {
+			return errNothingToCompact
+		}
+		return nil
+	})
+}
+
+func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.Loop) error) tea.Cmd {
 	return func() tea.Msg {
 		sink := func(sctx context.Context, ev types.AgentEvent) error {
 			// Persist messages/compactions to the session before forwarding to
@@ -73,18 +115,33 @@ func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 				}
 			}
 			select {
-			case r.events <- ev:
+			case r.events <- runnerEvent{ev: ev, generation: generation}:
 				return nil
 			case <-sctx.Done():
 				return sctx.Err()
 			}
 		}
 		loop := agent.New(r.cfg, r.history, sink)
-		_, err := loop.Run(ctx, []types.Message{prompt})
+		err := action(loop)
 		// Persist the full conversation so subsequent prompts continue it.
 		r.history = loop.Messages()
-		return agentDoneMsg{err: err}
+		return agentDoneMsg{err: err, generation: generation}
 	}
+}
+
+func (r *runner) setModelID(id string) {
+	r.cfg.Model.ID = id
+}
+
+// discardEvents makes buffered events from earlier operations invisible.
+func (r *runner) discardEvents() {
+	r.generation++
+}
+
+func (r *runner) reset() {
+	r.discardEvents()
+	r.history = nil
+	r.queue.DrainAll()
 }
 
 // waitForEvent returns a command that blocks until the next AgentEvent is
@@ -96,6 +153,6 @@ func (r *runner) waitForEvent() tea.Cmd {
 		if !ok {
 			return eventChannelClosedMsg{}
 		}
-		return agentEventMsg{ev: ev}
+		return agentEventMsg{ev: ev.ev, generation: ev.generation}
 	}
 }

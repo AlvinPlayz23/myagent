@@ -29,7 +29,7 @@ func TestRunnerReturnsOnEventFailure(t *testing.T) {
 	}
 	select {
 	case ev := <-r.events:
-		t.Fatalf("unexpected UI event after persistence failure: %s", ev.Type)
+		t.Fatalf("unexpected UI event after persistence failure: %s", ev.ev.Type)
 	default:
 	}
 }

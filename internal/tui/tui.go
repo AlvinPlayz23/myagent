@@ -13,14 +13,29 @@ import (
 
 // Run starts the interactive TUI. It drives the agent loop over the given
 // config and prior history, persisting every produced message to sess as it
-// completes. Blocks until the user quits.
-func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history []types.Message, modelID, cwd string) error {
+// completes. It returns the active session when the user quits, which may be a
+// session created through /new.
+func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
 	queue := newMsgQueue()
 	r := newRunner(cfg, queue, history)
 
 	th := newTheme()
 	md := newMDRenderer()
-	m := newModel(ctx, r, queue, th, md, modelID, cwd)
+	m := newModel(ctx, r, queue, th, md, modelID, cwd, func() error {
+		newSess, err := session.Create(cwd)
+		if err != nil {
+			return err
+		}
+		if sess != nil {
+			if err := sess.Close(); err != nil {
+				_ = newSess.Close()
+				return err
+			}
+		}
+		sess = newSess
+		r.reset()
+		return nil
+	})
 
 	// Seed the transcript with prior conversation so resumed sessions show
 	// their history.
@@ -49,7 +64,7 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	_, err := p.Run()
-	return err
+	return sess, err
 }
 
 // seedTranscript renders prior history into the transcript on resume.

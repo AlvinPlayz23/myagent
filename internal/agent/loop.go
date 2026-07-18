@@ -394,26 +394,44 @@ func (l *Loop) followUp() []types.Message {
 // continues with the full history. Compaction is skipped silently when there
 // is nothing safe to summarize.
 func (l *Loop) maybeCompact(ctx context.Context) error {
+	_, err := l.compact(ctx, false)
+	return err
+}
+
+// Compact forcibly summarizes older conversation history. Unlike automatic
+// compaction, it skips the context-window threshold but still requires a safe
+// compaction boundary.
+func (l *Loop) Compact(ctx context.Context) (bool, error) {
+	return l.compact(ctx, true)
+}
+
+func (l *Loop) compact(ctx context.Context, force bool) (bool, error) {
 	s := l.cfg.CompactionSettings
-	if !s.Enabled || l.cfg.Provider == nil {
-		return nil
+	if l.cfg.Provider == nil {
+		if force {
+			return false, fmt.Errorf("compaction requires an LLM provider")
+		}
+		return false, nil
+	}
+	if !force && !s.Enabled {
+		return false, nil
 	}
 
 	est := compaction.EstimateContextTokens(l.messages)
-	if !compaction.ShouldCompact(est.Tokens, compaction.ContextWindow, s) {
-		return nil
+	if !force && !compaction.ShouldCompact(est.Tokens, compaction.ContextWindow, s) {
+		return false, nil
 	}
 
 	prep, ok := compaction.PrepareCompaction(l.messages, s)
 	if !ok {
-		return nil // nothing safe to summarize
+		return false, nil // nothing safe to summarize
 	}
 
 	if err := l.emit(ctx, types.AgentEvent{
 		Type:       types.EventCompactionStart,
 		Compaction: &types.CompactionInfo{TokensBefore: est.Tokens},
 	}); err != nil {
-		return err
+		return false, err
 	}
 
 	result, err := compaction.Compact(ctx, l.cfg.Provider, l.cfg.Model, prep)
@@ -421,7 +439,10 @@ func (l *Loop) maybeCompact(ctx context.Context) error {
 		// Compaction failed: leave history untouched and continue. The next
 		// provider request may overflow, but we prefer that over corrupting
 		// the conversation with a partial/missing summary.
-		return nil
+		if force {
+			return false, err
+		}
+		return false, nil
 	}
 
 	summaryMsg := compaction.BuildSummaryMessage(result.Summary, time.Now().UnixMilli())
@@ -441,8 +462,8 @@ func (l *Loop) maybeCompact(ctx context.Context) error {
 			ModifiedFiles:  result.Details.ModifiedFiles,
 		},
 	}); err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return true, nil
 }
