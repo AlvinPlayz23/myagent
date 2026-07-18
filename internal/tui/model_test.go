@@ -25,3 +25,16 @@ func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 		t.Fatalf("wheel outside transcript offset = %d, want %d", m.viewport.YOffset(), scrolledOffset)
 	}
 }
+
+func TestViewFitsTerminalHeight(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 12)
+
+	view := m.View()
+	if !view.AltScreen {
+		t.Fatal("view should use the alternate screen")
+	}
+	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
+		t.Fatalf("view height = %d, terminal height = %d", got, m.height)
+	}
+}

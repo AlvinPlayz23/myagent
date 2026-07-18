@@ -131,7 +131,8 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	inputHeight := 3
 	footerHeight := 2
 	statusHeight := 1
-	vpHeight := h - inputHeight - footerHeight - statusHeight
+	separatorHeight := 3
+	vpHeight := h - inputHeight - footerHeight - statusHeight - separatorHeight
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -328,7 +329,7 @@ func (m *model) View() tea.View {
 	sb.WriteString(m.footer())
 
 	v := tea.NewView(sb.String())
-	v.AltScreen = false
+	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
