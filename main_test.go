@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/myagent/myagent/internal/session"
 )
 
 func TestRunPrintModeRequiresFirstRunSetup(t *testing.T) {
@@ -34,5 +36,42 @@ func TestRunPrintModeSkipsSetupForNonEmptyConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no API key:") {
 		t.Fatalf("expected API-key validation error, got: %v", err)
+	}
+}
+
+func TestCollapseHomePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+
+	inside := filepath.Join(home, ".myagent", "sessions", "session.jsonl")
+	if got, want := collapseHomePath(inside), "~"+string(filepath.Separator)+filepath.Join(".myagent", "sessions", "session.jsonl"); got != want {
+		t.Errorf("collapseHomePath(%q) = %q, want %q", inside, got, want)
+	}
+
+	outside := filepath.Join(t.TempDir(), "session.jsonl")
+	if got := collapseHomePath(outside); got != outside {
+		t.Errorf("collapseHomePath(%q) = %q, want unchanged path", outside, got)
+	}
+}
+
+func TestResumeInstructions(t *testing.T) {
+	// Construct a real session so the test covers its generated id and path.
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	sess, err := session.Create("/work")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer sess.Close()
+
+	got := resumeInstructions(sess)
+	if !strings.Contains(got, "Resume this session:\n") {
+		t.Errorf("instructions missing heading: %q", got)
+	}
+	if !strings.Contains(got, "myagent --resume-id "+sess.ID()) {
+		t.Errorf("instructions missing resume-id command: %q", got)
+	}
+	if !strings.Contains(got, "myagent --resume "+collapseHomePath(sess.Path())) {
+		t.Errorf("instructions missing resume-path command: %q", got)
 	}
 }
