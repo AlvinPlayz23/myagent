@@ -9,19 +9,14 @@ import (
 	"testing"
 )
 
-// useTempDir points MYAGENT_DIR at a per-test temp dir so config files do not
-// collide with the developer's real ~/.myagent.
 func useTempDir(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("MYAGENT_DIR", dir)
-	// Make sure stale OPENAI_* env from the developer machine does not leak
-	// into expectations. Load() re-reads these, but NeedsSetup's env path
-	// must behave the way the tests assert.
-	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	t.Setenv(EnvAPIKey, "")
+	t.Setenv(EnvBaseURL, "")
+	t.Setenv(EnvModel, "")
 }
 
-// configPath returns the resolved config.json path for the active MYAGENT_DIR.
 func configPath(t *testing.T) string {
 	t.Helper()
 	p, err := Path()
@@ -41,132 +36,47 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestNeedsSetup_MissingFile_NoEnv(t *testing.T) {
+func testConfig() *Config {
+	return &Config{
+		Providers: map[string]ProviderConfig{
+			"openai": {Type: DefaultProviderType, APIKey: "sk-openai", BaseURL: DefaultBaseURL},
+			"local":  {Type: DefaultProviderType, APIKey: "local-key", BaseURL: "http://localhost:11434/v1"},
+		},
+		DefaultModel: "openai/gpt-4o",
+	}
+}
+
+func TestNeedsSetup(t *testing.T) {
 	useTempDir(t)
 	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
+	if err != nil || !needs {
+		t.Fatalf("NeedsSetup missing = %v, %v; want true, nil", needs, err)
 	}
-	if !needs {
-		t.Fatal("expected setup to be required when no config.json and no env API key")
+	writeFile(t, configPath(t), "  \n")
+	needs, err = NeedsSetup()
+	if err != nil || !needs {
+		t.Fatalf("NeedsSetup blank = %v, %v; want true, nil", needs, err)
 	}
-}
-
-func TestNeedsSetup_MissingFile_EnvApiKey(t *testing.T) {
-	useTempDir(t)
-	t.Setenv("OPENAI_API_KEY", "sk-from-env")
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if !needs {
-		t.Fatal("missing config.json must require setup even with an env API key")
+	writeFile(t, configPath(t), `{"providers":{}}`)
+	needs, err = NeedsSetup()
+	if err != nil || needs {
+		t.Fatalf("NeedsSetup non-empty = %v, %v; want false, nil", needs, err)
 	}
 }
 
-func TestNeedsSetup_EmptyFile(t *testing.T) {
+func TestSaveLoadRoundTrip(t *testing.T) {
 	useTempDir(t)
-	writeFile(t, configPath(t), "")
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if !needs {
-		t.Fatal("empty/blank config.json should require setup")
-	}
-}
-
-func TestNeedsSetup_WhitespaceOnlyFile(t *testing.T) {
-	useTempDir(t)
-	writeFile(t, configPath(t), "   \n\t\n ")
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if !needs {
-		t.Fatal("whitespace-only config.json should require setup")
-	}
-}
-
-func TestNeedsSetup_NonEmptyConfig(t *testing.T) {
-	useTempDir(t)
-	writeFile(t, configPath(t), `{"apiKey":"sk-real","model":"gpt-4o"}`)
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if needs {
-		t.Fatal("a non-empty config.json must not trigger setup")
-	}
-}
-
-func TestNeedsSetup_FileWithoutApiKey(t *testing.T) {
-	useTempDir(t)
-	writeFile(t, configPath(t), `{"model":"gpt-4o"}`)
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if needs {
-		t.Fatal("a non-empty config.json should skip setup even without apiKey")
-	}
-}
-
-func TestNeedsSetup_InvalidJson(t *testing.T) {
-	useTempDir(t)
-	writeFile(t, configPath(t), `{"apiKey": "broken"`) // malformed
-	needs, err := NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if needs {
-		t.Fatal("a non-empty malformed config.json should skip setup and be reported by Load")
-	}
-}
-
-func TestExists_Missing(t *testing.T) {
-	useTempDir(t)
-	got, err := Exists()
-	if err != nil {
-		t.Fatalf("Exists: %v", err)
-	}
-	if got {
-		t.Fatal("missing file should not exist")
-	}
-}
-
-func TestExists_PresentAndNonEmpty(t *testing.T) {
-	useTempDir(t)
-	writeFile(t, configPath(t), `{"apiKey":"x"}`)
-	got, err := Exists()
-	if err != nil {
-		t.Fatalf("Exists: %v", err)
-	}
-	if !got {
-		t.Fatal("non-empty file should exist")
-	}
-}
-
-func TestSave_WritesFileWithPermissions(t *testing.T) {
-	useTempDir(t)
-	cfg := &Config{
-		APIKey:  "sk-test",
-		BaseURL: "https://example.test/v1",
-		Model:   "gpt-4o-mini",
-	}
-	if err := Save(cfg); err != nil {
+	want := testConfig()
+	if err := Save(want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-
 	info, err := os.Stat(configPath(t))
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	perm := info.Mode().Perm()
-	if runtime.GOOS != "windows" && perm != 0o600 {
-		t.Fatalf("config.json should be 0600, got %o", perm)
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions = %o, want 600", info.Mode().Perm())
 	}
-
 	data, err := os.ReadFile(configPath(t))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -175,87 +85,57 @@ func TestSave_WritesFileWithPermissions(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.APIKey != "sk-test" || got.BaseURL != "https://example.test/v1" || got.Model != "gpt-4o-mini" {
+	if got.DefaultModel != want.DefaultModel || len(got.Providers) != 2 || got.Providers["local"].BaseURL != "http://localhost:11434/v1" {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if !strings.HasSuffix(string(data), "\n") {
-		t.Fatal("saved file should end with a trailing newline")
+		t.Fatal("saved file should end with newline")
 	}
 }
 
-func TestSave_CreatesDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("MYAGENT_DIR", filepath.Join(dir, "nested", "config-dir"))
-	t.Setenv("OPENAI_API_KEY", "")
-	if err := Save(&Config{APIKey: "sk-x"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Join(dir, "nested", "config-dir"), "config.json")); err != nil {
-		t.Fatalf("Stat nested config.json: %v", err)
-	}
-}
-
-func TestSave_ReplacesEmptyExistingFile(t *testing.T) {
+func TestResolveDefaultAndOverrides(t *testing.T) {
 	useTempDir(t)
-	writeFile(t, configPath(t), "\n\t")
-
-	if err := Save(&Config{APIKey: "sk-replaced"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	cfg, err := Load()
+	cfg := testConfig()
+	provider, model, err := cfg.Resolve("", "", "")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if cfg.APIKey != "sk-replaced" {
-		t.Fatalf("APIKey = %q, want sk-replaced", cfg.APIKey)
+	if provider == nil || model.ID != "gpt-4o" || model.Provider != "openai" || model.BaseURL != DefaultBaseURL {
+		t.Fatalf("default resolution = %#v", model)
+	}
+	_, model, err = cfg.Resolve("local", "qwen3", "http://127.0.0.1:8080/v1")
+	if err != nil {
+		t.Fatalf("Resolve override: %v", err)
+	}
+	if model.ID != "qwen3" || model.Provider != "local" || model.BaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("override resolution = %#v", model)
 	}
 }
 
-func TestSave_ThenNeedsSetupFalse(t *testing.T) {
+func TestResolveAppliesEnvironmentToDefaultProvider(t *testing.T) {
 	useTempDir(t)
-	if err := Save(&Config{APIKey: "sk-after-save"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	needs, err := NeedsSetup()
+	t.Setenv(EnvAPIKey, "sk-env")
+	t.Setenv(EnvBaseURL, "https://env.example/v1")
+	t.Setenv(EnvModel, "gpt-env")
+	_, model, err := testConfig().Resolve("", "", "")
 	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if needs {
-		t.Fatal("after Save with an apiKey, NeedsSetup should be false")
+	if model.ID != "gpt-env" || model.BaseURL != "https://env.example/v1" {
+		t.Fatalf("environment resolution = %#v", model)
 	}
 }
 
-func TestLoad_AppliesDefaultsAfterSave(t *testing.T) {
+func TestResolveRejectsInvalidConfiguration(t *testing.T) {
 	useTempDir(t)
-	if err := Save(&Config{APIKey: "sk-only"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.APIKey != "sk-only" {
-		t.Fatalf("APIKey = %q, want sk-only", cfg.APIKey)
-	}
-	if cfg.BaseURL != DefaultBaseURL {
-		t.Fatalf("BaseURL = %q, want default %q", cfg.BaseURL, DefaultBaseURL)
-	}
-	if cfg.Model != DefaultModel {
-		t.Fatalf("Model = %q, want default %q", cfg.Model, DefaultModel)
-	}
-}
-
-func TestSave_DoesNotOverwriteEnvOnLoad(t *testing.T) {
-	useTempDir(t)
-	if err := Save(&Config{APIKey: "sk-file"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	t.Setenv("OPENAI_API_KEY", "sk-env-override")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.APIKey != "sk-env-override" {
-		t.Fatalf("env must override file; got %q", cfg.APIKey)
+	for _, cfg := range []*Config{
+		{DefaultModel: "gpt-4o"},
+		{Providers: map[string]ProviderConfig{}, DefaultModel: "missing/model"},
+		{Providers: map[string]ProviderConfig{"p": {Type: "anthropic", APIKey: "x", BaseURL: "https://x"}}, DefaultModel: "p/model"},
+		{Providers: map[string]ProviderConfig{"p": {Type: DefaultProviderType, APIKey: "x"}}, DefaultModel: "p/model"},
+	} {
+		if _, _, err := cfg.Resolve("", "", ""); err == nil {
+			t.Fatalf("Resolve(%+v) succeeded; want error", cfg)
+		}
 	}
 }

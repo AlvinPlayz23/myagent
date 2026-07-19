@@ -1,48 +1,48 @@
 // Package config loads myagent configuration from JSON with environment
-// overrides.
-//
-// Matches pi's JSON-everywhere approach. Config lives at
-// ~/.myagent/config.json; environment variables take precedence over file
-// values so a user can override per-invocation without editing the file.
-//
-// On first run (no config.json, or an empty/blank one), the interactive setup
-// wizard collects the required fields and writes the file via Save. Once a
-// non-empty config file exists, setup is skipped.
+// overrides. Configuration lives at ~/.myagent/config.json.
 package config
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/myagent/myagent/internal/llm"
 )
 
-// Env var names (see myagent-plan.md, Phase 0).
+// Env var names. OPENAI_* are temporary overrides for a selected provider;
+// MYAGENT_MODEL overrides its model ID.
 const (
 	EnvAPIKey  = "OPENAI_API_KEY"
 	EnvBaseURL = "OPENAI_BASE_URL"
 	EnvModel   = "MYAGENT_MODEL"
 )
 
-// Default values used when neither the config file nor the environment supply
-// one.
 const (
-	DefaultBaseURL = "https://api.openai.com/v1"
-	DefaultModel   = "gpt-4o"
+	DefaultProviderName = "openai"
+	DefaultProviderType = "openai-compatible"
+	DefaultBaseURL      = "https://api.openai.com/v1"
+	DefaultModel        = "gpt-4o"
 )
 
-// Config is the resolved runtime configuration.
+// ProviderConfig describes one named endpoint. Only openai-compatible is
+// currently supported; it covers OpenAI, Ollama, LM Studio, vLLM, and similar
+// chat-completions endpoints.
+type ProviderConfig struct {
+	Type    string `json:"type"`
+	APIKey  string `json:"apiKey,omitempty"`
+	BaseURL string `json:"baseUrl"`
+}
+
+// Config is the persisted configuration. DefaultModel must use
+// "provider-name/model-id" so model selection remains unambiguous.
 type Config struct {
-	// APIKey for the OpenAI-compatible provider. Never persisted back to disk
-	// from env.
-	APIKey string `json:"apiKey,omitempty"`
-	// BaseURL of the OpenAI-compatible endpoint (base_url override enables
-	// Ollama, LM Studio, vLLM, etc.).
-	BaseURL string `json:"baseUrl,omitempty"`
-	// Model id to use for requests.
-	Model string `json:"model,omitempty"`
+	Providers    map[string]ProviderConfig `json:"providers"`
+	DefaultModel string                    `json:"default_model"`
 }
 
 // Dir returns the myagent config/data directory (~/.myagent), honoring
@@ -67,12 +67,10 @@ func Path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// Load reads config.json (if present) and applies environment overrides and
-// defaults. A missing file is not an error: env + defaults still produce a
-// usable Config.
+// Load reads config.json. A missing file is not an error; first-run setup
+// determines whether a usable configuration must be created.
 func Load() (*Config, error) {
 	cfg := &Config{}
-
 	path, err := Path()
 	if err != nil {
 		return nil, err
@@ -84,37 +82,68 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	case errors.Is(err, fs.ErrNotExist):
-		// no file: fall through to env + defaults
+		// no file
 	default:
 		return nil, err
 	}
-
-	// Environment overrides win over file values.
-	if v := os.Getenv(EnvAPIKey); v != "" {
-		cfg.APIKey = v
-	}
-	if v := os.Getenv(EnvBaseURL); v != "" {
-		cfg.BaseURL = v
-	}
-	if v := os.Getenv(EnvModel); v != "" {
-		cfg.Model = v
-	}
-
-	// Defaults.
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = DefaultBaseURL
-	}
-	if cfg.Model == "" {
-		cfg.Model = DefaultModel
-	}
-
 	return cfg, nil
 }
 
+// Resolve selects a configured provider and model. providerName, modelID, and
+// baseURL override the corresponding configured values when non-empty.
+func (c *Config) Resolve(providerName, modelID, baseURL string) (llm.Provider, llm.Model, error) {
+	if c == nil {
+		return nil, llm.Model{}, errors.New("config is nil")
+	}
+	defaultProvider, defaultModel, err := splitModelRef(c.DefaultModel)
+	if err != nil {
+		return nil, llm.Model{}, fmt.Errorf("default_model: %w", err)
+	}
+	if providerName == "" {
+		providerName = defaultProvider
+	}
+	if modelID == "" {
+		modelID = defaultModel
+		if v := os.Getenv(EnvModel); v != "" {
+			modelID = v
+		}
+	}
+
+	providerCfg, ok := c.Providers[providerName]
+	if !ok {
+		return nil, llm.Model{}, fmt.Errorf("provider %q is not configured", providerName)
+	}
+	if providerCfg.Type != DefaultProviderType {
+		return nil, llm.Model{}, fmt.Errorf("provider %q has unsupported type %q", providerName, providerCfg.Type)
+	}
+	if baseURL != "" {
+		providerCfg.BaseURL = baseURL
+	} else if v := os.Getenv(EnvBaseURL); v != "" && providerName == defaultProvider {
+		providerCfg.BaseURL = v
+	}
+	if providerCfg.BaseURL == "" {
+		return nil, llm.Model{}, fmt.Errorf("provider %q has no baseUrl", providerName)
+	}
+	if v := os.Getenv(EnvAPIKey); v != "" && providerName == defaultProvider {
+		providerCfg.APIKey = v
+	}
+	return llm.NewOpenAIProvider(providerCfg.APIKey), llm.Model{
+		ID:       modelID,
+		Provider: providerName,
+		BaseURL:  providerCfg.BaseURL,
+	}, nil
+}
+
+func splitModelRef(ref string) (string, string, error) {
+	provider, model, found := strings.Cut(strings.TrimSpace(ref), "/")
+	if !found || provider == "" || model == "" || strings.Contains(model, "/") {
+		return "", "", fmt.Errorf("must be provider/model-id")
+	}
+	return provider, model, nil
+}
+
 // Exists reports whether a config.json file is present at Path() and is
-// non-empty (i.e. contains at least one non-whitespace byte). A missing or
-// whitespace-only file is treated as not existing, so the setup wizard runs
-// again until real values have been written.
+// non-empty (i.e. contains at least one non-whitespace byte).
 func Exists() (bool, error) {
 	path, err := Path()
 	if err != nil {
@@ -130,11 +159,7 @@ func Exists() (bool, error) {
 	return strings.TrimSpace(string(data)) != "", nil
 }
 
-// NeedsSetup reports whether the interactive setup wizard should run before
-// myagent proceeds with an interactive session. Setup is required when the
-// config file is missing or empty/blank. A non-empty file is left intact; if
-// it is malformed or incomplete, Load() / normal credential validation reports
-// the configuration error rather than overwriting user data.
+// NeedsSetup reports whether the interactive setup wizard should run.
 func NeedsSetup() (bool, error) {
 	exists, err := Exists()
 	if err != nil {
@@ -144,12 +169,7 @@ func NeedsSetup() (bool, error) {
 }
 
 // Save writes cfg to config.json under Dir(), creating the directory if
-// needed. The file is written with 0600 permissions so it is not
-// world-readable (it contains the API key). tmp+rename is used so the
-// config.json is never left half-written. Save does NOT round-trip the
-// environment: only the explicit cfg fields are persisted, mirroring the
-// documented "env wins" semantics; call Load() afterwards to reapply env
-// overrides and defaults.
+// needed. The file is atomically replaced and stored with 0600 permissions.
 func Save(cfg *Config) error {
 	dir, err := Dir()
 	if err != nil {
@@ -191,10 +211,5 @@ func Save(cfg *Config) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	// Rename on Windows can leave the moved file with the temp file's mode;
-	// re-assert 0600 on the final path.
-	if err := os.Chmod(path, 0o600); err != nil {
-		return err
-	}
-	return nil
+	return os.Chmod(path, 0o600)
 }

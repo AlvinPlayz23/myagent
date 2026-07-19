@@ -30,9 +30,9 @@ Everything below assumes you `cd`-ed into this repo.
 ## Prerequisites 
 
 - **Go** — see `go.mod` for the minimum toolchain version.
-- An **OpenAI-compatible API key**. First run collects it in the setup wizard.
-  The default endpoint is `https://api.openai.com/v1` and the default model is
-  `gpt-4o`.
+- An API key for at least one configured **OpenAI-compatible provider**. First
+  run collects an OpenAI-compatible provider. The initial endpoint is
+  `https://api.openai.com/v1` and model is `gpt-4o`.
 - A real terminal for the TUI:
   - macOS / Linux: any modern terminal.
   - Windows: **Windows Terminal** (ConPTY + 24-bit color). PowerShell
@@ -58,43 +58,63 @@ There are no other install steps.
 
 Configuration is required. When you start interactive myagent and
 `$MYAGENT_DIR/config.json` does not exist or is empty, a terminal wizard asks
-for your API key, base URL, and model, then creates the file. The API-key input
-is masked. Press **Esc** on the blank API-key field or **Ctrl+C** to cancel.
+for the API key, base URL, and default model of one OpenAI-compatible provider,
+then creates the file. The API-key input is masked. Press **Esc** on the blank
+API-key field or **Ctrl+C** to cancel.
 
 The wizard requires a real terminal; `-p`/`--print` will instead fail with a
 message telling you to run `myagent` once and complete setup.
 
+Run `myagent auth` at any time to open the provider setup wizard again. It
+updates the named `openai` provider and default model while preserving other
+configured providers.
+
 If `config.json` already contains any non-whitespace content, setup is not
-shown and myagent reads that file normally. Invalid JSON or a missing API key
-in an existing file remains a configuration error, so myagent never overwrites
-an existing configuration unexpectedly.
+shown and myagent reads that file normally. Invalid JSON or an invalid provider
+configuration remains an error, so myagent never overwrites an existing
+configuration unexpectedly.
 
 ### Config file (`$MYAGENT_DIR/config.json`)
 
 ```json
 {
-  "apiKey": "sk-...",
-  "baseUrl": "https://api.openai.com/v1",
-  "model": "gpt-4o"
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "apiKey": "sk-...",
+      "baseUrl": "https://api.openai.com/v1"
+    },
+    "ollama": {
+      "type": "openai-compatible",
+      "baseUrl": "http://localhost:11434/v1"
+    }
+  },
+  "default_model": "openai/gpt-4o"
 }
 ```
 
 The wizard creates parent directories as required. On Unix, the file is stored
 with `0600` permissions because it contains the API key.
 
+Each provider has a unique name, a provider `type`, endpoint, and optional API
+key. `openai-compatible` is the supported type and works with OpenAI, Ollama,
+LM Studio, vLLM, and compatible services. `default_model` must be a qualified
+`provider/model-id` reference. Selecting `ollama/qwen3` as the default, for
+example, routes normal turns and automatic context compaction to `ollama`.
+
 ### Environment overrides
 
 | Variable           | Purpose                              | Default                     |
 | ------------------ | ------------------------------------ | --------------------------- |
-| `OPENAI_API_KEY`   | API key override                     | —                           |
-| `OPENAI_BASE_URL`  | Endpoint base URL                    | `https://api.openai.com/v1` |
-| `MYAGENT_MODEL`    | Model id                             | `gpt-4o`                    |
+| `OPENAI_API_KEY`   | API key override for default provider | —                          |
+| `OPENAI_BASE_URL`  | Endpoint override for default provider | configured `baseUrl`      |
+| `MYAGENT_MODEL`    | Model ID override for default provider | configured model ID       |
 | `MYAGENT_DIR`      | Config + session directory           | `~/.myagent`                |
 | `MYAGENT_SHELL`    | Shell used by the `bash` tool        | auto-detected (see below)   |
 
-Environment variables override values loaded from `config.json` for that run;
-they do not remove the need to complete first-run setup. This supports CI and
-temporary provider/model changes without changing the saved configuration.
+Environment variables override the default provider's values for that run;
+they do not remove the need to complete first-run setup. Use `--provider` to
+select another configured provider for an invocation.
 
 ### Shell selection for the `bash` tool
 
@@ -124,8 +144,10 @@ run under `cmd.exe`.
 | -------------------------------------------- | -------------------------------------------------- |
 | `go run .`                                   | Enter the interactive TUI (default)                |
 | `go run . tui`                               | Same, explicit                                     |
+| `go run . auth`                              | Open the provider setup wizard                     |
 | `go run . -p "..."`                          | One-shot prompt; streams reply to stdout           |
-| `go run . -p "..." --model=claude-sonnet-4.5`| Override model for this run                        |
+| `go run . -p "..." --provider=ollama`        | Use a configured provider for this run             |
+| `go run . -p "..." --model=qwen3`            | Override model within the selected provider        |
 | `go run . --continue`                        | Resume the most recently modified session          |
 | `go run . --resume ./path/session.jsonl`     | Resume by file path                                |
 | `go run . --resume-id <uuid>`                | Resume by session id                               |
@@ -171,7 +193,8 @@ to run, or **Esc** to dismiss it.
 | `/new`               | Start a fresh persisted conversation                    |
 | `/resume`            | Open the session selector and resume a previous conversation |
 
-`/model-id` is a session-only override. It does not update `config.json`.
+`/model-id` is a session-only override within the selected provider. It does
+not update `config.json` or switch provider credentials/endpoints.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
@@ -297,8 +320,7 @@ find . -name '*.go' | entr -c go run . -p "what changed?"
 ### Adding a new LLM provider
 
 1. Implement the `llm.Provider` interface (`internal/llm/provider.go`).
-2. Wire it into `main.go` alongside (or instead of)
-   `llm.NewOpenAIProvider`.
+2. Add its provider type to `Config.Resolve` (`internal/config/config.go`).
 
 The agent loop is provider-agnostic; it consumes `types.AgentEvent`s.
 
@@ -306,12 +328,12 @@ The agent loop is provider-agnostic; it consumes `types.AgentEvent`s.
 
 ## Troubleshooting
 
-**`myagent: no API key: set OPENAI_API_KEY (or apiKey in config.json)`**
-Complete the first-run wizard by running `myagent`, or add `apiKey` to an
-existing `$MYAGENT_DIR/config.json`. `OPENAI_API_KEY` can override it for one
-run.
+**`myagent: provider "name" has no API key`**
+Add `apiKey` to that named provider in `$MYAGENT_DIR/config.json`, or set
+`OPENAI_API_KEY` when using the default provider. A local OpenAI-compatible
+endpoint can still require a non-empty API key field; use its documented value.
 
-**`myagent: no API key configured: run myagent once to complete setup`**
+**`myagent: no provider configured: run myagent once to complete setup`**
 `-p` / `--print` cannot display the terminal wizard. Run `myagent` with no
 prompt in an interactive terminal, complete setup, then rerun the command.
 

@@ -91,14 +91,15 @@ func TestWizardModel_FullFlowWritesConfig(t *testing.T) {
 	if m.result == nil {
 		t.Fatalf("expected a non-nil resolved config after finalize")
 	}
-	if m.result.APIKey != "sk-wizard" {
-		t.Fatalf("APIKey = %q, want sk-wizard", m.result.APIKey)
+	provider := m.result.Providers[config.DefaultProviderName]
+	if provider.APIKey != "sk-wizard" {
+		t.Fatalf("APIKey = %q, want sk-wizard", provider.APIKey)
 	}
-	if m.result.Model != "gpt-4o-mini" {
-		t.Fatalf("Model = %q, want gpt-4o-mini", m.result.Model)
+	if m.result.DefaultModel != "openai/gpt-4o-mini" {
+		t.Fatalf("DefaultModel = %q, want openai/gpt-4o-mini", m.result.DefaultModel)
 	}
-	if m.result.BaseURL != config.DefaultBaseURL {
-		t.Fatalf("BaseURL = %q, want default %q", m.result.BaseURL, config.DefaultBaseURL)
+	if provider.BaseURL != config.DefaultBaseURL {
+		t.Fatalf("BaseURL = %q, want default %q", provider.BaseURL, config.DefaultBaseURL)
 	}
 
 	if _, err := os.Stat(configPath(t)); err != nil {
@@ -112,6 +113,32 @@ func TestWizardModel_FullFlowWritesConfig(t *testing.T) {
 	}
 	if needs {
 		t.Fatal("NeedsSetup should be false after the wizard writes a config")
+	}
+}
+
+func TestWizardModel_PreservesOtherProviders(t *testing.T) {
+	setTempDir(t)
+	if err := config.Save(&config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"local": {Type: config.DefaultProviderType, BaseURL: "http://localhost:11434/v1"},
+		},
+		DefaultModel: "local/qwen3",
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	m.fields[0].input.SetValue("sk-new")
+	m.fields[1].input.SetValue("https://api.openai.com/v1")
+	m.fields[2].input.SetValue("gpt-4o-mini")
+	_, _ = m.nextField(1)
+	_, _ = m.nextField(1)
+	_, _ = m.nextField(1)
+	if !m.done {
+		t.Fatalf("wizard should finish: %s", m.err)
+	}
+	if _, ok := m.result.Providers["local"]; !ok {
+		t.Fatal("wizard should preserve existing providers")
 	}
 }
 

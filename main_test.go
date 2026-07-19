@@ -26,7 +26,7 @@ func TestRunPrintModeSkipsSetupForNonEmptyConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MYAGENT_DIR", dir)
 	t.Setenv("OPENAI_API_KEY", "")
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"model":"gpt-4o"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"providers":{"openai":{"type":"openai-compatible"}},"default_model":"openai/gpt-4o"}`), 0o600); err != nil {
 		t.Fatalf("write config.json: %v", err)
 	}
 
@@ -34,8 +34,23 @@ func TestRunPrintModeSkipsSetupForNonEmptyConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("incomplete config should fail API-key validation")
 	}
-	if !strings.Contains(err.Error(), "no API key:") {
+	if !strings.Contains(err.Error(), "has no baseUrl") {
 		t.Fatalf("expected API-key validation error, got: %v", err)
+	}
+}
+
+func TestRunAuthOpensSetup(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	err := run([]string{"auth"})
+	if err == nil || !strings.Contains(err.Error(), "requires an interactive terminal") {
+		t.Fatalf("auth should launch the setup wizard, got: %v", err)
+	}
+}
+
+func TestRunAuthRejectsArguments(t *testing.T) {
+	err := run([]string{"auth", "openai"})
+	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
+		t.Fatalf("auth with arguments should fail, got: %v", err)
 	}
 }
 

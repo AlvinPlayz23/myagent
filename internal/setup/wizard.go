@@ -219,11 +219,20 @@ func (m *wizardModel) finalize() (tea.Model, tea.Cmd) {
 	baseURL := strings.TrimSpace(m.fields[1].input.Value())
 	model := strings.TrimSpace(m.fields[2].input.Value())
 
-	toSave := &config.Config{
+	toSave, err := config.Load()
+	if err != nil {
+		m.err = "Could not read existing config: " + err.Error()
+		return m, nil
+	}
+	if toSave.Providers == nil {
+		toSave.Providers = make(map[string]config.ProviderConfig)
+	}
+	toSave.Providers[config.DefaultProviderName] = config.ProviderConfig{
+		Type:    config.DefaultProviderType,
 		APIKey:  apiKey,
 		BaseURL: baseURL,
-		Model:   model,
 	}
+	toSave.DefaultModel = config.DefaultProviderName + "/" + model
 	if err := config.Save(toSave); err != nil {
 		m.err = "Failed to write config: " + err.Error()
 		return m, nil
@@ -236,8 +245,8 @@ func (m *wizardModel) finalize() (tea.Model, tea.Cmd) {
 		m.err = "Config saved but could not be re-read: " + err.Error()
 		return m, nil
 	}
-	if cfg.APIKey == "" {
-		m.err = "Config saved but no API key is available."
+	if _, _, err := cfg.Resolve("", "", ""); err != nil {
+		m.err = "Config saved but is invalid: " + err.Error()
 		return m, nil
 	}
 
@@ -268,7 +277,7 @@ func (m *wizardModel) View() tea.View {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("myagent setup"))
 	sb.WriteString("\n\n")
-	sb.WriteString(mutedStyle.Render("First run detected: no config yet. Let's fix that."))
+	sb.WriteString(mutedStyle.Render("Configure an OpenAI-compatible provider."))
 	sb.WriteString("\n\n")
 
 	for i, f := range m.fields {

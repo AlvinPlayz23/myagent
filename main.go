@@ -6,9 +6,10 @@
 //	myagent tui                   same; explicit
 //	myagent -p "prompt"           non-interactive: stream a single reply to stdout
 //	myagent sessions              list persisted sessions, newest first
+//	myagent auth                  open provider setup
 //
 // Flags for print/resume mode: -p / -print, --continue, --resume <path>,
-// --resume-id <id>, --model, --base-url.
+// --resume-id <id>, --provider, --model, --base-url.
 package main
 
 import (
@@ -24,7 +25,6 @@ import (
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/config"
-	"github.com/myagent/myagent/internal/llm"
 	"github.com/myagent/myagent/internal/printmode"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/setup"
@@ -41,10 +41,13 @@ func main() {
 }
 
 func run(argv []string) error {
-	// Subcommand routing. `sessions` lists persisted sessions; `tui` forces
-	// the interactive UI (also the default when no -p prompt is given).
+	// Subcommand routing. `sessions` lists persisted sessions; `auth` opens
+	// provider setup; `tui` forces the interactive UI.
 	if len(argv) > 0 && argv[0] == "sessions" {
 		return runSessions(argv[1:])
+	}
+	if len(argv) > 0 && argv[0] == "auth" {
+		return runAuth(argv[1:])
 	}
 	forceTUI := false
 	if len(argv) > 0 && argv[0] == "tui" {
@@ -54,20 +57,22 @@ func run(argv []string) error {
 
 	fs := flag.NewFlagSet("myagent", flag.ContinueOnError)
 	var (
-		printPrompt string
-		doContinue  bool
-		resumePath  string
-		resumeID    string
-		modelFlag   string
-		baseURLFlag string
+		printPrompt  string
+		doContinue   bool
+		resumePath   string
+		resumeID     string
+		providerFlag string
+		modelFlag    string
+		baseURLFlag  string
 	)
 	fs.StringVar(&printPrompt, "p", "", "run a single prompt non-interactively and print the result")
 	fs.StringVar(&printPrompt, "print", "", "run a single prompt non-interactively and print the result")
 	fs.BoolVar(&doContinue, "continue", false, "resume the most recent session")
 	fs.StringVar(&resumePath, "resume", "", "resume the session at the given .jsonl path")
 	fs.StringVar(&resumeID, "resume-id", "", "resume the session with the given id")
-	fs.StringVar(&modelFlag, "model", "", "model id (overrides config and MYAGENT_MODEL)")
-	fs.StringVar(&baseURLFlag, "base-url", "", "OpenAI-compatible base URL (overrides config)")
+	fs.StringVar(&providerFlag, "provider", "", "configured provider name (overrides default_model provider)")
+	fs.StringVar(&modelFlag, "model", "", "model id (overrides default_model and MYAGENT_MODEL)")
+	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -91,15 +96,14 @@ func run(argv []string) error {
 	}
 	if needsSetup {
 		if !interactive {
-			return fmt.Errorf("no API key configured: run `myagent` once to complete setup, or set %s / create $MYAGENT_DIR/config.json", config.EnvAPIKey)
+			return fmt.Errorf("no provider configured: run `myagent` once to complete setup or create $MYAGENT_DIR/config.json")
 		}
 		var cfg2 *config.Config
 		cfg2, err = setup.RunWizard(context.Background())
 		if err != nil {
 			return err
 		}
-		// Fall through and use cfg2; the wizard leaves env overrides already
-		// applied via config.Load().
+		// Fall through and resolve the wizard's new configuration below.
 		cfg = cfg2
 	} else {
 		cfg, err = config.Load()
@@ -108,16 +112,9 @@ func run(argv []string) error {
 		}
 	}
 
-	// Per-invocation flags override config + env after setup resolves.
-	if modelFlag != "" {
-		cfg.Model = modelFlag
-	}
-	if baseURLFlag != "" {
-		cfg.BaseURL = baseURLFlag
-	}
-
-	if cfg.APIKey == "" {
-		return fmt.Errorf("no API key: set %s (or apiKey in config.json)", config.EnvAPIKey)
+	provider, model, err := cfg.Resolve(providerFlag, modelFlag, baseURLFlag)
+	if err != nil {
+		return err
 	}
 
 	cwd, err := os.Getwd()
@@ -150,10 +147,9 @@ func run(argv []string) error {
 	}
 
 	registry := tools.DefaultRegistry(cwd)
-	provider := llm.NewOpenAIProvider(cfg.APIKey)
 	agentCfg := agent.Config{
 		Provider:           provider,
-		Model:              llm.Model{ID: cfg.Model, Provider: "openai", BaseURL: cfg.BaseURL},
+		Model:              model,
 		Registry:           registry,
 		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
 		CompactionSettings: compaction.DefaultSettings,
@@ -169,7 +165,7 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		sess, err = tui.Run(ctx, agentCfg, sess, history, cfg.Model, cwd)
+		sess, err = tui.Run(ctx, agentCfg, sess, history, model.ID, cwd)
 		if sess != nil {
 			defer sess.Close()
 		}
@@ -181,6 +177,15 @@ func run(argv []string) error {
 	}
 	defer sess.Close()
 	return printmode.Run(ctx, agentCfg, sess, history, printPrompt, os.Stdout, os.Stderr)
+}
+
+// runAuth opens the provider setup wizard independently of first-run state.
+func runAuth(argv []string) error {
+	if len(argv) > 0 {
+		return fmt.Errorf("auth does not accept arguments")
+	}
+	_, err := setup.RunWizard(context.Background())
+	return err
 }
 
 // resumeInstructions returns the commands needed to continue a persisted
