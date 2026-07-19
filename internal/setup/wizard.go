@@ -1,15 +1,4 @@
-// Package setup implements myagent's first-run interactive wizard.
-//
-// When no config.json exists (or it is blank), main invokes RunWizard before
-// starting an interactive session. The wizard collects the required
-// OpenAI-compatible credentials, writes them to config.json via config.Save,
-// and returns the resolved config so the caller can continue into the TUI
-// without re-loading.
-//
-// The wizard is a self-contained bubbletea v2 program using bubbles/textinput
-// for each field. It honors MYAGENT_DIR and uses OPENAI_BASE_URL /
-// MYAGENT_MODEL as visible defaults; config.Load reapplies every OPENAI_* env
-// override after the config has been saved.
+// Package setup implements myagent's interactive provider manager.
 package setup
 
 import (
@@ -17,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -26,241 +16,362 @@ import (
 	"github.com/myagent/myagent/internal/config"
 )
 
-// Result is what RunWizard returns: the in-memory config the wizard produced
-// (mirrors config.Load()'s resolution, i.e. env overrides + defaults applied)
-// so the caller can use it directly without re-reading the file.
-type Result struct {
-	Config *config.Config
-}
+type screen int
 
-// field is one wizard input. The API-key field is masked (EchoPassword),
-// the others behave as normal single-line text inputs.
+const (
+	screenList screen = iota
+	screenEditor
+	screenDelete
+)
+
 type field struct {
 	label string
 	help  string
 	input textinput.Model
 }
 
-// wizardModel is the wizard's Bubble Tea model.
+// wizardModel manages the named OpenAI-compatible providers stored in
+// config.json. It is also the first-run setup flow when no providers exist.
 type wizardModel struct {
-	fields  []*field
-	current int
+	cfg *config.Config
+
+	screen    screen
+	providers []string
+	selected  int
+	editing   string
+	fields    []*field
+	current   int
 
 	width, height int
 	ready         bool
-
-	err  string
-	done bool
-	quit bool
-
-	result *config.Config
+	err           string
+	loadErr       bool
+	done          bool
+	quit          bool
+	result        *config.Config
 }
 
-// RunWizard drives the interactive setup wizard. It blocks until the user
-// either completes setup (returns the resolved config) or cancels with
-// Ctrl+C / Esc (returns ErrCancelled). If no interactive terminal is
-// attached, it falls back to ErrNoTty and the caller is expected to surface a
-// non-interactive error instead.
 func RunWizard(ctx context.Context) (*config.Config, error) {
 	if !isInteractive() {
 		return nil, ErrNoTty
 	}
 
-	m := newWizardModel()
-	p := tea.NewProgram(m, tea.WithContext(ctx))
+	p := tea.NewProgram(newWizardModel(), tea.WithContext(ctx))
 	out, err := p.Run()
 	if err != nil {
 		return nil, err
 	}
-	wm, ok := out.(*wizardModel)
+	m, ok := out.(*wizardModel)
 	if !ok {
 		return nil, fmt.Errorf("setup: unexpected model type %T", out)
 	}
-	if wm.quit {
+	if m.result == nil {
 		return nil, ErrCancelled
 	}
-	if wm.result == nil {
-		return nil, ErrCancelled
-	}
-	return wm.result, nil
+	return m.result, nil
 }
 
-// newWizardModel builds the wizard state and each field's textinput with
-// sensible defaults pulled from the environment and config defaults.
 func newWizardModel() *wizardModel {
-	keyPH := "sk-..."
-	basePH := config.DefaultBaseURL
-	if v := os.Getenv(config.EnvBaseURL); v != "" {
-		basePH = v
+	cfg, err := config.Load()
+	if cfg == nil {
+		cfg = &config.Config{}
 	}
-	modelPH := config.DefaultModel
-	if v := os.Getenv(config.EnvModel); v != "" {
-		modelPH = v
+	m := &wizardModel{cfg: cfg}
+	if err != nil {
+		m.err = "Could not read existing config: " + err.Error()
+		m.loadErr = true
+		return m
 	}
-
-	mk := func(masked bool, label, help, ph string) *field {
-		ti := textinput.New()
-		ti.Placeholder = ph
-		ti.CharLimit = 0
-		if masked {
-			ti.EchoMode = textinput.EchoPassword
-			ti.EchoCharacter = '*'
-		}
-		return &field{label: label, help: help, input: ti}
+	m.refreshProviders()
+	if len(m.providers) == 0 {
+		m.openEditor("")
 	}
-
-	m := &wizardModel{
-		fields: []*field{
-			mk(true, "API key", "OpenAI-compatible API key. Required.", keyPH),
-			mk(false, "Base URL", "OpenAI-compatible endpoint.", basePH),
-			mk(false, "Model", "Model id (e.g. gpt-4o).", modelPH),
-		},
-	}
-	// Store defaults as real values so accepting each field persists a complete
-	// config rather than relying on the runtime defaults after setup.
-	m.fields[1].input.SetValue(basePH)
-	m.fields[2].input.SetValue(modelPH)
-	_ = m.fields[0].input.Focus()
 	return m
 }
 
-// Init starts nothing special; the first field is already focused.
 func (m *wizardModel) Init() tea.Cmd { return nil }
 
-// Update routes messages: resize, key presses, and textinput updates.
 func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.ready = true
+		m.width, m.height, m.ready = msg.Width, msg.Height, true
 		m.resizeInputs()
 		return m, nil
-
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	}
-
-	if m.done || m.quit {
+	if m.screen != screenEditor || m.done || m.quit || len(m.fields) == 0 {
 		return m, nil
 	}
-	f := m.fields[m.current]
 	var cmd tea.Cmd
-	f.input, cmd = f.input.Update(msg)
+	m.fields[m.current].input, cmd = m.fields[m.current].input.Update(msg)
 	return m, cmd
 }
 
-// onKey routes key presses for the current field and navigation.
 func (m *wizardModel) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	ks := k.Keystroke()
-	switch ks {
+	if m.done || m.quit {
+		return m, nil
+	}
+	if m.loadErr {
+		if k.Keystroke() == "ctrl+c" || k.Keystroke() == "q" || k.Keystroke() == "esc" {
+			m.quit = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+	switch m.screen {
+	case screenList:
+		return m.onListKey(k)
+	case screenDelete:
+		return m.onDeleteKey(k)
+	default:
+		return m.onEditorKey(k)
+	}
+}
+
+func (m *wizardModel) onListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "ctrl+c", "q", "esc":
+		m.result = m.cfg
+		m.quit = true
+		return m, tea.Quit
+	case "up", "k":
+		if m.selected > 0 {
+			m.selected--
+		}
+	case "down", "j":
+		if m.selected < len(m.providers)-1 {
+			m.selected++
+		}
+	case "a":
+		m.openEditor("")
+	case "e":
+		m.openEditor(m.selectedProvider())
+	case "enter":
+		m.makeDefault(m.selectedProvider())
+	case "d":
+		if name := m.selectedProvider(); name != "" {
+			if m.isDefault(name) {
+				m.err = "Select another provider as default before deleting this one."
+			} else {
+				m.screen = screenDelete
+				m.err = ""
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *wizardModel) onDeleteKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "y":
+		name := m.selectedProvider()
+		delete(m.cfg.Providers, name)
+		if err := config.Save(m.cfg); err != nil {
+			m.err = "Failed to write config: " + err.Error()
+			m.screen = screenList
+			return m, nil
+		}
+		m.refreshProviders()
+		m.screen = screenList
+		m.result = m.cfg
+	case "n", "esc", "ctrl+c":
+		m.screen = screenList
+	}
+	return m, nil
+}
+
+func (m *wizardModel) onEditorKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
 	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
 	case "esc":
-		if m.current == 0 && m.fields[0].input.Value() == "" {
+		if len(m.providers) == 0 {
 			m.quit = true
 			return m, tea.Quit
 		}
-		// Esc otherwise clears the current field, like a typical dialog.
-		m.fields[m.current].input.Reset()
+		m.screen = screenList
 		m.err = ""
 		return m, nil
-	case "enter":
-		return m.submitField()
-	case "tab", "ctrl+n":
+	case "enter", "tab", "ctrl+n":
 		return m.nextField(1)
 	case "shift+tab", "ctrl+p":
 		return m.nextField(-1)
 	}
-
-	if m.done || m.quit {
-		return m, nil
-	}
-	f := m.fields[m.current]
 	var cmd tea.Cmd
-	f.input, cmd = f.input.Update(k)
+	m.fields[m.current].input, cmd = m.fields[m.current].input.Update(k)
 	return m, cmd
 }
 
-// submitField validates the current field and either advances or finishes.
-func (m *wizardModel) submitField() (tea.Model, tea.Cmd) {
-	f := m.fields[m.current]
-	m.err = ""
-	if f.label == "API key" && strings.TrimSpace(f.input.Value()) == "" {
-		m.err = "API key is required. Press Esc to cancel."
-		return m, nil
-	}
-	return m.nextField(1)
-}
-
-// nextField moves focus forward/back; when advancing past the last field it
-// finalizes and writes the config.
 func (m *wizardModel) nextField(dir int) (tea.Model, tea.Cmd) {
 	m.err = ""
 	next := m.current + dir
 	if next >= len(m.fields) {
-		return m.finalize()
+		return m.saveProvider()
 	}
 	if next < 0 {
 		next = 0
 	}
 	m.fields[m.current].input.Blur()
 	m.current = next
-	if cmd := m.fields[next].input.Focus(); cmd != nil {
-		return m, cmd
-	}
-	return m, nil
+	return m, m.fields[next].input.Focus()
 }
 
-// finalize collects field values, fills defaults, writes config.json, and
-// resolves the final config (env overrides + defaults) to hand back.
-func (m *wizardModel) finalize() (tea.Model, tea.Cmd) {
-	apiKey := strings.TrimSpace(m.fields[0].input.Value())
-	baseURL := strings.TrimSpace(m.fields[1].input.Value())
-	model := strings.TrimSpace(m.fields[2].input.Value())
+func (m *wizardModel) openEditor(name string) {
+	m.screen, m.editing, m.current, m.err = screenEditor, name, 0, ""
+	provider := config.ProviderConfig{Type: config.DefaultProviderType, BaseURL: config.DefaultBaseURL}
+	model := config.DefaultModel
+	if v := os.Getenv(config.EnvBaseURL); v != "" && name == "" {
+		provider.BaseURL = v
+	}
+	if v := os.Getenv(config.EnvModel); v != "" && name == "" {
+		model = v
+	}
+	if name != "" {
+		provider = m.cfg.Providers[name]
+		if provider.Model != "" {
+			model = provider.Model
+		} else if defaultName, defaultModel, ok := m.defaultRef(); ok && defaultName == name {
+			model = defaultModel
+		}
+	} else {
+		name = config.DefaultProviderName
+		if _, exists := m.cfg.Providers[name]; exists {
+			name = "provider"
+		}
+	}
+	m.fields = []*field{
+		m.newField(false, "Name", "A unique provider name used with --provider.", name),
+		m.newField(true, "API key", "Optional for local endpoints such as Ollama.", provider.APIKey),
+		m.newField(false, "Base URL", "OpenAI-compatible endpoint URL.", provider.BaseURL),
+		m.newField(false, "Model", "Model id. Saving makes this provider the default.", model),
+	}
+	_ = m.fields[0].input.Focus()
+	m.resizeInputs()
+}
 
-	toSave, err := config.Load()
-	if err != nil {
-		m.err = "Could not read existing config: " + err.Error()
+func (m *wizardModel) newField(masked bool, label, help, value string) *field {
+	ti := textinput.New()
+	ti.CharLimit = 0
+	ti.SetValue(value)
+	if masked {
+		ti.EchoMode = textinput.EchoPassword
+		ti.EchoCharacter = '*'
+	}
+	return &field{label: label, help: help, input: ti}
+}
+
+func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(m.fields[0].input.Value())
+	apiKey := strings.TrimSpace(m.fields[1].input.Value())
+	baseURL := strings.TrimSpace(m.fields[2].input.Value())
+	model := strings.TrimSpace(m.fields[3].input.Value())
+	if name == "" || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\n") {
+		m.err = "Name must be non-empty and cannot contain spaces or '/'."
 		return m, nil
 	}
-	if toSave.Providers == nil {
-		toSave.Providers = make(map[string]config.ProviderConfig)
+	if baseURL == "" || model == "" {
+		m.err = "Base URL and model are required."
+		return m, nil
 	}
-	toSave.Providers[config.DefaultProviderName] = config.ProviderConfig{
-		Type:    config.DefaultProviderType,
-		APIKey:  apiKey,
-		BaseURL: baseURL,
+	if m.cfg.Providers == nil {
+		m.cfg.Providers = make(map[string]config.ProviderConfig)
 	}
-	toSave.DefaultModel = config.DefaultProviderName + "/" + model
-	if err := config.Save(toSave); err != nil {
+	if m.editing != "" && m.editing != name {
+		if _, exists := m.cfg.Providers[name]; exists {
+			m.err = fmt.Sprintf("Provider %q already exists.", name)
+			return m, nil
+		}
+		delete(m.cfg.Providers, m.editing)
+	}
+	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model}
+	m.cfg.DefaultModel = name + "/" + model
+	if err := config.Save(m.cfg); err != nil {
 		m.err = "Failed to write config: " + err.Error()
 		return m, nil
 	}
-
-	// Re-resolve so env overrides and defaults apply exactly as on subsequent
-	// runs, mirroring config.Load semantics.
-	cfg, err := config.Load()
-	if err != nil {
-		m.err = "Config saved but could not be re-read: " + err.Error()
-		return m, nil
-	}
-	if _, _, err := cfg.Resolve("", "", ""); err != nil {
+	if _, _, err := m.cfg.Resolve("", "", ""); err != nil {
 		m.err = "Config saved but is invalid: " + err.Error()
 		return m, nil
 	}
-
-	m.result = cfg
-	m.done = true
-	return m, tea.Quit
+	m.refreshProviders()
+	m.selected = m.indexOf(name)
+	m.result = m.cfg
+	if len(m.providers) == 1 {
+		m.done = true
+		return m, tea.Quit
+	}
+	m.screen = screenList
+	return m, nil
 }
 
-// resizeInputs gives each textinput the full width minus the label indent.
+func (m *wizardModel) makeDefault(name string) {
+	if name == "" {
+		return
+	}
+	model := m.cfg.Providers[name].Model
+	if model == "" {
+		defaultName, defaultModel, ok := m.defaultRef()
+		if ok && defaultName == name {
+			model = defaultModel
+		}
+	}
+	if model == "" {
+		m.err = "Edit this provider to choose its model before making it default."
+		return
+	}
+	m.cfg.DefaultModel = name + "/" + model
+	if err := config.Save(m.cfg); err != nil {
+		m.err = "Failed to write config: " + err.Error()
+		return
+	}
+	m.result = m.cfg
+	m.err = ""
+}
+
+func (m *wizardModel) refreshProviders() {
+	m.providers = m.providers[:0]
+	for name := range m.cfg.Providers {
+		m.providers = append(m.providers, name)
+	}
+	sort.Strings(m.providers)
+	if m.selected >= len(m.providers) {
+		m.selected = max(0, len(m.providers)-1)
+	}
+}
+
+func (m *wizardModel) selectedProvider() string {
+	if m.selected < 0 || m.selected >= len(m.providers) {
+		return ""
+	}
+	return m.providers[m.selected]
+}
+
+func (m *wizardModel) indexOf(name string) int {
+	for i, provider := range m.providers {
+		if provider == name {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *wizardModel) defaultRef() (string, string, bool) {
+	provider, model, ok := strings.Cut(strings.TrimSpace(m.cfg.DefaultModel), "/")
+	return provider, model, ok && provider != "" && model != "" && !strings.Contains(model, "/")
+}
+
+func (m *wizardModel) isDefault(name string) bool {
+	provider, _, ok := m.defaultRef()
+	return ok && provider == name
+}
+
 func (m *wizardModel) resizeInputs() {
 	if !m.ready || m.width <= 0 {
 		return
 	}
-	w := m.width - labelWidth(m.width) - 2
+	w := m.width - 12
 	if w < 20 {
 		w = 20
 	}
@@ -269,24 +380,63 @@ func (m *wizardModel) resizeInputs() {
 	}
 }
 
-// View renders the wizard screen.
 func (m *wizardModel) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
 	}
 	var sb strings.Builder
-	sb.WriteString(titleStyle.Render("myagent setup"))
+	sb.WriteString(titleStyle.Render("myagent providers"))
 	sb.WriteString("\n\n")
-	sb.WriteString(mutedStyle.Render("Configure an OpenAI-compatible provider."))
-	sb.WriteString("\n\n")
+	if m.screen == screenEditor {
+		m.renderEditor(&sb)
+	} else {
+		m.renderList(&sb)
+	}
+	if m.err != "" {
+		sb.WriteString("\n")
+		sb.WriteString(errStyle.Render(m.err))
+		sb.WriteString("\n")
+	}
+	return tea.NewView(sb.String())
+}
 
+func (m *wizardModel) renderList(sb *strings.Builder) {
+	sb.WriteString(mutedStyle.Render("Choose the default provider, or manage saved OpenAI-compatible endpoints."))
+	sb.WriteString("\n\n")
+	for i, name := range m.providers {
+		marker := "  "
+		if i == m.selected {
+			marker = accentStyle.Render(">")
+		}
+		defaultMark := " "
+		if m.isDefault(name) {
+			defaultMark = accentStyle.Render("*")
+		}
+		endpoint := m.cfg.Providers[name].BaseURL
+		sb.WriteString(fmt.Sprintf("%s %s %-16s %s\n", marker, defaultMark, name, mutedStyle.Render(endpoint)))
+	}
+	if m.screen == screenDelete {
+		sb.WriteString("\n")
+		sb.WriteString(errStyle.Render(fmt.Sprintf("Delete %q? Press y to confirm, n or Esc to cancel.", m.selectedProvider())))
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("Enter default | a add | e edit | d delete | q quit"))
+}
+
+func (m *wizardModel) renderEditor(sb *strings.Builder) {
+	if m.editing == "" {
+		sb.WriteString(mutedStyle.Render("Add a provider. The first saved provider is used immediately."))
+	} else {
+		sb.WriteString(mutedStyle.Render("Edit provider. Saving makes it the default provider."))
+	}
+	sb.WriteString("\n\n")
 	for i, f := range m.fields {
 		marker := "  "
 		if i == m.current {
 			marker = accentStyle.Render(">")
 		}
-		label := labelStyle.Render(f.label)
-		line := fmt.Sprintf("%s %s %s", marker, label, f.input.View())
+		line := fmt.Sprintf("%s %-9s %s", marker, labelStyle.Render(f.label), f.input.View())
 		if i == m.current {
 			sb.WriteString(activeLine.Render(line))
 		} else {
@@ -294,31 +444,16 @@ func (m *wizardModel) View() tea.View {
 		}
 		sb.WriteString("\n")
 	}
-
-	// Keep the hint on a fixed line so moving focus never shifts the fields.
-	sb.WriteString(helpStyle.Render(indent(m.fields[m.current].help)))
-	sb.WriteString("\n")
-
-	if m.err != "" {
-		sb.WriteString("\n")
-		sb.WriteString(errStyle.Render(m.err))
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("\n")
-	sb.WriteString(mutedStyle.Render("Tab/Enter next | Shift+Tab prev | Esc cancel | Ctrl+C quit"))
-	return tea.NewView(sb.String())
+	sb.WriteString(helpStyle.Render("  " + m.fields[m.current].help))
+	sb.WriteString("\n\n")
+	sb.WriteString(mutedStyle.Render("Tab/Enter next | Shift+Tab prev | Esc back | Ctrl+C quit"))
 }
 
-// Errors exported for callers (main.go) to distinguish cancellation and
-// non-interactive terminals.
 var (
 	ErrCancelled = errors.New("setup cancelled")
 	ErrNoTty     = errors.New("setup requires an interactive terminal (run `myagent` without -p to configure)")
 )
 
-// Shared styles. Kept local because they're wizard-specific; tui/theme.go
-// owns the runtime UI palette.
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	mutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
@@ -329,14 +464,3 @@ var (
 	activeLine  = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	mutedLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 )
-
-// labelWidth is the column at which input fields start, chosen to fit the
-// longest label ("Base URL").
-func labelWidth(termWidth int) int {
-	_ = termWidth
-	return 9
-}
-
-func indent(s string) string {
-	return "  " + s
-}

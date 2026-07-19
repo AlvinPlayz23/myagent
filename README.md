@@ -54,6 +54,22 @@ There are no other install steps.
 
 ## Configuration
 
+### Provider manager
+
+Run `myagent auth` to manage saved OpenAI-compatible providers. The manager
+lists configured endpoints and supports selecting the default provider,
+adding, editing, and deleting providers. Each provider stores its endpoint,
+API key, and preferred model; API keys may be left blank for local servers
+such as Ollama.
+
+```text
+Enter default | a add | e edit | d delete | q quit
+```
+
+The selected default provider is used by `myagent`; use `--provider <name>`
+to override it for one run. First launch opens the same manager directly in
+the add-provider screen, and requires saving a provider before continuing.
+
 ### First-run setup
 
 Configuration is required. When you start interactive myagent and

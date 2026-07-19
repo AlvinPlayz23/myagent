@@ -5,184 +5,169 @@ import (
 	"path/filepath"
 	"testing"
 
-	"charm.land/bubbletea/v2"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/config"
 )
 
-// setTempDir points MYAGENT_DIR at a per-test temp dir and clears stray
-// OPENAI_* env so the wizard's env-derived placeholders are predictable.
 func setTempDir(t *testing.T) {
 	t.Helper()
 	t.Setenv("MYAGENT_DIR", t.TempDir())
-	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("OPENAI_BASE_URL", "")
-	t.Setenv("MYAGENT_MODEL", "")
+	t.Setenv(config.EnvAPIKey, "")
+	t.Setenv(config.EnvBaseURL, "")
+	t.Setenv(config.EnvModel, "")
 }
 
-func configPath(t *testing.T) string {
+func readyWindow() tea.WindowSizeMsg { return tea.WindowSizeMsg{Width: 80, Height: 24} }
+
+func saveProvider(t *testing.T, m *wizardModel, name, key, baseURL, model string) {
 	t.Helper()
-	p, err := config.Path()
-	if err != nil {
-		t.Fatalf("config.Path: %v", err)
-	}
-	return p
+	m.fields[0].input.SetValue(name)
+	m.fields[1].input.SetValue(key)
+	m.fields[2].input.SetValue(baseURL)
+	m.fields[3].input.SetValue(model)
+	_, _ = m.saveProvider()
 }
 
-// readyWindow is the smallest tea.WindowSizeMsg the wizard needs to render so
-// View() returns a non-empty string and resizeInputs sets field widths.
-func readyWindow() tea.WindowSizeMsg {
-	return tea.WindowSizeMsg{Width: 80, Height: 24}
-}
-
-// TestWizardModel_RejectsBlankApiKey ensures submitField keeps the user on
-// the API key field with an error when they try to advance without a key.
-func TestWizardModel_RejectsBlankApiKey(t *testing.T) {
+func TestFirstRunAddsProvider(t *testing.T) {
 	setTempDir(t)
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
-
-	if m.current != 0 {
-		t.Fatalf("initial field = %d, want 0", m.current)
+	if m.screen != screenEditor {
+		t.Fatal("first run should open the provider editor")
 	}
-	_, _ = m.submitField()
-	if m.current != 0 {
-		t.Fatalf("blank API key advanced to %d, want 0", m.current)
+	saveProvider(t, m, "openai", "sk-test", config.DefaultBaseURL, "gpt-4o-mini")
+	if !m.done || m.result == nil {
+		t.Fatalf("first provider should finish setup: %s", m.err)
 	}
-	if m.err == "" {
-		t.Fatal("expected an error after submitting a blank API key")
-	}
-}
-
-func TestWizardModel_CancelsOnEscAtFirstField(t *testing.T) {
-	setTempDir(t)
-	m := newWizardModel()
-	_, _ = m.Update(readyWindow())
-
-	_, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
-	if !m.quit {
-		t.Fatal("Esc on blank first field should cancel the wizard")
+	if got := m.result.DefaultModel; got != "openai/gpt-4o-mini" {
+		t.Fatalf("DefaultModel = %q", got)
 	}
 }
 
-func TestWizardModel_FullFlowWritesConfig(t *testing.T) {
+func TestManagerAddsEditsAndSelectsProvider(t *testing.T) {
 	setTempDir(t)
-	m := newWizardModel()
-	_, _ = m.Update(readyWindow())
-
-	// API key field, then advance to Base URL, then Model, then finish.
-	m.fields[0].input.SetValue("sk-wizard")
-	_, _ = m.nextField(1)
-	if m.current != 1 {
-		t.Fatalf("after API key, current = %d, want 1", m.current)
-	}
-
-	_, _ = m.nextField(1)
-	if m.current != 2 {
-		t.Fatalf("after Base URL, current = %d, want 2", m.current)
-	}
-
-	m.fields[2].input.SetValue("gpt-4o-mini")
-	_, _ = m.nextField(1) // advancing past the last field finalizes
-
-	if !m.done {
-		t.Fatal("wizard should be done after advancing past the last field")
-	}
-	if m.result == nil {
-		t.Fatalf("expected a non-nil resolved config after finalize")
-	}
-	provider := m.result.Providers[config.DefaultProviderName]
-	if provider.APIKey != "sk-wizard" {
-		t.Fatalf("APIKey = %q, want sk-wizard", provider.APIKey)
-	}
-	if m.result.DefaultModel != "openai/gpt-4o-mini" {
-		t.Fatalf("DefaultModel = %q, want openai/gpt-4o-mini", m.result.DefaultModel)
-	}
-	if provider.BaseURL != config.DefaultBaseURL {
-		t.Fatalf("BaseURL = %q, want default %q", provider.BaseURL, config.DefaultBaseURL)
-	}
-
-	if _, err := os.Stat(configPath(t)); err != nil {
-		t.Fatalf("config.json not written: %v", err)
-	}
-
-	// After save, NeedsSetup must be false (file has an apiKey).
-	needs, err := config.NeedsSetup()
-	if err != nil {
-		t.Fatalf("NeedsSetup: %v", err)
-	}
-	if needs {
-		t.Fatal("NeedsSetup should be false after the wizard writes a config")
-	}
-}
-
-func TestWizardModel_PreservesOtherProviders(t *testing.T) {
-	setTempDir(t)
-	if err := config.Save(&config.Config{
-		Providers: map[string]config.ProviderConfig{
-			"local": {Type: config.DefaultProviderType, BaseURL: "http://localhost:11434/v1"},
-		},
-		DefaultModel: "local/qwen3",
-	}); err != nil {
+	if err := config.Save(&config.Config{Providers: map[string]config.ProviderConfig{
+		"openai": {Type: config.DefaultProviderType, APIKey: "sk-old", BaseURL: config.DefaultBaseURL},
+	}, DefaultModel: "openai/gpt-4o"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
-	m.fields[0].input.SetValue("sk-new")
-	m.fields[1].input.SetValue("https://api.openai.com/v1")
-	m.fields[2].input.SetValue("gpt-4o-mini")
-	_, _ = m.nextField(1)
-	_, _ = m.nextField(1)
-	_, _ = m.nextField(1)
-	if !m.done {
-		t.Fatalf("wizard should finish: %s", m.err)
+	m.openEditor("")
+	saveProvider(t, m, "local", "", "http://localhost:11434/v1", "qwen3")
+	if m.screen != screenList || !m.isDefault("local") {
+		t.Fatalf("add should return to list and select local default: screen=%d default=%q", m.screen, m.cfg.DefaultModel)
 	}
-	if _, ok := m.result.Providers["local"]; !ok {
-		t.Fatal("wizard should preserve existing providers")
+	m.openEditor("openai")
+	saveProvider(t, m, "openai", "sk-new", "https://api.openai.com/v1", "gpt-4.1")
+	if got := m.cfg.Providers["openai"].APIKey; got != "sk-new" {
+		t.Fatalf("edited API key = %q", got)
+	}
+	m.selected = m.indexOf("local")
+	m.makeDefault("local")
+	if got := m.cfg.DefaultModel; got != "local/qwen3" {
+		t.Fatalf("selected default model = %q", got)
 	}
 }
 
-func TestWizardModel_FinalizeSurfacesSaveError(t *testing.T) {
-	// Point MYAGENT_DIR at a path that cannot be created (parent is a regular
-	// file) so Save fails and finalize leaves err set without finishing.
-	dir := t.TempDir()
-	blocker := filepath.Join(dir, "file-blocks-mkdir")
-	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write blocker file: %v", err)
+func TestManagerDeletesNonDefaultProvider(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	m.cfg = &config.Config{Providers: map[string]config.ProviderConfig{
+		"openai": {Type: config.DefaultProviderType, BaseURL: config.DefaultBaseURL},
+		"local":  {Type: config.DefaultProviderType, BaseURL: "http://localhost:11434/v1"},
+	}, DefaultModel: "openai/gpt-4o"}
+	if err := config.Save(m.cfg); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
-	t.Setenv("MYAGENT_DIR", filepath.Join(blocker, "config-dir"))
-	t.Setenv("OPENAI_API_KEY", "")
+	m.refreshProviders()
+	m.selected = m.indexOf("local")
+	m.screen = screenDelete
+	_, _ = m.onDeleteKey(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+	if _, exists := m.cfg.Providers["local"]; exists {
+		t.Fatal("local provider was not deleted")
+	}
+	if m.result == nil {
+		t.Fatal("delete should retain a usable manager result")
+	}
+}
 
+func TestManagerRefusesDefaultProviderDeletion(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	m.cfg = &config.Config{Providers: map[string]config.ProviderConfig{
+		"openai": {Type: config.DefaultProviderType, BaseURL: config.DefaultBaseURL},
+		"local":  {Type: config.DefaultProviderType, BaseURL: "http://localhost:11434/v1"},
+	}, DefaultModel: "openai/gpt-4o"}
+	m.refreshProviders()
+	m.selected = m.indexOf("openai")
+	m.screen = screenList
+	_, _ = m.onListKey(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))
+	if m.screen != screenList || m.err == "" {
+		t.Fatal("deleting the default provider should be refused")
+	}
+}
+
+func TestManagerQuitsSuccessfullyWithExistingConfig(t *testing.T) {
+	setTempDir(t)
+	if err := config.Save(&config.Config{Providers: map[string]config.ProviderConfig{
+		"openai": {Type: config.DefaultProviderType, BaseURL: config.DefaultBaseURL, Model: "gpt-4o"},
+	}, DefaultModel: "openai/gpt-4o"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	m := newWizardModel()
+	_, _ = m.onListKey(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
+	if !m.quit || m.result == nil {
+		t.Fatal("quitting an existing manager should return its unchanged configuration")
+	}
+}
+
+func TestManagerSaveErrorIsShown(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("MYAGENT_DIR", filepath.Join(blocker, "config"))
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
-	m.fields[0].input.SetValue("sk-never-saved")
-	m.fields[1].input.SetValue("https://x/v1")
-	m.fields[2].input.SetValue("m")
-
-	_, _ = m.nextField(1)
-	_, _ = m.nextField(1)
-	_, _ = m.nextField(1)
-
-	if m.done {
-		t.Fatal("finalize should not mark done when Save fails")
-	}
-	if m.err == "" {
-		t.Fatal("expected an error message when Save fails")
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Join(blocker, "config-dir"), "config.json")); !os.IsNotExist(err) {
-		t.Fatalf("config.json should not exist after Save failed; stat err = %v", err)
+	saveProvider(t, m, "openai", "key", config.DefaultBaseURL, "gpt-4o")
+	if m.done || m.err == "" {
+		t.Fatal("save failure should keep the manager open with an error")
 	}
 }
 
-func TestRunWizard_NonInteractiveReturnsErrNoTty(t *testing.T) {
+func TestManagerDoesNotOverwriteMalformedConfig(t *testing.T) {
 	setTempDir(t)
-	// When this test runs under `go test`, stdin/stdout are not a tty, so
-	// isInteractive() returns false and RunWizard refuses to run.
-	cfg, err := RunWizard(nil)
-	if err != ErrNoTty {
-		t.Fatalf("err = %v, want ErrNoTty", err)
+	path, err := config.Path()
+	if err != nil {
+		t.Fatalf("Path: %v", err)
 	}
-	if cfg != nil {
-		t.Fatalf("cfg = %v, want nil", cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{invalid"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	m := newWizardModel()
+	if !m.loadErr {
+		t.Fatal("malformed config should leave the manager read-only")
+	}
+	_, _ = m.onKey(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "{invalid" {
+		t.Fatalf("malformed config changed to %q", data)
+	}
+}
+
+func TestRunWizardNonInteractiveReturnsErrNoTty(t *testing.T) {
+	setTempDir(t)
+	cfg, err := RunWizard(nil)
+	if err != ErrNoTty || cfg != nil {
+		t.Fatalf("RunWizard = %v, %v; want nil, ErrNoTty", cfg, err)
 	}
 }

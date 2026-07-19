@@ -36,6 +36,7 @@ type ProviderConfig struct {
 	Type    string `json:"type"`
 	APIKey  string `json:"apiKey,omitempty"`
 	BaseURL string `json:"baseUrl"`
+	Model   string `json:"model,omitempty"`
 }
 
 // Config is the persisted configuration. DefaultModel must use
