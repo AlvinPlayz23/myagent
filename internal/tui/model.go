@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
@@ -80,6 +81,9 @@ type model struct {
 	picker     commandPicker
 	sessions   sessionPicker
 	models     modelPicker
+	providers  providerPicker
+	keyInput   textinput.Model
+	keyFor     modelcatalog.Provider
 
 	width, height int
 	ready         bool
@@ -93,11 +97,14 @@ type model struct {
 	cwd     string
 	lastErr error
 
-	newSession      func() error
-	listSessions    func() ([]session.Info, error)
-	resumeSession   func(string) ([]types.Message, error)
-	availableModels func() []modelcatalog.Model
-	selectModel     func(string, string) (llm.Provider, llm.Model, error)
+	newSession         func() error
+	listSessions       func() ([]session.Info, error)
+	resumeSession      func(string) ([]types.Message, error)
+	availableModels    func() []modelcatalog.Model
+	selectModel        func(string, string) (llm.Provider, llm.Model, error)
+	availableProviders func() []modelcatalog.Provider
+	providerConfigured func(string) bool
+	configureProvider  func(modelcatalog.Provider, string) error
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
@@ -109,6 +116,11 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 	ta.Placeholder = "Send a message (enter to send, ctrl+c to quit)…"
 	ta.ShowLineNumbers = false
 	ta.Focus()
+	key := textinput.New()
+	key.Placeholder = "Paste API key"
+	key.CharLimit = 0
+	key.EchoMode = textinput.EchoPassword
+	key.EchoCharacter = '*'
 
 	var createSession func() error
 	if len(newSession) > 0 {
@@ -122,6 +134,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		md:         md,
 		transcript: newTranscript(th, md),
 		input:      ta,
+		keyInput:   key,
 		picker:     newCommandPicker(),
 		modelID:    modelID,
 		cwd:        cwd,
@@ -229,6 +242,9 @@ func (m *model) panelHeight() int {
 	if m.models.active {
 		desired = m.models.height()
 	}
+	if m.providers.active || m.keyFor.ID != "" {
+		desired = min(10, max(2, len(m.providers.items)+1))
+	}
 	return min(desired, max(0, available))
 }
 
@@ -288,6 +304,37 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.models.filter()
 				m.updateLayout()
 			}
+		}
+		return m, nil
+	}
+	if m.keyFor.ID != "" {
+		switch ks {
+		case "esc":
+			m.keyInput.Reset()
+			m.keyFor = modelcatalog.Provider{}
+			m.providers.active = true
+			m.statusMsg = "Provider key entry cancelled."
+			m.updateLayout()
+			return m, nil
+		case "enter":
+			return m.saveProviderKey()
+		}
+		var cmd tea.Cmd
+		m.keyInput, cmd = m.keyInput.Update(k)
+		return m, cmd
+	}
+	if m.providers.active {
+		switch ks {
+		case "up":
+			m.providers.move(-1)
+		case "down":
+			m.providers.move(1)
+		case "enter":
+			return m.openProviderKeyEntry()
+		case "esc":
+			m.providers.close()
+			m.statusMsg = "Provider selection cancelled."
+			m.updateLayout()
 		}
 		return m, nil
 	}
@@ -480,6 +527,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case commandModel:
 		return m.openModelPicker(cmd.arg)
+	case commandProviders:
+		return m.openProviderPicker()
 	case commandCompact:
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.cancel = cancel
@@ -506,6 +555,60 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Select a session to resume."
 		m.updateLayout()
 	}
+	return m, nil
+}
+
+func (m *model) openProviderPicker() (tea.Model, tea.Cmd) {
+	if m.availableProviders == nil || m.providerConfigured == nil || m.configureProvider == nil {
+		m.statusMsg = "Provider configuration is unavailable."
+		return m, nil
+	}
+	items := m.availableProviders()
+	if len(items) == 0 {
+		m.statusMsg = "No compatible providers are available in the catalog yet."
+		return m, nil
+	}
+	m.providers.open(items)
+	m.statusMsg = "Configured providers are locked. Select another provider to add its API key."
+	m.updateLayout()
+	return m, nil
+}
+
+func (m *model) openProviderKeyEntry() (tea.Model, tea.Cmd) {
+	provider, ok := m.providers.selected()
+	if !ok {
+		return m, nil
+	}
+	if m.providerConfigured(provider.ID) {
+		m.statusMsg = provider.Name + " is already configured."
+		return m, nil
+	}
+	m.providers.active = false
+	m.keyFor = provider
+	m.keyInput.Reset()
+	m.keyInput.Placeholder = "API key for " + provider.Name
+	cmd := m.keyInput.Focus()
+	m.statusMsg = "Enter API key, then press enter to save."
+	m.updateLayout()
+	return m, cmd
+}
+
+func (m *model) saveProviderKey() (tea.Model, tea.Cmd) {
+	key := strings.TrimSpace(m.keyInput.Value())
+	if key == "" {
+		m.statusMsg = "An API key is required."
+		return m, nil
+	}
+	if err := m.configureProvider(m.keyFor, key); err != nil {
+		m.statusMsg = "Could not save provider: " + err.Error()
+		return m, nil
+	}
+	name := m.keyFor.Name
+	m.keyInput.Reset()
+	m.keyFor = modelcatalog.Provider{}
+	m.providers.active = true
+	m.statusMsg = name + " configured."
+	m.updateLayout()
 	return m, nil
 }
 
@@ -655,6 +758,12 @@ func (m *model) renderPanel() string {
 	if m.models.active {
 		return m.renderModelPicker()
 	}
+	if m.keyFor.ID != "" {
+		return m.renderProviderKeyEntry()
+	}
+	if m.providers.active {
+		return m.renderProviderPicker()
+	}
 	count := m.panelHeight()
 	if count == 0 {
 		return ""
@@ -747,6 +856,36 @@ func (m *model) renderModelPicker() string {
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Ref()+limit))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderProviderPicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Providers: configured entries are locked")}
+	count := min(height-1, len(m.providers.items))
+	start := max(0, m.providers.sel-count+1)
+	if maxStart := len(m.providers.items) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		item := m.providers.items[i]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.providers.sel {
+			marker, style = "› ", m.th.cmdPickerSel
+		}
+		locked := ""
+		if m.providerConfigured(item.ID) {
+			locked = "  [x] locked"
+		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Name+locked))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderProviderKeyEntry() string {
+	return m.th.cmdPickerSel.Render("Configure "+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
 // statusLine shows the working spinner + elapsed time, or a transient status.

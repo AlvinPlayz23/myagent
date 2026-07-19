@@ -19,13 +19,16 @@ func TestNormalizeIncludesOnlyCompatibleToolModels(t *testing.T) {
 		"aihubmix":   {ID: "aihubmix", Name: "AIHubMix", NPM: "@aihubmix/ai-sdk-provider", Models: map[string]sourceModel{"qwen": {ID: "qwen", ToolCall: true}}},
 	}
 
-	got := normalize(source)
+	got, providers := normalize(source)
 	refs := make([]string, len(got))
 	for i, model := range got {
 		refs[i] = model.Ref()
 	}
 	if want := []string{"aihubmix/qwen", "openrouter/auto", "zenmux/good"}; !reflect.DeepEqual(refs, want) {
 		t.Fatalf("models = %v, want %v", refs, want)
+	}
+	if got, want := len(providers), 3; got != want {
+		t.Fatalf("provider count = %d, want %d", got, want)
 	}
 }
 
@@ -40,5 +43,19 @@ func TestCatalogFiltersConfiguredProvidersAndExpires(t *testing.T) {
 	got := c.Models(map[string]struct{}{"zenmux": {}})
 	if want := []Model{{Provider: "zenmux", ID: "b"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("filtered models = %#v, want %#v", got, want)
+	}
+}
+
+func TestCatalogDerivesProvidersFromLegacyCache(t *testing.T) {
+	c := &Catalog{data: cache{Models: []Model{
+		{Provider: "openrouter", ProviderName: "OpenRouter", ID: "one"},
+		{Provider: "zenmux", ProviderName: "ZenMux", ID: "two"},
+	}}}
+	if !c.NeedsRefresh(time.Now()) {
+		t.Fatal("legacy cache without provider metadata should need refresh")
+	}
+	got := c.Providers()
+	if want := []Provider{{ID: "openrouter", Name: "OpenRouter"}, {ID: "zenmux", Name: "ZenMux"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("derived providers = %#v, want %#v", got, want)
 	}
 }

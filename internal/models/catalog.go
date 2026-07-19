@@ -35,9 +35,18 @@ type Model struct {
 
 func (m Model) Ref() string { return m.Provider + "/" + m.ID }
 
+// Provider is a catalog provider that this build can route through its
+// OpenAI-compatible transport.
+type Provider struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	BaseURL string `json:"baseUrl,omitempty"`
+}
+
 type cache struct {
-	CheckedAt time.Time `json:"checkedAt"`
-	Models    []Model   `json:"models"`
+	CheckedAt time.Time  `json:"checkedAt"`
+	Models    []Model    `json:"models"`
+	Providers []Provider `json:"providers"`
 }
 
 // Catalog stores the last successful normalized catalog.
@@ -65,7 +74,9 @@ func (c *Catalog) Empty() bool { return len(c.data.Models) == 0 }
 // NeedsRefresh reports whether the cache should be refreshed. A stale catalog
 // remains usable while a refresh is attempted.
 func (c *Catalog) NeedsRefresh(now time.Time) bool {
-	return c.Empty() || c.data.CheckedAt.IsZero() || now.Sub(c.data.CheckedAt) >= 4*time.Hour
+	// Older cache versions did not persist provider metadata. Refresh them even
+	// when their model entries are otherwise still fresh.
+	return c.Empty() || len(c.data.Providers) == 0 || c.data.CheckedAt.IsZero() || now.Sub(c.data.CheckedAt) >= 4*time.Hour
 }
 
 // Models returns only candidates for the configured provider names.
@@ -76,6 +87,37 @@ func (c *Catalog) Models(providers map[string]struct{}) []Model {
 			out = append(out, model)
 		}
 	}
+	return out
+}
+
+// Providers returns compatible catalog providers in stable display order.
+func (c *Catalog) Providers() []Provider {
+	if len(c.data.Providers) == 0 {
+		return providersFromModels(c.data.Models)
+	}
+	out := make([]Provider, len(c.data.Providers))
+	copy(out, c.data.Providers)
+	return out
+}
+
+// providersFromModels keeps /providers usable when an older cache cannot be
+// refreshed (for example while offline). A successful refresh replaces these
+// derived entries with provider records that include endpoints.
+func providersFromModels(models []Model) []Provider {
+	seen := make(map[string]Provider, len(models))
+	for _, model := range models {
+		if _, ok := seen[model.Provider]; !ok {
+			seen[model.Provider] = Provider{ID: model.Provider, Name: model.ProviderName}
+		}
+	}
+	out := make([]Provider, 0, len(seen))
+	for _, provider := range seen {
+		if provider.Name == "" {
+			provider.Name = provider.ID
+		}
+		out = append(out, provider)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -102,11 +144,11 @@ func (c *Catalog) Refresh(ctx context.Context, client *http.Client) error {
 	if err := dec.Decode(&source); err != nil {
 		return fmt.Errorf("decode models catalog: %w", err)
 	}
-	models := normalize(source)
+	models, providers := normalize(source)
 	if len(models) == 0 {
 		return fmt.Errorf("models catalog contains no compatible tool-capable models")
 	}
-	c.data = cache{CheckedAt: time.Now(), Models: models}
+	c.data = cache{CheckedAt: time.Now(), Models: models, Providers: providers}
 	return c.save()
 }
 
@@ -158,8 +200,9 @@ type sourceModel struct {
 	} `json:"provider"`
 }
 
-func normalize(source map[string]provider) []Model {
+func normalize(source map[string]provider) ([]Model, []Provider) {
 	var out []Model
+	var providers []Provider
 	for key, p := range source {
 		providerID := p.ID
 		if providerID == "" {
@@ -168,6 +211,7 @@ func normalize(source map[string]provider) []Model {
 		if !compatible(providerID, p.NPM, p.API) {
 			continue
 		}
+		providers = append(providers, Provider{ID: providerID, Name: p.Name, BaseURL: p.API})
 		for key, model := range p.Models {
 			if !model.ToolCall || (model.Provider != nil && !strings.Contains(model.Provider.NPM, "openai-compatible")) {
 				continue
@@ -180,7 +224,8 @@ func normalize(source map[string]provider) []Model {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Ref() < out[j].Ref() })
-	return out
+	sort.Slice(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
+	return out, providers
 }
 
 func compatible(providerID, npm, api string) bool {

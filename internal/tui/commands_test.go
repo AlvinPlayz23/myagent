@@ -27,6 +27,7 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/resume", kind: commandResume},
 		{input: "/model", kind: commandModel},
 		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
+		{input: "/providers", kind: commandProviders},
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -45,6 +46,46 @@ func TestParseSlashCommand(t *testing.T) {
 				t.Fatalf("command = %#v, want kind %d arg %q", got, tt.kind, tt.arg)
 			}
 		})
+	}
+}
+
+func TestProvidersCommandLocksConfiguredProviderAndSavesNewKey(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	providers := []modelcatalog.Provider{
+		{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"},
+		{ID: "zenmux", Name: "ZenMux", BaseURL: "https://zenmux.ai/api/v1"},
+	}
+	m.availableProviders = func() []modelcatalog.Provider { return providers }
+	m.providerConfigured = func(id string) bool { return id == "openrouter" }
+	var savedProvider modelcatalog.Provider
+	var savedKey string
+	m.configureProvider = func(provider modelcatalog.Provider, key string) error {
+		savedProvider, savedKey = provider, key
+		return nil
+	}
+
+	m.runCommand("/providers")
+	if !m.providers.active || len(m.providers.items) != 2 {
+		t.Fatalf("provider picker = active %v items %d", m.providers.active, len(m.providers.items))
+	}
+	m.openProviderKeyEntry()
+	if m.keyFor.ID != "" {
+		t.Fatal("configured provider should not open a key-entry form")
+	}
+	m.providers.move(1)
+	m.openProviderKeyEntry()
+	if m.keyFor.ID != "zenmux" {
+		t.Fatalf("key entry provider = %q, want zenmux", m.keyFor.ID)
+	}
+	m.keyInput.SetValue("key-value")
+	m.saveProviderKey()
+	if savedProvider.ID != "zenmux" || savedKey != "key-value" {
+		t.Fatalf("saved provider/key = %#v/%q", savedProvider, savedKey)
+	}
+	if m.keyFor.ID != "" || !m.providers.active {
+		t.Fatal("picker should return after a successful key save")
 	}
 }
 

@@ -14,6 +14,45 @@ type modelPicker struct {
 	active  bool
 }
 
+type providerPicker struct {
+	items  []modelcatalog.Provider
+	sel    int
+	active bool
+}
+
+func (p *providerPicker) open(items []modelcatalog.Provider) {
+	p.items = append(p.items[:0], items...)
+	p.sel = 0
+	p.active = true
+}
+
+func (p *providerPicker) close() {
+	p.active = false
+	p.items = p.items[:0]
+	p.sel = 0
+}
+
+func (p *providerPicker) move(delta int) {
+	if len(p.items) == 0 {
+		return
+	}
+	p.sel = (p.sel + delta + len(p.items)) % len(p.items)
+}
+
+func (p *providerPicker) selected() (modelcatalog.Provider, bool) {
+	if p.sel < 0 || p.sel >= len(p.items) {
+		return modelcatalog.Provider{}, false
+	}
+	return p.items[p.sel], true
+}
+
+func (p *providerPicker) height() int {
+	if !p.active {
+		return 0
+	}
+	return min(10, len(p.items)+1)
+}
+
 func (p *modelPicker) open(items []modelcatalog.Model, query string) {
 	p.items = append(p.items[:0], items...)
 	p.query = query

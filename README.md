@@ -212,6 +212,7 @@ to run, or **Esc** to dismiss it.
 | `/help`              | Show available commands and keybindings                 |
 | `/model`             | Open the searchable model selector for configured providers |
 | `/model <provider/model-id>` | Select an exact model immediately |
+| `/providers`         | Add API keys for compatible catalog providers |
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
@@ -222,6 +223,12 @@ all configured compatible providers. The normalized catalog is cached at
 `$MYAGENT_DIR/models.json`, refreshed at most every four hours, and remains
 usable offline. Choosing a model changes the active provider/model and persists
 the qualified reference as `default_model` for future sessions.
+
+`/providers` lists catalog providers supported by the current OpenAI-compatible
+transport. Providers already saved with an API key are marked `[x]` and locked.
+Select an unconfigured provider, enter its key in the masked field, and press
+**Enter** to save it. The key is stored in the existing `config.json` with the
+same restrictive file permissions used by the setup wizard.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to

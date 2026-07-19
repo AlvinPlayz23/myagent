@@ -13,6 +13,7 @@ const (
 	commandNew
 	commandCompact
 	commandModel
+	commandProviders
 	commandResume
 )
 
@@ -32,6 +33,7 @@ type commandItem struct {
 var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
+	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
 	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
 	{name: "/clear", usage: "/clear", description: "Clear the visible transcript", kind: commandClear},
 	{name: "/new", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},

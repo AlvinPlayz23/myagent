@@ -50,6 +50,45 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		return catalog.Models(providers)
 	}
+	m.availableProviders = func() []modelcatalog.Provider {
+		if catalog == nil {
+			return nil
+		}
+		return catalog.Providers()
+	}
+	m.providerConfigured = func(name string) bool {
+		if persistedConfig == nil {
+			return false
+		}
+		provider, ok := persistedConfig.Providers[name]
+		return ok && provider.APIKey != ""
+	}
+	m.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
+		if persistedConfig == nil {
+			return fmt.Errorf("configuration is unavailable")
+		}
+		if persistedConfig.Providers == nil {
+			persistedConfig.Providers = make(map[string]config.ProviderConfig)
+		}
+		if _, exists := persistedConfig.Providers[provider.ID]; exists {
+			return fmt.Errorf("provider %q is already configured", provider.Name)
+		}
+		baseURL := provider.BaseURL
+		if baseURL == "" {
+			if preset, ok := config.Preset(provider.ID); ok {
+				baseURL = preset.BaseURL
+			}
+		}
+		if baseURL == "" {
+			return fmt.Errorf("provider %q has no compatible endpoint metadata; refresh the catalog and try again", provider.Name)
+		}
+		persistedConfig.Providers[provider.ID] = config.ProviderConfig{
+			Type:    config.DefaultProviderType,
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+		}
+		return config.Save(persistedConfig)
+	}
 	m.selectModel = func(providerName, modelID string) (llm.Provider, llm.Model, error) {
 		if persistedConfig == nil {
 			return nil, llm.Model{}, fmt.Errorf("configuration is unavailable")
