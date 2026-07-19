@@ -5,15 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/myagent/myagent/internal/config"
+	"github.com/myagent/myagent/internal/llm"
 )
 
 type screen int
@@ -21,6 +24,7 @@ type screen int
 const (
 	screenList screen = iota
 	screenEditor
+	screenModelPicker
 	screenDelete
 )
 
@@ -30,9 +34,15 @@ type field struct {
 	input textinput.Model
 }
 
+type modelsDiscoveredMsg struct {
+	models []string
+	err    error
+}
+
 // wizardModel manages the named OpenAI-compatible providers stored in
 // config.json. It is also the first-run setup flow when no providers exist.
 type wizardModel struct {
+	ctx context.Context
 	cfg *config.Config
 
 	screen    screen
@@ -41,6 +51,11 @@ type wizardModel struct {
 	editing   string
 	fields    []*field
 	current   int
+
+	modelSearch textinput.Model
+	models      []string
+	modelIndex  int
+	discovering bool
 
 	width, height int
 	ready         bool
@@ -56,7 +71,9 @@ func RunWizard(ctx context.Context) (*config.Config, error) {
 		return nil, ErrNoTty
 	}
 
-	p := tea.NewProgram(newWizardModel(), tea.WithContext(ctx))
+	m := newWizardModel()
+	m.ctx = ctx
+	p := tea.NewProgram(m, tea.WithContext(ctx))
 	out, err := p.Run()
 	if err != nil {
 		return nil, err
@@ -76,7 +93,11 @@ func newWizardModel() *wizardModel {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	m := &wizardModel{cfg: cfg}
+	ctx := context.Background()
+	m := &wizardModel{cfg: cfg, ctx: ctx}
+	m.modelSearch = textinput.New()
+	m.modelSearch.Placeholder = "Filter models or type a model ID"
+	m.modelSearch.CharLimit = 0
 	if err != nil {
 		m.err = "Could not read existing config: " + err.Error()
 		m.loadErr = true
@@ -97,8 +118,24 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height, m.ready = msg.Width, msg.Height, true
 		m.resizeInputs()
 		return m, nil
+	case modelsDiscoveredMsg:
+		m.discovering = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.models = mergeModels(msg.models, m.fields[3].input.Value())
+		m.modelIndex = 0
+		m.err = ""
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
+	}
+	if m.screen == screenModelPicker && !m.discovering {
+		var cmd tea.Cmd
+		m.modelSearch, cmd = m.modelSearch.Update(msg)
+		m.clampModelIndex()
+		return m, cmd
 	}
 	if m.screen != screenEditor || m.done || m.quit || len(m.fields) == 0 {
 		return m, nil
@@ -124,6 +161,8 @@ func (m *wizardModel) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.onListKey(k)
 	case screenDelete:
 		return m.onDeleteKey(k)
+	case screenModelPicker:
+		return m.onModelPickerKey(k)
 	default:
 		return m.onEditorKey(k)
 	}
@@ -186,6 +225,8 @@ func (m *wizardModel) onEditorKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "ctrl+d":
+		return m.startDiscovery()
 	case "esc":
 		if len(m.providers) == 0 {
 			m.quit = true
@@ -202,6 +243,126 @@ func (m *wizardModel) onEditorKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.fields[m.current].input, cmd = m.fields[m.current].input.Update(k)
 	return m, cmd
+}
+
+func (m *wizardModel) startDiscovery() (tea.Model, tea.Cmd) {
+	baseURL := strings.TrimSpace(m.fields[2].input.Value())
+	apiKey := strings.TrimSpace(m.fields[1].input.Value())
+	if baseURL == "" {
+		m.err = "Enter a base URL before discovering models."
+		return m, nil
+	}
+	m.screen = screenModelPicker
+	m.discovering = true
+	m.err = ""
+	m.models = mergeModels(nil, m.fields[3].input.Value())
+	m.modelIndex = 0
+	m.modelSearch.SetValue("")
+	_ = m.modelSearch.Focus()
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m, func() tea.Msg {
+		client := &http.Client{Timeout: 15 * time.Second}
+		models, err := llm.ListOpenAIModels(ctx, client, apiKey, baseURL)
+		return modelsDiscoveredMsg{models: models, err: err}
+	}
+}
+
+func (m *wizardModel) onModelPickerKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "esc":
+		m.screen = screenEditor
+		m.err = ""
+		m.modelSearch.Blur()
+		return m, m.fields[m.current].input.Focus()
+	case "ctrl+r":
+		if m.discovering {
+			return m, nil
+		}
+		return m.startDiscovery()
+	case "up":
+		if m.modelIndex > 0 {
+			m.modelIndex--
+		}
+		return m, nil
+	case "down":
+		if m.modelIndex < len(m.filteredModels())-1 {
+			m.modelIndex++
+		}
+		return m, nil
+	case "ctrl+a":
+		model := strings.TrimSpace(m.modelSearch.Value())
+		if model == "" {
+			m.err = "Type a model ID before adding it."
+			return m, nil
+		}
+		m.models = mergeModels(m.models, model)
+		m.err = ""
+		m.modelIndex = 0
+		return m, nil
+	case "enter":
+		models := m.filteredModels()
+		if len(models) == 0 {
+			m.err = "No model selected. Type an ID and press Ctrl+A to add it."
+			return m, nil
+		}
+		m.fields[3].input.SetValue(models[m.modelIndex])
+		m.screen = screenEditor
+		m.current = 3
+		m.err = ""
+		m.modelSearch.Blur()
+		return m, m.fields[3].input.Focus()
+	}
+	var cmd tea.Cmd
+	m.modelSearch, cmd = m.modelSearch.Update(k)
+	m.clampModelIndex()
+	return m, cmd
+}
+
+func mergeModels(models []string, extra string) []string {
+	seen := make(map[string]struct{}, len(models)+1)
+	out := make([]string, 0, len(models)+1)
+	for _, model := range append(append([]string(nil), models...), extra) {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (m *wizardModel) filteredModels() []string {
+	query := strings.ToLower(strings.TrimSpace(m.modelSearch.Value()))
+	if query == "" {
+		return m.models
+	}
+	out := make([]string, 0, len(m.models))
+	for _, model := range m.models {
+		if strings.Contains(strings.ToLower(model), query) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func (m *wizardModel) clampModelIndex() {
+	models := m.filteredModels()
+	if len(models) == 0 {
+		m.modelIndex = 0
+	} else if m.modelIndex >= len(models) {
+		m.modelIndex = len(models) - 1
+	}
 }
 
 func (m *wizardModel) nextField(dir int) (tea.Model, tea.Cmd) {
@@ -359,7 +520,7 @@ func (m *wizardModel) indexOf(name string) int {
 
 func (m *wizardModel) defaultRef() (string, string, bool) {
 	provider, model, ok := strings.Cut(strings.TrimSpace(m.cfg.DefaultModel), "/")
-	return provider, model, ok && provider != "" && model != "" && !strings.Contains(model, "/")
+	return provider, model, ok && provider != "" && model != ""
 }
 
 func (m *wizardModel) isDefault(name string) bool {
@@ -378,6 +539,7 @@ func (m *wizardModel) resizeInputs() {
 	for _, f := range m.fields {
 		f.input.SetWidth(w)
 	}
+	m.modelSearch.SetWidth(w)
 }
 
 func (m *wizardModel) View() tea.View {
@@ -389,6 +551,8 @@ func (m *wizardModel) View() tea.View {
 	sb.WriteString("\n\n")
 	if m.screen == screenEditor {
 		m.renderEditor(&sb)
+	} else if m.screen == screenModelPicker {
+		m.renderModelPicker(&sb)
 	} else {
 		m.renderList(&sb)
 	}
@@ -424,6 +588,37 @@ func (m *wizardModel) renderList(sb *strings.Builder) {
 	sb.WriteString(mutedStyle.Render("Enter default | a add | e edit | d delete | q quit"))
 }
 
+func (m *wizardModel) renderModelPicker(sb *strings.Builder) {
+	sb.WriteString(mutedStyle.Render("Discover models from the provider, search them, or add an exact model ID."))
+	sb.WriteString("\n\n")
+	if m.discovering {
+		sb.WriteString(accentStyle.Render("Discovering models..."))
+		sb.WriteString("\n\n")
+		sb.WriteString(mutedStyle.Render("Esc back | Ctrl+C quit"))
+		return
+	}
+	sb.WriteString(labelStyle.Render("Search  "))
+	sb.WriteString(m.modelSearch.View())
+	sb.WriteString("\n\n")
+	models := m.filteredModels()
+	if len(models) == 0 {
+		sb.WriteString(mutedStyle.Render("  No matching models. Ctrl+A adds the typed ID."))
+		sb.WriteString("\n")
+	} else {
+		start := max(0, m.modelIndex-6)
+		end := min(len(models), start+12)
+		for i := start; i < end; i++ {
+			marker := "  "
+			if i == m.modelIndex {
+				marker = accentStyle.Render(">")
+			}
+			sb.WriteString(fmt.Sprintf("%s %s\n", marker, models[i]))
+		}
+	}
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("Up/Down select | Enter use | Ctrl+A add typed ID | Ctrl+R retry | Esc back"))
+}
+
 func (m *wizardModel) renderEditor(sb *strings.Builder) {
 	if m.editing == "" {
 		sb.WriteString(mutedStyle.Render("Add a provider. The first saved provider is used immediately."))
@@ -446,7 +641,7 @@ func (m *wizardModel) renderEditor(sb *strings.Builder) {
 	}
 	sb.WriteString(helpStyle.Render("  " + m.fields[m.current].help))
 	sb.WriteString("\n\n")
-	sb.WriteString(mutedStyle.Render("Tab/Enter next | Shift+Tab prev | Esc back | Ctrl+C quit"))
+	sb.WriteString(mutedStyle.Render("Tab/Enter next | Shift+Tab prev | Ctrl+D discover models | Esc back | Ctrl+C quit"))
 }
 
 var (

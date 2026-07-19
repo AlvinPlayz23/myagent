@@ -2,11 +2,15 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/agent/compaction"
+	"github.com/myagent/myagent/internal/config"
+	"github.com/myagent/myagent/internal/llm"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
@@ -15,7 +19,7 @@ import (
 // config and prior history, persisting every produced message to sess as it
 // completes. It returns the active session when the user quits, which may be a
 // session created through /new.
-func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
+func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
 	queue := newMsgQueue()
 	r := newRunner(cfg, queue, history)
 
@@ -36,6 +40,30 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 		r.reset()
 		return nil
 	})
+	m.availableModels = func() []modelcatalog.Model {
+		if catalog == nil || persistedConfig == nil {
+			return nil
+		}
+		providers := make(map[string]struct{}, len(persistedConfig.Providers))
+		for name := range persistedConfig.Providers {
+			providers[name] = struct{}{}
+		}
+		return catalog.Models(providers)
+	}
+	m.selectModel = func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+		if persistedConfig == nil {
+			return nil, llm.Model{}, fmt.Errorf("configuration is unavailable")
+		}
+		provider, model, err := persistedConfig.Resolve(providerName, modelID, "")
+		if err != nil {
+			return nil, llm.Model{}, err
+		}
+		persistedConfig.DefaultModel = providerName + "/" + modelID
+		if err := config.Save(persistedConfig); err != nil {
+			return nil, llm.Model{}, err
+		}
+		return provider, model, nil
+	}
 	m.listSessions = func() ([]session.Info, error) {
 		infos, err := session.List()
 		if err != nil || sess == nil {

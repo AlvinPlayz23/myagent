@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/myagent/myagent/internal/agent"
+	"github.com/myagent/myagent/internal/llm"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
@@ -23,8 +25,8 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/new", kind: commandNew},
 		{input: "/compact", kind: commandCompact},
 		{input: "/resume", kind: commandResume},
-		{input: "/model-id test-model", kind: commandModelID, arg: "test-model"},
-		{input: "/model-id", want: "usage: /model-id <id>"},
+		{input: "/model", kind: commandModel},
+		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -61,8 +63,8 @@ func TestCommandPickerFilteringAndSelection(t *testing.T) {
 	p.sync("/")
 	p.move(1)
 	item, _ = p.selected()
-	if item.name != "/model-id" {
-		t.Fatalf("selected after down = %q, want /model-id", item.name)
+	if item.name != "/model" {
+		t.Fatalf("selected after down = %q, want /model", item.name)
 	}
 	p.move(-1)
 	item, _ = p.selected()
@@ -100,8 +102,8 @@ func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("argument command should not submit")
 	}
-	if got := m.input.Value(); got != "/model-id " {
-		t.Fatalf("input = %q, want %q", got, "/model-id ")
+	if got := m.input.Value(); got != "/model " {
+		t.Fatalf("input = %q, want %q", got, "/model ")
 	}
 	if m.picker.active {
 		t.Fatal("picker remained open after accepting a command")
@@ -113,10 +115,14 @@ func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
 	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
 	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
 
-	m.input.SetValue("/model-id new-model")
+	m.availableModels = func() []modelcatalog.Model { return []modelcatalog.Model{{Provider: "local", ID: "new-model"}} }
+	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
+	}
+	m.input.SetValue("/model local/new-model")
 	m.submit(false)
-	if r.cfg.Model.ID != "new-model" || m.modelID != "new-model" {
-		t.Fatalf("model ids = %q/%q, want new-model", r.cfg.Model.ID, m.modelID)
+	if r.cfg.Model.ID != "new-model" || m.modelID != "local/new-model" {
+		t.Fatalf("model ids = %q/%q, want local/new-model", r.cfg.Model.ID, m.modelID)
 	}
 	if len(r.history) != 1 {
 		t.Fatalf("history length = %d, want unchanged history", len(r.history))

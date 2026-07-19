@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/agent"
+	"github.com/myagent/myagent/internal/llm"
 	"github.com/myagent/myagent/internal/types"
 )
 
@@ -129,8 +130,9 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 	}
 }
 
-func (r *runner) setModelID(id string) {
-	r.cfg.Model.ID = id
+func (r *runner) setModel(provider llm.Provider, model llm.Model) {
+	r.cfg.Provider = provider
+	r.cfg.Model = model
 }
 
 // discardEvents makes buffered events from earlier operations invisible.

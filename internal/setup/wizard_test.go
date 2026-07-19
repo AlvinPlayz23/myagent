@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -27,6 +28,23 @@ func saveProvider(t *testing.T, m *wizardModel, name, key, baseURL, model string
 	m.fields[2].input.SetValue(baseURL)
 	m.fields[3].input.SetValue(model)
 	_, _ = m.saveProvider()
+}
+
+func TestModelPickerAddsManualModelAlongsideDiscoveredModels(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	m.models = []string{"gpt-4o", "qwen3"}
+	m.screen = screenModelPicker
+	m.modelSearch.SetValue("custom/model")
+	_, _ = m.onModelPickerKey(tea.KeyPressMsg(tea.Key{Code: 'a', Mod: tea.ModCtrl}))
+	if got, want := m.models, []string{"custom/model", "gpt-4o", "qwen3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %v, want %v", got, want)
+	}
+	_, _ = m.onModelPickerKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.screen != screenEditor || m.fields[3].input.Value() != "custom/model" {
+		t.Fatalf("manual model was not selected: screen=%d model=%q", m.screen, m.fields[3].input.Value())
+	}
 }
 
 func TestFirstRunAddsProvider(t *testing.T) {

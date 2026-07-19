@@ -126,6 +126,20 @@ func TestResolveAppliesEnvironmentToDefaultProvider(t *testing.T) {
 	}
 }
 
+func TestResolveAllowsSlashInModelID(t *testing.T) {
+	useTempDir(t)
+	cfg := &Config{Providers: map[string]ProviderConfig{
+		"local": {Type: DefaultProviderType, BaseURL: "http://localhost:11434/v1"},
+	}, DefaultModel: "local/meta-llama/Llama-3.1-8B-Instruct"}
+	_, model, err := cfg.Resolve("", "", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got, want := model.ID, "meta-llama/Llama-3.1-8B-Instruct"; got != want {
+		t.Fatalf("model ID = %q, want %q", got, want)
+	}
+}
+
 func TestResolveRejectsInvalidConfiguration(t *testing.T) {
 	useTempDir(t)
 	for _, cfg := range []*Config{

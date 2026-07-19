@@ -11,6 +11,8 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/myagent/myagent/internal/llm"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/types"
 )
@@ -77,6 +79,7 @@ type model struct {
 	input      textarea.Model
 	picker     commandPicker
 	sessions   sessionPicker
+	models     modelPicker
 
 	width, height int
 	ready         bool
@@ -90,9 +93,11 @@ type model struct {
 	cwd     string
 	lastErr error
 
-	newSession    func() error
-	listSessions  func() ([]session.Info, error)
-	resumeSession func(string) ([]types.Message, error)
+	newSession      func() error
+	listSessions    func() ([]session.Info, error)
+	resumeSession   func(string) ([]types.Message, error)
+	availableModels func() []modelcatalog.Model
+	selectModel     func(string, string) (llm.Provider, llm.Model, error)
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
@@ -221,6 +226,9 @@ func (m *model) panelHeight() int {
 	if m.sessions.active {
 		desired = m.sessions.height()
 	}
+	if m.models.active {
+		desired = m.models.height()
+	}
 	return min(desired, max(0, available))
 }
 
@@ -255,6 +263,33 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		default:
 			return m, nil
 		}
+	}
+	if m.models.active {
+		switch ks {
+		case "up":
+			m.models.move(-1)
+		case "down":
+			m.models.move(1)
+		case "enter":
+			return m.selectPickedModel()
+		case "esc":
+			m.models.close()
+			m.statusMsg = "Model selection cancelled."
+			m.updateLayout()
+		case "backspace":
+			if len(m.models.query) > 0 {
+				m.models.query = m.models.query[:len(m.models.query)-1]
+				m.models.filter()
+				m.updateLayout()
+			}
+		default:
+			if k.Text != "" {
+				m.models.query += k.Text
+				m.models.filter()
+				m.updateLayout()
+			}
+		}
+		return m, nil
 	}
 	if m.picker.active {
 		switch ks {
@@ -443,10 +478,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.usage = types.Usage{}
 		m.statusMsg = "Started a new conversation."
 		m.refreshViewport()
-	case commandModelID:
-		m.runner.setModelID(cmd.arg)
-		m.modelID = cmd.arg
-		m.statusMsg = "Model set to " + cmd.arg + " for subsequent turns."
+	case commandModel:
+		return m.openModelPicker(cmd.arg)
 	case commandCompact:
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.cancel = cancel
@@ -473,6 +506,49 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Select a session to resume."
 		m.updateLayout()
 	}
+	return m, nil
+}
+
+func (m *model) openModelPicker(query string) (tea.Model, tea.Cmd) {
+	if m.availableModels == nil || m.selectModel == nil {
+		m.statusMsg = "Model selection is unavailable."
+		return m, nil
+	}
+	items := m.availableModels()
+	if len(items) == 0 {
+		m.statusMsg = "No catalog models are available for configured providers."
+		return m, nil
+	}
+	for _, item := range items {
+		if strings.EqualFold(item.Ref(), strings.TrimSpace(query)) {
+			return m.applyModel(item)
+		}
+	}
+	m.models.open(items, query)
+	m.statusMsg = "Search models, use up/down, enter selects, esc cancels."
+	m.updateLayout()
+	return m, nil
+}
+
+func (m *model) selectPickedModel() (tea.Model, tea.Cmd) {
+	item, ok := m.models.selected()
+	if !ok {
+		return m, nil
+	}
+	return m.applyModel(item)
+}
+
+func (m *model) applyModel(item modelcatalog.Model) (tea.Model, tea.Cmd) {
+	provider, selected, err := m.selectModel(item.Provider, item.ID)
+	if err != nil {
+		m.statusMsg = "Could not select model: " + err.Error()
+		return m, nil
+	}
+	m.runner.setModel(provider, selected)
+	m.modelID = item.Ref()
+	m.models.close()
+	m.statusMsg = "Model set to " + item.Ref() + "."
+	m.updateLayout()
 	return m, nil
 }
 
@@ -576,6 +652,9 @@ func (m *model) renderPanel() string {
 	if m.sessions.active {
 		return m.renderSessionPicker()
 	}
+	if m.models.active {
+		return m.renderModelPicker()
+	}
 	count := m.panelHeight()
 	if count == 0 {
 		return ""
@@ -637,6 +716,35 @@ func (m *model) renderSessionPicker() string {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderModelPicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Model: " + m.models.query)}
+	count := min(height-1, len(m.models.matched))
+	if count == 0 {
+		return strings.Join(append(lines, m.th.muted.Render("  No matching configured-provider models.")), "\n")
+	}
+	start := max(0, m.models.sel-count+1)
+	if maxStart := len(m.models.matched) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		item := m.models.items[m.models.matched[i]]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.models.sel {
+			marker, style = "› ", m.th.cmdPickerSel
+		}
+		limit := ""
+		if item.ContextWindow > 0 {
+			limit = fmt.Sprintf("  %dk", item.ContextWindow/1000)
+		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Ref()+limit))
 	}
 	return strings.Join(lines, "\n")
 }

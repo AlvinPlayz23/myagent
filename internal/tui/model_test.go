@@ -70,7 +70,7 @@ func TestCommandPickerFitsTerminalAndBorrowsViewportRows(t *testing.T) {
 	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
 		t.Fatalf("view height with picker = %d, terminal height = %d", got, m.height)
 	}
-	if !strings.Contains(view.Content, "/help") || !strings.Contains(view.Content, "/model-id <id>") {
+	if !strings.Contains(view.Content, "/help") || !strings.Contains(view.Content, "/model [provider/model-id]") {
 		t.Fatal("picker view does not contain command choices")
 	}
 

@@ -74,9 +74,13 @@ the add-provider screen, and requires saving a provider before continuing.
 
 Configuration is required. When you start interactive myagent and
 `$MYAGENT_DIR/config.json` does not exist or is empty, a terminal wizard asks
-for the API key, base URL, and default model of one OpenAI-compatible provider,
-then creates the file. The API-key input is masked. Press **Esc** on the blank
-API-key field or **Ctrl+C** to cancel.
+for the API key and base URL of one OpenAI-compatible provider. Model entry
+remains manual by default; press **Ctrl+D** from the provider editor to
+optionally query its `GET /models` endpoint. The resulting list is searchable
+with **Up/Down** selection and **Enter** confirmation. Type an exact model ID
+and press **Ctrl+A** to add a manual model alongside discovered results;
+**Ctrl+R** retries discovery. A failed or unsupported discovery does not block
+manual setup. The API-key input is masked. Press **Esc** or **Ctrl+C** to cancel.
 
 The wizard requires a real terminal; `-p`/`--print` will instead fail with a
 message telling you to run `myagent` once and complete setup.
@@ -113,8 +117,11 @@ The wizard creates parent directories as required. On Unix, the file is stored
 with `0600` permissions because it contains the API key.
 
 Each provider has a unique name, a provider `type`, endpoint, and optional API
-key. `openai-compatible` is the supported type and works with OpenAI, Ollama,
-LM Studio, vLLM, and compatible services. `default_model` must be a qualified
+key. `openai-compatible` is the supported type and works with OpenAI, OpenRouter,
+AIHubMix, ZenMux, Ollama, LM Studio, vLLM, and compatible services. Built-in names
+`openrouter`, `aihubmix`, `zenmux`, `ollama`, `lmstudio`, and `vllm` supply their standard
+endpoint when `baseUrl` is omitted; custom endpoints can still set it explicitly.
+`default_model` must be a qualified
 `provider/model-id` reference. Selecting `ollama/qwen3` as the default, for
 example, routes normal turns and automatic context compaction to `ollama`.
 
@@ -203,14 +210,18 @@ to run, or **Esc** to dismiss it.
 | Command              | Action                                                  |
 | -------------------- | ------------------------------------------------------- |
 | `/help`              | Show available commands and keybindings                 |
-| `/model-id <id>`     | Use a model for subsequent turns in the current session |
+| `/model`             | Open the searchable model selector for configured providers |
+| `/model <provider/model-id>` | Select an exact model immediately |
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
 | `/resume`            | Open the session selector and resume a previous conversation |
 
-`/model-id` is a session-only override within the selected provider. It does
-not update `config.json` or switch provider credentials/endpoints.
+`/model` searches tool-capable models from [models.dev](https://models.dev) for
+all configured compatible providers. The normalized catalog is cached at
+`$MYAGENT_DIR/models.json`, refreshed at most every four hours, and remains
+usable offline. Choosing a model changes the active provider/model and persists
+the qualified reference as `default_model` for future sessions.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to

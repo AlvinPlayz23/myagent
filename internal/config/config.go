@@ -22,6 +22,30 @@ const (
 	EnvModel   = "MYAGENT_MODEL"
 )
 
+// ProviderPreset supplies the routing details for built-in compatible
+// providers. A configured baseUrl always wins, so custom endpoints remain
+// possible without adding a preset.
+type ProviderPreset struct {
+	Name    string
+	BaseURL string
+}
+
+var providerPresets = map[string]ProviderPreset{
+	"openai":     {Name: "OpenAI", BaseURL: DefaultBaseURL},
+	"openrouter": {Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"},
+	"aihubmix":   {Name: "AIHubMix", BaseURL: "https://aihubmix.com/v1"},
+	"zenmux":     {Name: "ZenMux", BaseURL: "https://zenmux.ai/api/v1"},
+	"ollama":     {Name: "Ollama", BaseURL: "http://localhost:11434/v1"},
+	"lmstudio":   {Name: "LM Studio", BaseURL: "http://localhost:1234/v1"},
+	"vllm":       {Name: "vLLM", BaseURL: "http://localhost:8000/v1"},
+}
+
+// Preset returns the built-in routing details for name, if it has any.
+func Preset(name string) (ProviderPreset, bool) {
+	preset, ok := providerPresets[name]
+	return preset, ok
+}
+
 const (
 	DefaultProviderName = "openai"
 	DefaultProviderType = "openai-compatible"
@@ -122,6 +146,11 @@ func (c *Config) Resolve(providerName, modelID, baseURL string) (llm.Provider, l
 	} else if v := os.Getenv(EnvBaseURL); v != "" && providerName == defaultProvider {
 		providerCfg.BaseURL = v
 	}
+	if providerCfg.BaseURL == "" && providerName != DefaultProviderName {
+		if preset, ok := Preset(providerName); ok {
+			providerCfg.BaseURL = preset.BaseURL
+		}
+	}
 	if providerCfg.BaseURL == "" {
 		return nil, llm.Model{}, fmt.Errorf("provider %q has no baseUrl", providerName)
 	}
@@ -137,7 +166,7 @@ func (c *Config) Resolve(providerName, modelID, baseURL string) (llm.Provider, l
 
 func splitModelRef(ref string) (string, string, error) {
 	provider, model, found := strings.Cut(strings.TrimSpace(ref), "/")
-	if !found || provider == "" || model == "" || strings.Contains(model, "/") {
+	if !found || provider == "" || model == "" {
 		return "", "", fmt.Errorf("must be provider/model-id")
 	}
 	return provider, model, nil

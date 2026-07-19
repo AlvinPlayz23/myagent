@@ -21,10 +21,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/agent/compaction"
 	"github.com/myagent/myagent/internal/config"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/printmode"
 	"github.com/myagent/myagent/internal/session"
 	"github.com/myagent/myagent/internal/setup"
@@ -116,6 +118,7 @@ func run(argv []string) error {
 	if err != nil {
 		return err
 	}
+	modelID := model.Provider + "/" + model.ID
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -165,7 +168,20 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		sess, err = tui.Run(ctx, agentCfg, sess, history, model.ID, cwd)
+		dir, err := config.Dir()
+		if err != nil {
+			return err
+		}
+		catalog := modelcatalog.New(dir)
+		if err := catalog.Load(); err != nil {
+			return fmt.Errorf("load model catalog: %w", err)
+		}
+		if catalog.NeedsRefresh(time.Now()) {
+			refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			_ = catalog.Refresh(refreshCtx, nil)
+			cancel()
+		}
+		sess, err = tui.Run(ctx, agentCfg, cfg, catalog, sess, history, modelID, cwd)
 		if sess != nil {
 			defer sess.Close()
 		}
