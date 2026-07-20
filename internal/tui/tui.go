@@ -3,11 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/agent/compaction"
+	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/config"
 	"github.com/myagent/myagent/internal/llm"
 	modelcatalog "github.com/myagent/myagent/internal/models"
@@ -19,7 +22,7 @@ import (
 // config and prior history, persisting every produced message to sess as it
 // completes. It returns the active session when the user quits, which may be a
 // session created through /new.
-func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
+func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
 	queue := newMsgQueue()
 	r := newRunner(cfg, queue, history)
 
@@ -41,14 +44,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		return nil
 	})
 	m.availableModels = func() []modelcatalog.Model {
-		if catalog == nil || persistedConfig == nil {
-			return nil
-		}
-		providers := make(map[string]struct{}, len(persistedConfig.Providers))
-		for name := range persistedConfig.Providers {
-			providers[name] = struct{}{}
-		}
-		return catalog.Models(providers)
+		return availableModelCandidates(catalog, persistedConfig, authStore)
 	}
 	m.availableProviders = func() []modelcatalog.Provider {
 		if catalog == nil {
@@ -60,23 +56,27 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if persistedConfig == nil {
 			return false
 		}
-		provider, ok := persistedConfig.Providers[name]
-		return ok && provider.APIKey != ""
+		if authStore == nil {
+			return false
+		}
+		_, ok := authStore.Get(name)
+		return ok
 	}
 	m.providerAPIKey = func(name string) string {
 		if persistedConfig == nil {
 			return ""
 		}
-		return persistedConfig.Providers[name].APIKey
+		if authStore == nil {
+			return ""
+		}
+		credentials, _ := authStore.Get(name)
+		return credentials.APIKey
 	}
 	m.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
-		if persistedConfig == nil {
+		if persistedConfig == nil || authStore == nil {
 			return fmt.Errorf("configuration is unavailable")
 		}
-		if persistedConfig.Providers == nil {
-			persistedConfig.Providers = make(map[string]config.ProviderConfig)
-		}
-		existing := persistedConfig.Providers[provider.ID]
+		existing, _ := authStore.Get(provider.ID)
 		baseURL := provider.BaseURL
 		if baseURL == "" {
 			if preset, ok := config.Preset(provider.ID); ok {
@@ -89,19 +89,13 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if existing.BaseURL != "" {
 			baseURL = existing.BaseURL
 		}
-		persistedConfig.Providers[provider.ID] = config.ProviderConfig{
-			Type:    config.DefaultProviderType,
-			APIKey:  apiKey,
-			BaseURL: baseURL,
-			Model:   existing.Model,
-		}
-		return config.Save(persistedConfig)
+		return authStore.Set(provider.ID, auth.Credentials{APIKey: apiKey, BaseURL: baseURL})
 	}
 	m.selectModel = func(providerName, modelID string) (llm.Provider, llm.Model, error) {
 		if persistedConfig == nil {
 			return nil, llm.Model{}, fmt.Errorf("configuration is unavailable")
 		}
-		provider, model, err := persistedConfig.Resolve(providerName, modelID, "")
+		provider, model, err := persistedConfig.ResolveWithAuth(authStore, providerName, modelID, "")
 		if err != nil {
 			return nil, llm.Model{}, err
 		}
@@ -168,6 +162,49 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	_, err := p.Run()
 	return sess, err
+}
+
+func availableModelCandidates(catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store) []modelcatalog.Model {
+	if catalog == nil || cfg == nil {
+		return nil
+	}
+	providers := make(map[string]struct{}, len(cfg.Providers))
+	for name := range cfg.Providers {
+		providers[name] = struct{}{}
+	}
+	if authStore != nil {
+		for name := range authStore.Providers {
+			providers[name] = struct{}{}
+		}
+	}
+
+	models := catalog.Models(providers)
+	seen := make(map[string]struct{}, len(models)+len(cfg.Providers))
+	for _, model := range models {
+		seen[model.Ref()] = struct{}{}
+	}
+	addCustom := func(provider, modelID string) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			return
+		}
+		model := modelcatalog.Model{Provider: provider, ProviderName: provider, ID: modelID}
+		if _, exists := seen[model.Ref()]; exists {
+			return
+		}
+		seen[model.Ref()] = struct{}{}
+		models = append(models, model)
+	}
+	for name, provider := range cfg.Providers {
+		addCustom(name, provider.Model)
+	}
+	if provider, modelID, ok := strings.Cut(strings.TrimSpace(cfg.DefaultModel), "/"); ok {
+		if _, custom := cfg.Providers[provider]; custom {
+			addCustom(provider, modelID)
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Ref() < models[j].Ref() })
+	return models
 }
 
 // seedTranscript renders prior history into the transcript on resume.

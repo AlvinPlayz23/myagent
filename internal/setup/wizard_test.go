@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,6 +35,7 @@ func TestModelPickerAddsManualModelAlongsideDiscoveredModels(t *testing.T) {
 	setTempDir(t)
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
+	m.openEditor("")
 	m.models = []string{"gpt-4o", "qwen3"}
 	m.screen = screenModelPicker
 	m.modelSearch.SetValue("custom/model")
@@ -51,15 +53,30 @@ func TestFirstRunAddsProvider(t *testing.T) {
 	setTempDir(t)
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
-	if m.screen != screenEditor {
-		t.Fatal("first run should open the provider editor")
+	if m.screen != screenHome {
+		t.Fatal("first run should open the auth home screen")
 	}
+	m.openEditor("")
 	saveProvider(t, m, "openai", "sk-test", config.DefaultBaseURL, "gpt-4o-mini")
 	if !m.done || m.result == nil {
 		t.Fatalf("first provider should finish setup: %s", m.err)
 	}
 	if got := m.result.DefaultModel; got != "openai/gpt-4o-mini" {
 		t.Fatalf("DefaultModel = %q", got)
+	}
+}
+
+func TestAuthHomeNavigatesWithArrows(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	_, _ = m.onHomeKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.homeSelected != 1 {
+		t.Fatalf("home selection = %d, want built-in", m.homeSelected)
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "> 2  Built-in provider keys") {
+		t.Fatalf("home view does not highlight built-in option:\n%s", view)
 	}
 }
 
@@ -150,6 +167,7 @@ func TestManagerSaveErrorIsShown(t *testing.T) {
 	t.Setenv("MYAGENT_DIR", filepath.Join(blocker, "config"))
 	m := newWizardModel()
 	_, _ = m.Update(readyWindow())
+	m.openEditor("")
 	saveProvider(t, m, "openai", "key", config.DefaultBaseURL, "gpt-4o")
 	if m.done || m.err == "" {
 		t.Fatal("save failure should keep the manager open with an error")

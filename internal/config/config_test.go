@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/myagent/myagent/internal/auth"
 )
 
 func useTempDir(t *testing.T) {
@@ -151,5 +153,18 @@ func TestResolveRejectsInvalidConfiguration(t *testing.T) {
 		if _, _, err := cfg.Resolve("", "", ""); err == nil {
 			t.Fatalf("Resolve(%+v) succeeded; want error", cfg)
 		}
+	}
+}
+
+func TestResolveWithBuiltinAuth(t *testing.T) {
+	useTempDir(t)
+	store := &auth.Store{Providers: map[string]auth.Credentials{"openrouter": {APIKey: "key", BaseURL: "https://openrouter.ai/api/v1"}}}
+	cfg := &Config{Providers: map[string]ProviderConfig{}, DefaultModel: "openrouter/openai/gpt-4.1"}
+	provider, model, err := cfg.ResolveWithAuth(store, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider == nil || model.Provider != "openrouter" || model.ID != "openai/gpt-4.1" {
+		t.Fatalf("resolved model = %#v", model)
 	}
 }

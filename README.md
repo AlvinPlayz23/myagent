@@ -56,11 +56,17 @@ There are no other install steps.
 
 ### Provider manager
 
-Run `myagent auth` to manage saved OpenAI-compatible providers. The manager
-lists configured endpoints and supports selecting the default provider,
-adding, editing, and deleting providers. Each provider stores its endpoint,
-API key, and preferred model; API keys may be left blank for local servers
-such as Ollama.
+Run `myagent auth` to choose between two provider-management modes:
+
+- **Custom providers** opens the existing OpenAI-compatible endpoint manager,
+  with add, edit, delete, default selection, and authenticated model discovery.
+- **Built-in provider keys** configures catalog-backed compatible providers and
+  then prompts for a default model when setup has no valid default yet.
+
+Each custom provider stores its endpoint, API key, and preferred model; API keys
+may be left blank for local servers such as Ollama. Models discovered from a
+custom provider's `GET /models` endpoint, along with manually entered model IDs,
+are saved locally and appear in `/model` beside built-in catalog models.
 
 ```text
 Enter default | a add | e edit | d delete | q quit
@@ -124,6 +130,10 @@ endpoint when `baseUrl` is omitted; custom endpoints can still set it explicitly
 `default_model` must be a qualified
 `provider/model-id` reference. Selecting `ollama/qwen3` as the default, for
 example, routes normal turns and automatic context compaction to `ollama`.
+
+Built-in provider credentials are stored separately at
+`$MYAGENT_DIR/auth/providers.json`; they are not added to the custom provider
+map in `config.json`. Both credential files use restrictive permissions.
 
 ### Environment overrides
 
@@ -227,8 +237,8 @@ the qualified reference as `default_model` for future sessions.
 `/providers` lists catalog providers supported by the current OpenAI-compatible
 transport. Providers already saved with an API key are marked `[x]`. Select any
 provider to enter or replace its key in the masked field, then press **Enter**
-to save it. The key is stored in the existing `config.json` with the same
-restrictive file permissions used by the setup wizard.
+to save it. The key is stored in `auth/providers.json`, leaving custom providers
+in `config.json` separate.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to

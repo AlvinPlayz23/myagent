@@ -25,6 +25,7 @@ import (
 
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/agent/compaction"
+	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/config"
 	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/printmode"
@@ -100,6 +101,9 @@ func run(argv []string) error {
 		if !interactive {
 			return fmt.Errorf("no provider configured: run `myagent` once to complete setup or create $MYAGENT_DIR/config.json")
 		}
+		if err := refreshModelCatalog(context.Background()); err != nil {
+			return err
+		}
 		var cfg2 *config.Config
 		cfg2, err = setup.RunWizard(context.Background())
 		if err != nil {
@@ -114,7 +118,15 @@ func run(argv []string) error {
 		}
 	}
 
-	provider, model, err := cfg.Resolve(providerFlag, modelFlag, baseURLFlag)
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	authStore, err := auth.Load(dir)
+	if err != nil {
+		return fmt.Errorf("load auth store: %w", err)
+	}
+	provider, model, err := cfg.ResolveWithAuth(authStore, providerFlag, modelFlag, baseURLFlag)
 	if err != nil {
 		return err
 	}
@@ -168,10 +180,6 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		dir, err := config.Dir()
-		if err != nil {
-			return err
-		}
 		catalog := modelcatalog.New(dir)
 		if err := catalog.Load(); err != nil {
 			return fmt.Errorf("load model catalog: %w", err)
@@ -181,7 +189,7 @@ func run(argv []string) error {
 			_ = catalog.Refresh(refreshCtx, nil)
 			cancel()
 		}
-		sess, err = tui.Run(ctx, agentCfg, cfg, catalog, sess, history, modelID, cwd)
+		sess, err = tui.Run(ctx, agentCfg, cfg, authStore, catalog, sess, history, modelID, cwd)
 		if sess != nil {
 			defer sess.Close()
 		}
@@ -200,8 +208,31 @@ func runAuth(argv []string) error {
 	if len(argv) > 0 {
 		return fmt.Errorf("auth does not accept arguments")
 	}
+	if err := refreshModelCatalog(context.Background()); err != nil {
+		return err
+	}
 	_, err := setup.RunWizard(context.Background())
 	return err
+}
+
+// refreshModelCatalog warms the shared cache before the auth flows that need
+// built-in provider and model choices. A network failure leaves any cache in
+// place and never prevents custom-provider setup.
+func refreshModelCatalog(ctx context.Context) error {
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	catalog := modelcatalog.New(dir)
+	if err := catalog.Load(); err != nil {
+		return fmt.Errorf("load model catalog: %w", err)
+	}
+	if catalog.NeedsRefresh(time.Now()) {
+		refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		_ = catalog.Refresh(refreshCtx, nil)
+		cancel()
+	}
+	return nil
 }
 
 // resumeInstructions returns the commands needed to continue a persisted

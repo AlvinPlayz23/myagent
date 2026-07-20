@@ -47,6 +47,7 @@ type cache struct {
 	CheckedAt time.Time  `json:"checkedAt"`
 	Models    []Model    `json:"models"`
 	Providers []Provider `json:"providers"`
+	Custom    []Model    `json:"custom,omitempty"`
 }
 
 // Catalog stores the last successful normalized catalog.
@@ -81,13 +82,60 @@ func (c *Catalog) NeedsRefresh(now time.Time) bool {
 
 // Models returns only candidates for the configured provider names.
 func (c *Catalog) Models(providers map[string]struct{}) []Model {
-	out := make([]Model, 0, len(c.data.Models))
-	for _, model := range c.data.Models {
+	all := append(append([]Model(nil), c.data.Models...), c.data.Custom...)
+	out := make([]Model, 0, len(all))
+	for _, model := range all {
 		if _, ok := providers[model.Provider]; ok {
 			out = append(out, model)
 		}
 	}
 	return out
+}
+
+// SetCustomModels stores model IDs discovered from a user-configured endpoint.
+// They are kept independently of models.dev so refreshes cannot erase them.
+func (c *Catalog) SetCustomModels(provider, providerName string, ids []string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return fmt.Errorf("custom provider name is required")
+	}
+	if providerName == "" {
+		providerName = provider
+	}
+	seen := make(map[string]struct{}, len(ids))
+	custom := c.data.Custom[:0]
+	for _, model := range c.data.Custom {
+		if model.Provider != provider {
+			custom = append(custom, model)
+		}
+	}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		custom = append(custom, Model{Provider: provider, ProviderName: providerName, ID: id})
+	}
+	c.data.Custom = custom
+	sort.Slice(c.data.Custom, func(i, j int) bool { return c.data.Custom[i].Ref() < c.data.Custom[j].Ref() })
+	return c.save()
+}
+
+// RemoveCustomProvider removes catalog entries belonging to a deleted or
+// renamed user-configured provider.
+func (c *Catalog) RemoveCustomProvider(provider string) error {
+	out := c.data.Custom[:0]
+	for _, model := range c.data.Custom {
+		if model.Provider != provider {
+			out = append(out, model)
+		}
+	}
+	c.data.Custom = out
+	return c.save()
 }
 
 // Providers returns compatible catalog providers in stable display order.
@@ -148,7 +196,7 @@ func (c *Catalog) Refresh(ctx context.Context, client *http.Client) error {
 	if len(models) == 0 {
 		return fmt.Errorf("models catalog contains no compatible tool-capable models")
 	}
-	c.data = cache{CheckedAt: time.Now(), Models: models, Providers: providers}
+	c.data = cache{CheckedAt: time.Now(), Models: models, Providers: providers, Custom: c.data.Custom}
 	return c.save()
 }
 

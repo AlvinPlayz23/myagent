@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/llm"
 )
 
@@ -117,6 +118,12 @@ func Load() (*Config, error) {
 // Resolve selects a configured provider and model. providerName, modelID, and
 // baseURL override the corresponding configured values when non-empty.
 func (c *Config) Resolve(providerName, modelID, baseURL string) (llm.Provider, llm.Model, error) {
+	return c.ResolveWithAuth(nil, providerName, modelID, baseURL)
+}
+
+// ResolveWithAuth resolves custom providers from config.json and built-in
+// providers from the separate auth store.
+func (c *Config) ResolveWithAuth(authStore *auth.Store, providerName, modelID, baseURL string) (llm.Provider, llm.Model, error) {
 	if c == nil {
 		return nil, llm.Model{}, errors.New("config is nil")
 	}
@@ -135,6 +142,12 @@ func (c *Config) Resolve(providerName, modelID, baseURL string) (llm.Provider, l
 	}
 
 	providerCfg, ok := c.Providers[providerName]
+	if !ok && authStore != nil {
+		if credentials, configured := authStore.Get(providerName); configured {
+			providerCfg = ProviderConfig{Type: DefaultProviderType, APIKey: credentials.APIKey, BaseURL: credentials.BaseURL}
+			ok = true
+		}
+	}
 	if !ok {
 		return nil, llm.Model{}, fmt.Errorf("provider %q is not configured", providerName)
 	}

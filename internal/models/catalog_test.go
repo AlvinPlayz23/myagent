@@ -59,3 +59,21 @@ func TestCatalogDerivesProvidersFromLegacyCache(t *testing.T) {
 		t.Fatalf("derived providers = %#v, want %#v", got, want)
 	}
 }
+
+func TestCustomModelsSurviveCatalogRefreshState(t *testing.T) {
+	dir := t.TempDir()
+	c := New(dir)
+	if err := c.SetCustomModels("local", "Local", []string{"two", "one", "two"}); err != nil {
+		t.Fatalf("SetCustomModels: %v", err)
+	}
+	models := c.Models(map[string]struct{}{"local": {}})
+	if want := []Model{{Provider: "local", ProviderName: "Local", ID: "one"}, {Provider: "local", ProviderName: "Local", ID: "two"}}; !reflect.DeepEqual(models, want) {
+		t.Fatalf("custom models = %#v, want %#v", models, want)
+	}
+	if err := c.RemoveCustomProvider("local"); err != nil {
+		t.Fatalf("RemoveCustomProvider: %v", err)
+	}
+	if got := c.Models(map[string]struct{}{"local": {}}); len(got) != 0 {
+		t.Fatalf("removed custom models = %#v", got)
+	}
+}

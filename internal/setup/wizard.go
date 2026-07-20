@@ -15,17 +15,23 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/config"
 	"github.com/myagent/myagent/internal/llm"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 )
 
 type screen int
 
 const (
-	screenList screen = iota
+	screenHome screen = iota
+	screenList
 	screenEditor
 	screenModelPicker
 	screenDelete
+	screenBuiltinList
+	screenBuiltinKey
+	screenBuiltinModel
 )
 
 type field struct {
@@ -42,8 +48,10 @@ type modelsDiscoveredMsg struct {
 // wizardModel manages the named OpenAI-compatible providers stored in
 // config.json. It is also the first-run setup flow when no providers exist.
 type wizardModel struct {
-	ctx context.Context
-	cfg *config.Config
+	ctx     context.Context
+	cfg     *config.Config
+	catalog *modelcatalog.Catalog
+	auth    *auth.Store
 
 	screen    screen
 	providers []string
@@ -57,13 +65,22 @@ type wizardModel struct {
 	modelIndex  int
 	discovering bool
 
-	width, height int
-	ready         bool
-	err           string
-	loadErr       bool
-	done          bool
-	quit          bool
-	result        *config.Config
+	builtinProviders []modelcatalog.Provider
+	builtinSelected  int
+	builtinKey       textinput.Model
+	builtinFor       modelcatalog.Provider
+	builtinModels    []modelcatalog.Model
+	builtinModelSel  int
+	homeSelected     int
+
+	width, height   int
+	ready           bool
+	err             string
+	loadErr         bool
+	requiresDefault bool
+	done            bool
+	quit            bool
+	result          *config.Config
 }
 
 func RunWizard(ctx context.Context) (*config.Config, error) {
@@ -95,6 +112,16 @@ func newWizardModel() *wizardModel {
 	}
 	ctx := context.Background()
 	m := &wizardModel{cfg: cfg, ctx: ctx}
+	if dir, dirErr := config.Dir(); dirErr == nil {
+		m.auth, _ = auth.Load(dir)
+		if m.auth == nil {
+			m.auth = &auth.Store{Providers: make(map[string]auth.Credentials)}
+		}
+		m.catalog = modelcatalog.New(dir)
+		if loadErr := m.catalog.Load(); loadErr != nil {
+			m.err = "Could not read model catalog: " + loadErr.Error()
+		}
+	}
 	m.modelSearch = textinput.New()
 	m.modelSearch.Placeholder = "Filter models or type a model ID"
 	m.modelSearch.CharLimit = 0
@@ -103,10 +130,17 @@ func newWizardModel() *wizardModel {
 		m.loadErr = true
 		return m
 	}
+	m.builtinKey = textinput.New()
+	m.builtinKey.CharLimit = 0
+	m.builtinKey.EchoMode = textinput.EchoPassword
+	m.builtinKey.EchoCharacter = '*'
 	m.refreshProviders()
-	if len(m.providers) == 0 {
-		m.openEditor("")
+	provider, _, validDefault := m.defaultRef()
+	_, providerExists := m.cfg.Providers[provider]
+	if !providerExists {
+		_, providerExists = m.auth.Get(provider)
 	}
+	m.requiresDefault = !validDefault || !providerExists
 	return m
 }
 
@@ -125,11 +159,28 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.models = mergeModels(msg.models, m.fields[3].input.Value())
+		if m.catalog != nil && m.editing != "" && len(m.fields) > 3 {
+			if err := m.catalog.SetCustomModels(m.editing, m.editing, m.models); err != nil {
+				m.err = "Could not save discovered models: " + err.Error()
+				return m, nil
+			}
+		}
 		m.modelIndex = 0
 		m.err = ""
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
+	case tea.PasteMsg:
+		if m.screen == screenBuiltinKey {
+			var cmd tea.Cmd
+			m.builtinKey, cmd = m.builtinKey.Update(msg)
+			return m, cmd
+		}
+		if m.screen == screenEditor && len(m.fields) > 0 {
+			var cmd tea.Cmd
+			m.fields[m.current].input, cmd = m.fields[m.current].input.Update(msg)
+			return m, cmd
+		}
 	}
 	if m.screen == screenModelPicker && !m.discovering {
 		var cmd tea.Cmd
@@ -157,15 +208,187 @@ func (m *wizardModel) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.screen {
+	case screenHome:
+		return m.onHomeKey(k)
 	case screenList:
 		return m.onListKey(k)
 	case screenDelete:
 		return m.onDeleteKey(k)
 	case screenModelPicker:
 		return m.onModelPickerKey(k)
+	case screenBuiltinList:
+		return m.onBuiltinListKey(k)
+	case screenBuiltinKey:
+		return m.onBuiltinKey(k)
+	case screenBuiltinModel:
+		return m.onBuiltinModelKey(k)
 	default:
 		return m.onEditorKey(k)
 	}
+}
+
+func (m *wizardModel) onHomeKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "up", "k":
+		m.homeSelected = 0
+	case "down", "j":
+		m.homeSelected = 1
+	case "1":
+		m.homeSelected = 0
+		return m.openHomeSelection()
+	case "2":
+		m.homeSelected = 1
+		return m.openHomeSelection()
+	case "enter":
+		return m.openHomeSelection()
+	case "q", "esc", "ctrl+c":
+		m.result, m.quit = m.cfg, true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m *wizardModel) openHomeSelection() (tea.Model, tea.Cmd) {
+	if m.homeSelected == 0 {
+		m.screen = screenList
+		if len(m.providers) == 0 {
+			m.openEditor("")
+		}
+	} else {
+		m.openBuiltinProviders()
+	}
+	return m, nil
+}
+
+func (m *wizardModel) openBuiltinProviders() {
+	if m.catalog == nil {
+		m.err = "Model catalog is unavailable."
+		return
+	}
+	m.builtinProviders = m.catalog.Providers()
+	m.builtinSelected = 0
+	if len(m.builtinProviders) == 0 {
+		m.err = "No compatible providers are available in the catalog yet."
+		return
+	}
+	m.screen, m.err = screenBuiltinList, ""
+}
+
+func (m *wizardModel) onBuiltinListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "up", "k":
+		if m.builtinSelected > 0 {
+			m.builtinSelected--
+		}
+	case "down", "j":
+		if m.builtinSelected < len(m.builtinProviders)-1 {
+			m.builtinSelected++
+		}
+	case "pgup":
+		m.builtinSelected = max(0, m.builtinSelected-10)
+	case "pgdown":
+		m.builtinSelected = min(len(m.builtinProviders)-1, m.builtinSelected+10)
+	case "enter":
+		m.builtinFor = m.builtinProviders[m.builtinSelected]
+		credentials, _ := m.auth.Get(m.builtinFor.ID)
+		m.builtinKey.SetValue(credentials.APIKey)
+		m.builtinKey.Placeholder = "API key for " + m.builtinFor.Name
+		m.screen, m.err = screenBuiltinKey, ""
+		return m, m.builtinKey.Focus()
+	case "esc", "q":
+		m.screen, m.err = screenHome, ""
+	}
+	return m, nil
+}
+
+func (m *wizardModel) onBuiltinKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "esc":
+		m.screen, m.err = screenBuiltinList, ""
+		return m, nil
+	case "enter":
+		key := strings.TrimSpace(m.builtinKey.Value())
+		if key == "" {
+			m.err = "An API key is required."
+			return m, nil
+		}
+		existing, _ := m.auth.Get(m.builtinFor.ID)
+		baseURL := existing.BaseURL
+		if baseURL == "" {
+			baseURL = m.builtinFor.BaseURL
+		}
+		if baseURL == "" {
+			if preset, ok := config.Preset(m.builtinFor.ID); ok {
+				baseURL = preset.BaseURL
+			}
+		}
+		if baseURL == "" {
+			m.err = "Provider has no compatible endpoint metadata."
+			return m, nil
+		}
+		if err := m.auth.Set(m.builtinFor.ID, auth.Credentials{APIKey: key, BaseURL: baseURL}); err != nil {
+			m.err = "Failed to write auth store: " + err.Error()
+			return m, nil
+		}
+		if m.requiresDefault {
+			m.openBuiltinModels()
+		} else {
+			m.screen, m.err = screenBuiltinList, ""
+			m.result = m.cfg
+		}
+	}
+	var cmd tea.Cmd
+	m.builtinKey, cmd = m.builtinKey.Update(k)
+	return m, cmd
+}
+
+func (m *wizardModel) openBuiltinModels() {
+	if m.catalog == nil {
+		m.err = "Model catalog is unavailable."
+		return
+	}
+	builtin := make(map[string]struct{}, len(m.builtinProviders))
+	for _, provider := range m.builtinProviders {
+		if _, configured := m.auth.Get(provider.ID); configured {
+			builtin[provider.ID] = struct{}{}
+		}
+	}
+	m.builtinModels = m.catalog.Models(builtin)
+	m.builtinModelSel = 0
+	if len(m.builtinModels) == 0 {
+		m.err = "No catalog models are available for configured providers."
+		return
+	}
+	m.screen, m.err = screenBuiltinModel, ""
+}
+
+func (m *wizardModel) onBuiltinModelKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch k.Keystroke() {
+	case "up", "k":
+		if m.builtinModelSel > 0 {
+			m.builtinModelSel--
+		}
+	case "down", "j":
+		if m.builtinModelSel < len(m.builtinModels)-1 {
+			m.builtinModelSel++
+		}
+	case "enter":
+		model := m.builtinModels[m.builtinModelSel]
+		m.cfg.DefaultModel = model.Ref()
+		if err := config.Save(m.cfg); err != nil {
+			m.err = "Failed to write config: " + err.Error()
+			return m, nil
+		}
+		m.result = m.cfg
+		if m.requiresDefault {
+			m.done = true
+			return m, tea.Quit
+		}
+		m.screen = screenHome
+	case "esc":
+		m.screen = screenBuiltinList
+	}
+	return m, nil
 }
 
 func (m *wizardModel) onListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -206,6 +429,13 @@ func (m *wizardModel) onDeleteKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		name := m.selectedProvider()
 		delete(m.cfg.Providers, name)
+		if m.catalog != nil {
+			if err := m.catalog.RemoveCustomProvider(name); err != nil {
+				m.err = "Could not update custom model catalog: " + err.Error()
+				m.screen = screenList
+				return m, nil
+			}
+		}
 		if err := config.Save(m.cfg); err != nil {
 			m.err = "Failed to write config: " + err.Error()
 			m.screen = screenList
@@ -445,8 +675,20 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		delete(m.cfg.Providers, m.editing)
+		if m.catalog != nil {
+			if err := m.catalog.RemoveCustomProvider(m.editing); err != nil {
+				m.err = "Could not update custom model catalog: " + err.Error()
+				return m, nil
+			}
+		}
 	}
 	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model}
+	if m.catalog != nil {
+		if err := m.catalog.SetCustomModels(name, name, append(m.models, model)); err != nil {
+			m.err = "Could not save custom models: " + err.Error()
+			return m, nil
+		}
+	}
 	m.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(m.cfg); err != nil {
 		m.err = "Failed to write config: " + err.Error()
@@ -540,6 +782,7 @@ func (m *wizardModel) resizeInputs() {
 		f.input.SetWidth(w)
 	}
 	m.modelSearch.SetWidth(w)
+	m.builtinKey.SetWidth(w)
 }
 
 func (m *wizardModel) View() tea.View {
@@ -553,6 +796,14 @@ func (m *wizardModel) View() tea.View {
 		m.renderEditor(&sb)
 	} else if m.screen == screenModelPicker {
 		m.renderModelPicker(&sb)
+	} else if m.screen == screenHome {
+		m.renderHome(&sb)
+	} else if m.screen == screenBuiltinList {
+		m.renderBuiltinList(&sb)
+	} else if m.screen == screenBuiltinKey {
+		m.renderBuiltinKey(&sb)
+	} else if m.screen == screenBuiltinModel {
+		m.renderBuiltinModels(&sb)
 	} else {
 		m.renderList(&sb)
 	}
@@ -562,6 +813,81 @@ func (m *wizardModel) View() tea.View {
 		sb.WriteString("\n")
 	}
 	return tea.NewView(sb.String())
+}
+
+func (m *wizardModel) renderHome(sb *strings.Builder) {
+	sb.WriteString(mutedStyle.Render("Choose which providers to manage."))
+	sb.WriteString("\n\n")
+	customMarker := "  "
+	builtinMarker := "  "
+	if m.homeSelected == 0 {
+		customMarker = "> "
+	} else {
+		builtinMarker = "> "
+	}
+	sb.WriteString(accentStyle.Render(customMarker + "1  Custom providers"))
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("   Add, edit, delete, and discover models for custom endpoints."))
+	sb.WriteString("\n\n")
+	sb.WriteString(accentStyle.Render(builtinMarker + "2  Built-in provider keys"))
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("   Configure catalog-backed providers such as OpenRouter and ZenMux."))
+	sb.WriteString("\n\n")
+	sb.WriteString(mutedStyle.Render("Use Up/Down and Enter, or press 1/2 directly. Press q to quit."))
+}
+
+func (m *wizardModel) renderBuiltinList(sb *strings.Builder) {
+	sb.WriteString(mutedStyle.Render("Configure a built-in provider API key. [x] means a saved key exists."))
+	sb.WriteString("\n\n")
+	visible := max(3, min(12, m.height-8))
+	start := max(0, m.builtinSelected-visible/2)
+	end := min(len(m.builtinProviders), start+visible)
+	if end-start < visible {
+		start = max(0, end-visible)
+	}
+	for i := start; i < end; i++ {
+		provider := m.builtinProviders[i]
+		marker := "  "
+		if i == m.builtinSelected {
+			marker = accentStyle.Render(">")
+		}
+		mark := " "
+		if _, configured := m.auth.Get(provider.ID); configured {
+			mark = accentStyle.Render("[x]")
+		}
+		sb.WriteString(fmt.Sprintf("%s %s %s\n", marker, mark, provider.Name))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render(fmt.Sprintf("Up/Down select | PgUp/PgDn jump | Enter configure/edit | Esc back  %d/%d", m.builtinSelected+1, len(m.builtinProviders))))
+}
+
+func (m *wizardModel) renderBuiltinKey(sb *strings.Builder) {
+	action := "Configure"
+	if _, configured := m.auth.Get(m.builtinFor.ID); configured {
+		action = "Edit"
+	}
+	sb.WriteString(mutedStyle.Render(action + " API key for " + m.builtinFor.Name + "."))
+	sb.WriteString("\n\n")
+	sb.WriteString(labelStyle.Render("API key  "))
+	sb.WriteString(m.builtinKey.View())
+	sb.WriteString("\n\n")
+	sb.WriteString(mutedStyle.Render("Enter save | Esc back"))
+}
+
+func (m *wizardModel) renderBuiltinModels(sb *strings.Builder) {
+	sb.WriteString(mutedStyle.Render("Choose the default model for this setup."))
+	sb.WriteString("\n\n")
+	start := max(0, m.builtinModelSel-6)
+	end := min(len(m.builtinModels), start+12)
+	for i := start; i < end; i++ {
+		marker := "  "
+		if i == m.builtinModelSel {
+			marker = accentStyle.Render(">")
+		}
+		sb.WriteString(fmt.Sprintf("%s %s\n", marker, m.builtinModels[i].Ref()))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("Up/Down select | Enter use as default | Esc back"))
 }
 
 func (m *wizardModel) renderList(sb *strings.Builder) {
