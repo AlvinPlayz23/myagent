@@ -63,6 +63,12 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		provider, ok := persistedConfig.Providers[name]
 		return ok && provider.APIKey != ""
 	}
+	m.providerAPIKey = func(name string) string {
+		if persistedConfig == nil {
+			return ""
+		}
+		return persistedConfig.Providers[name].APIKey
+	}
 	m.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
 		if persistedConfig == nil {
 			return fmt.Errorf("configuration is unavailable")
@@ -70,9 +76,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if persistedConfig.Providers == nil {
 			persistedConfig.Providers = make(map[string]config.ProviderConfig)
 		}
-		if _, exists := persistedConfig.Providers[provider.ID]; exists {
-			return fmt.Errorf("provider %q is already configured", provider.Name)
-		}
+		existing := persistedConfig.Providers[provider.ID]
 		baseURL := provider.BaseURL
 		if baseURL == "" {
 			if preset, ok := config.Preset(provider.ID); ok {
@@ -82,10 +86,14 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if baseURL == "" {
 			return fmt.Errorf("provider %q has no compatible endpoint metadata; refresh the catalog and try again", provider.Name)
 		}
+		if existing.BaseURL != "" {
+			baseURL = existing.BaseURL
+		}
 		persistedConfig.Providers[provider.ID] = config.ProviderConfig{
 			Type:    config.DefaultProviderType,
 			APIKey:  apiKey,
 			BaseURL: baseURL,
+			Model:   existing.Model,
 		}
 		return config.Save(persistedConfig)
 	}

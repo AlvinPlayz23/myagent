@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/myagent/myagent/internal/agent"
 	"github.com/myagent/myagent/internal/llm"
 	modelcatalog "github.com/myagent/myagent/internal/models"
@@ -49,7 +51,7 @@ func TestParseSlashCommand(t *testing.T) {
 	}
 }
 
-func TestProvidersCommandLocksConfiguredProviderAndSavesNewKey(t *testing.T) {
+func TestProvidersCommandEditsConfiguredProviderAndSavesNewKey(t *testing.T) {
 	q := newMsgQueue()
 	r := newRunner(agent.Config{}, q, nil)
 	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
@@ -59,6 +61,12 @@ func TestProvidersCommandLocksConfiguredProviderAndSavesNewKey(t *testing.T) {
 	}
 	m.availableProviders = func() []modelcatalog.Provider { return providers }
 	m.providerConfigured = func(id string) bool { return id == "openrouter" }
+	m.providerAPIKey = func(id string) string {
+		if id == "openrouter" {
+			return "old-key"
+		}
+		return ""
+	}
 	var savedProvider modelcatalog.Provider
 	var savedKey string
 	m.configureProvider = func(provider modelcatalog.Provider, key string) error {
@@ -71,8 +79,13 @@ func TestProvidersCommandLocksConfiguredProviderAndSavesNewKey(t *testing.T) {
 		t.Fatalf("provider picker = active %v items %d", m.providers.active, len(m.providers.items))
 	}
 	m.openProviderKeyEntry()
-	if m.keyFor.ID != "" {
-		t.Fatal("configured provider should not open a key-entry form")
+	if m.keyFor.ID != "openrouter" || m.keyInput.Value() != "old-key" {
+		t.Fatal("configured provider should open an editor seeded with its stored key")
+	}
+	m.keyInput.SetValue("replacement-key")
+	m.saveProviderKey()
+	if savedProvider.ID != "openrouter" || savedKey != "replacement-key" {
+		t.Fatalf("edited provider/key = %#v/%q", savedProvider, savedKey)
 	}
 	m.providers.move(1)
 	m.openProviderKeyEntry()
@@ -86,6 +99,29 @@ func TestProvidersCommandLocksConfiguredProviderAndSavesNewKey(t *testing.T) {
 	}
 	if m.keyFor.ID != "" || !m.providers.active {
 		t.Fatal("picker should return after a successful key save")
+	}
+}
+
+func TestProviderKeyPasteStaysInMaskedInput(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.providers.open([]modelcatalog.Provider{{ID: "zenmux", Name: "ZenMux"}})
+	m.providerConfigured = func(string) bool { return false }
+	m.providerAPIKey = func(string) string { return "" }
+	_, focus := m.openProviderKeyEntry()
+	if focus != nil {
+		_ = focus()
+	}
+	m.input.SetValue("keep this out of the composer")
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "pasted-api-key"})
+	got := updated.(*model)
+	if got.keyInput.Value() != "pasted-api-key" {
+		t.Fatalf("key input = %q, want pasted API key", got.keyInput.Value())
+	}
+	if got.input.Value() != "keep this out of the composer" {
+		t.Fatalf("composer changed to %q", got.input.Value())
 	}
 }
 

@@ -104,6 +104,7 @@ type model struct {
 	selectModel        func(string, string) (llm.Provider, llm.Model, error)
 	availableProviders func() []modelcatalog.Provider
 	providerConfigured func(string) bool
+	providerAPIKey     func(string) string
 	configureProvider  func(modelcatalog.Provider, string) error
 
 	// usage accumulates across the session for the footer.
@@ -159,6 +160,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
+
+	case tea.PasteMsg:
+		// Paste messages do not pass through onKey. Route them explicitly so a
+		// provider key never falls through to the main conversation composer.
+		if m.keyFor.ID != "" {
+			var cmd tea.Cmd
+			m.keyInput, cmd = m.keyInput.Update(msg)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.picker.sync(m.input.Value())
+		m.updateLayout()
+		return m, cmd
 
 	case tea.MouseWheelMsg:
 		return m.onMouseWheel(msg)
@@ -313,7 +328,7 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.keyInput.Reset()
 			m.keyFor = modelcatalog.Provider{}
 			m.providers.active = true
-			m.statusMsg = "Provider key entry cancelled."
+			m.statusMsg = "Provider edit cancelled."
 			m.updateLayout()
 			return m, nil
 		case "enter":
@@ -569,7 +584,7 @@ func (m *model) openProviderPicker() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.providers.open(items)
-	m.statusMsg = "Configured providers are locked. Select another provider to add its API key."
+	m.statusMsg = "Select a provider to add or replace its API key."
 	m.updateLayout()
 	return m, nil
 }
@@ -579,16 +594,16 @@ func (m *model) openProviderKeyEntry() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if m.providerConfigured(provider.ID) {
-		m.statusMsg = provider.Name + " is already configured."
-		return m, nil
-	}
 	m.providers.active = false
 	m.keyFor = provider
-	m.keyInput.Reset()
+	m.keyInput.SetValue(m.providerAPIKey(provider.ID))
 	m.keyInput.Placeholder = "API key for " + provider.Name
 	cmd := m.keyInput.Focus()
-	m.statusMsg = "Enter API key, then press enter to save."
+	if m.providerConfigured(provider.ID) {
+		m.statusMsg = "Replace the masked API key, then press enter to save."
+	} else {
+		m.statusMsg = "Enter API key, then press enter to save."
+	}
 	m.updateLayout()
 	return m, cmd
 }
@@ -863,7 +878,7 @@ func (m *model) renderProviderPicker() string {
 	if height == 0 {
 		return ""
 	}
-	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Providers: configured entries are locked")}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Providers: [x] configured, enter edits key")}
 	count := min(height-1, len(m.providers.items))
 	start := max(0, m.providers.sel-count+1)
 	if maxStart := len(m.providers.items) - count; start > maxStart {
@@ -877,7 +892,7 @@ func (m *model) renderProviderPicker() string {
 		}
 		locked := ""
 		if m.providerConfigured(item.ID) {
-			locked = "  [x] locked"
+			locked = "  [x]"
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Name+locked))
 	}
@@ -885,7 +900,11 @@ func (m *model) renderProviderPicker() string {
 }
 
 func (m *model) renderProviderKeyEntry() string {
-	return m.th.cmdPickerSel.Render("Configure "+m.keyFor.Name+"\n") + m.keyInput.View()
+	action := "Configure "
+	if m.providerConfigured(m.keyFor.ID) {
+		action = "Edit "
+	}
+	return m.th.cmdPickerSel.Render(action+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
 // statusLine shows the working spinner + elapsed time, or a transient status.
