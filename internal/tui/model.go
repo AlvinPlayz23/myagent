@@ -104,6 +104,7 @@ type model struct {
 	selectModel        func(string, string) (llm.Provider, llm.Model, error)
 	availableProviders func() []modelcatalog.Provider
 	providerConfigured func(string) bool
+	providerIsCustom   func(string) bool
 	providerAPIKey     func(string) string
 	configureProvider  func(modelcatalog.Provider, string) error
 
@@ -594,6 +595,10 @@ func (m *model) openProviderKeyEntry() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if m.providerIsCustom != nil && m.providerIsCustom(provider.ID) {
+		m.statusMsg = provider.Name + " is managed as a custom provider. Delete or rename it in `myagent auth` to use the built-in configuration."
+		return m, nil
+	}
 	m.providers.active = false
 	m.keyFor = provider
 	m.keyInput.SetValue(m.providerAPIKey(provider.ID))
@@ -891,7 +896,9 @@ func (m *model) renderProviderPicker() string {
 			marker, style = "› ", m.th.cmdPickerSel
 		}
 		locked := ""
-		if m.providerConfigured(item.ID) {
+		if m.providerIsCustom != nil && m.providerIsCustom(item.ID) {
+			locked = "  managed as custom"
+		} else if m.providerConfigured(item.ID) {
 			locked = "  [x]"
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Name+locked))

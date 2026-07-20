@@ -62,6 +62,13 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		_, ok := authStore.Get(name)
 		return ok
 	}
+	m.providerIsCustom = func(name string) bool {
+		if persistedConfig == nil {
+			return false
+		}
+		_, ok := persistedConfig.Providers[name]
+		return ok
+	}
 	m.providerAPIKey = func(name string) string {
 		if persistedConfig == nil {
 			return ""
@@ -75,6 +82,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	m.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
 		if persistedConfig == nil || authStore == nil {
 			return fmt.Errorf("configuration is unavailable")
+		}
+		if _, custom := persistedConfig.Providers[provider.ID]; custom {
+			return fmt.Errorf("provider %q is managed as a custom provider", provider.Name)
 		}
 		existing, _ := authStore.Get(provider.ID)
 		baseURL := provider.BaseURL

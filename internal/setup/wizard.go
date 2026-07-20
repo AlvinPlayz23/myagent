@@ -290,6 +290,10 @@ func (m *wizardModel) onBuiltinListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.builtinSelected = min(len(m.builtinProviders)-1, m.builtinSelected+10)
 	case "enter":
 		m.builtinFor = m.builtinProviders[m.builtinSelected]
+		if _, custom := m.cfg.Providers[m.builtinFor.ID]; custom {
+			m.err = fmt.Sprintf("%s is managed as a custom provider. Delete or rename it under Custom providers to use the built-in configuration.", m.builtinFor.Name)
+			return m, nil
+		}
 		credentials, _ := m.auth.Get(m.builtinFor.ID)
 		m.builtinKey.SetValue(credentials.APIKey)
 		m.builtinKey.Placeholder = "API key for " + m.builtinFor.Name
@@ -852,7 +856,9 @@ func (m *wizardModel) renderBuiltinList(sb *strings.Builder) {
 			marker = accentStyle.Render(">")
 		}
 		mark := " "
-		if _, configured := m.auth.Get(provider.ID); configured {
+		if _, custom := m.cfg.Providers[provider.ID]; custom {
+			mark = mutedStyle.Render("managed as custom")
+		} else if _, configured := m.auth.Get(provider.ID); configured {
 			mark = accentStyle.Render("[x]")
 		}
 		sb.WriteString(fmt.Sprintf("%s %s %s\n", marker, mark, provider.Name))

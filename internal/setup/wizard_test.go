@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/myagent/myagent/internal/config"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 )
 
 func setTempDir(t *testing.T) {
@@ -77,6 +78,28 @@ func TestAuthHomeNavigatesWithArrows(t *testing.T) {
 	view := m.View().Content
 	if !strings.Contains(view, "> 2  Built-in provider keys") {
 		t.Fatalf("home view does not highlight built-in option:\n%s", view)
+	}
+}
+
+func TestBuiltinProviderCollisionIsManagedAsCustom(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	m.cfg.Providers = map[string]config.ProviderConfig{
+		"openrouter": {Type: config.DefaultProviderType, BaseURL: "https://custom.example/v1"},
+	}
+	m.builtinProviders = []modelcatalog.Provider{{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"}}
+	m.screen = screenBuiltinList
+	_, _ = m.Update(readyWindow())
+
+	_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.screen != screenBuiltinList {
+		t.Fatalf("screen = %d, want built-in list", m.screen)
+	}
+	if !strings.Contains(m.err, "managed as a custom provider") {
+		t.Fatalf("error = %q", m.err)
+	}
+	if !strings.Contains(m.View().Content, "managed as custom") {
+		t.Fatalf("collision is not marked in view:\n%s", m.View().Content)
 	}
 }
 

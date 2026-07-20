@@ -102,6 +102,31 @@ func TestProvidersCommandEditsConfiguredProviderAndSavesNewKey(t *testing.T) {
 	}
 }
 
+func TestProvidersCommandDoesNotEditCustomProviderCollision(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.providers.open([]modelcatalog.Provider{{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"}})
+	m.providerIsCustom = func(id string) bool { return id == "openrouter" }
+	m.providerConfigured = func(string) bool { return false }
+	m.providerAPIKey = func(string) string { return "" }
+
+	_, cmd := m.openProviderKeyEntry()
+	if cmd != nil {
+		t.Fatal("custom collision should not focus the built-in key editor")
+	}
+	if m.keyFor.ID != "" || !m.providers.active {
+		t.Fatal("custom collision opened the built-in key editor")
+	}
+	if !strings.Contains(m.statusMsg, "managed as a custom provider") {
+		t.Fatalf("status = %q", m.statusMsg)
+	}
+	if !strings.Contains(m.renderProviderPicker(), "managed as custom") {
+		t.Fatalf("collision is not marked in provider picker: %q", m.renderProviderPicker())
+	}
+}
+
 func TestProviderKeyPasteStaysInMaskedInput(t *testing.T) {
 	q := newMsgQueue()
 	r := newRunner(agent.Config{}, q, nil)
