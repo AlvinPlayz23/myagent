@@ -74,6 +74,9 @@ func (s *Session) ID() string { return s.id }
 // Path returns the on-disk path of the session file.
 func (s *Session) Path() string { return s.path }
 
+// Cwd returns the working directory recorded in the session header.
+func (s *Session) Cwd() string { return s.cwd }
+
 // Messages returns the reconstructed conversation loaded from disk.
 func (s *Session) Messages() []types.Message { return s.messages }
 

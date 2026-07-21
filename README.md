@@ -1,9 +1,10 @@
 # myagent
 
-A Go coding agent. Headless **print mode** for one-shot prompts, and an
-interactive **TUI** built on [bubbletea v2][btea] for multi-turn work. Speaks
-the OpenAI streaming protocol against any compatible endpoint (OpenAI,
-Ollama, LM Studio, vLLM, etc.).
+A Go coding agent. Headless **print mode** for one-shot prompts, an
+interactive **TUI** built on [bubbletea v2][btea] for multi-turn work, and a
+**server mode** exposing multiple concurrent sessions over WebSocket
+JSON-RPC. Speaks the OpenAI streaming protocol against any compatible
+endpoint (OpenAI, Ollama, LM Studio, vLLM, etc.).
 
 See [`myagent-plan.md`](./myagent-plan.md) for the full design plan and
 shipped status.
@@ -193,6 +194,7 @@ unreadable, or non-file `AGENTS.md` entries are ignored and never prevent a run.
 | `go run . --resume ./path/session.jsonl`     | Resume by file path                                |
 | `go run . --resume-id <uuid>`                | Resume by session id                               |
 | `go run . sessions`                          | List persisted sessions, newest first              |
+| `go run . serve`                             | Run the WebSocket JSON-RPC server (see below)      |
 
 ### Print-mode usage notes
 
@@ -255,6 +257,89 @@ navigate, resume, or cancel.
 
 ---
 
+## Server mode
+
+`myagent serve` runs a headless WebSocket server that hosts many concurrent
+agent sessions for external clients — desktop apps, scripts, or anything that
+can speak JSON-RPC 2.0 over a WebSocket. Setup must be completed first (run
+`myagent` once), same as print mode.
+
+```bash
+go run . serve                       # 127.0.0.1:8765, auto-generated token
+go run . serve --token dev           # fixed token (development)
+go run . serve --port 9000 --model qwen3
+```
+
+| Flag           | Purpose                                        | Default       |
+| -------------- | ---------------------------------------------- | ------------- |
+| `--host`       | Listen address                                 | `127.0.0.1`   |
+| `--port`       | Listen port                                    | `8765`        |
+| `--token`      | Shared bearer token (auto-generated if empty)  | —             |
+| `--provider`   | Default provider for new sessions              | configured    |
+| `--model`      | Default model id for new sessions              | configured    |
+| `--base-url`   | Provider base URL override                     | configured    |
+
+On startup the server prints the connect URL, e.g.
+`ws://127.0.0.1:8765/ws?token=<token>`. The token is checked at upgrade time
+(`?token=` query param or `Authorization: Bearer` header) and requests with a
+browser `Origin` header are rejected — WebSockets bypass CORS, and the server
+executes tools with your local user's privileges. Binding to a non-loopback
+`--host` requires an explicit `--token`.
+
+### Protocol
+
+One JSON-RPC 2.0 object per WebSocket text frame (no batching). On connect
+the server sends a `server.hello` notification with `{name, version,
+protocol}`. Sessions are owned by the connection that creates or resumes
+them; a second client acting on an owned session gets a `notOwner` error. On
+disconnect, active runs are aborted and ownership is released — sessions stay
+on disk and can be resumed after reconnecting (they interop with the TUI's
+`--resume-id` too).
+
+| Method             | Params                            | Result                              |
+| ------------------ | --------------------------------- | ----------------------------------- |
+| `session.create`   | `{cwd?, provider?, model?}`       | `{sessionId, model, cwd}`           |
+| `session.resume`   | `{sessionId}`                     | `{sessionId, model, cwd, messages}` |
+| `session.list`     | `{}`                              | `{sessions: [...]}`                 |
+| `session.prompt`   | `{sessionId, message}`            | `{}` — ack; turn streams via events |
+| `session.steer`    | `{sessionId, message}`            | `{queued}` (error if idle)          |
+| `session.followUp` | `{sessionId, message}`            | `{queued}` (error if idle)          |
+| `session.abort`    | `{sessionId}`                     | `{}`                                |
+| `session.compact`  | `{sessionId}`                     | `{}` (error if running)             |
+| `session.messages` | `{sessionId}`                     | `{messages}`                        |
+| `session.setModel` | `{sessionId, provider, model}`    | `{}` (idle only)                    |
+| `session.close`    | `{sessionId}`                     | `{}` — JSONL file is kept           |
+
+`session.prompt` returns immediately. The run then streams as server→client
+notifications:
+
+- `session.event` — `{sessionId, event}` where `event` is the agent's
+  `AgentEvent` verbatim (`agent_start`, `turn_start`, `message_start`,
+  `message_update` with streaming deltas, `message_end`,
+  `tool_execution_start/end`, `compaction_start/end`, `turn_end`,
+  `agent_end`) — the same event vocabulary the TUI renders.
+- `session.done` — `{sessionId, error?}` after the run finishes; `error` is
+  set when the run failed before producing a terminal `agent_end`.
+
+Error codes: standard JSON-RPC (`-32700` parse, `-32600` invalid request,
+`-32601` method not found, `-32602` invalid params) plus application codes
+`-32000` sessionNotFound, `-32001` sessionBusy, `-32002` notOwner, `-32003`
+agentError, `-32004` sessionNotRunning.
+
+### Smoke test
+
+A minimal test client lives at `scripts/ws-smoke.go`:
+
+```bash
+go run . serve --token dev &
+go run scripts/ws-smoke.go "ws://127.0.0.1:8765/ws?token=dev" "Say hello."
+```
+
+It creates a session, streams the reply, and exits on `session.done`. The
+created session appears in `myagent sessions` and can be resumed in the TUI.
+
+---
+
 ## Sessions
 
 Each run creates or resumes a JSONL file under
@@ -307,18 +392,25 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 ```
 .
 ├── main.go              # CLI entry point
+├── serve.go             # `serve` subcommand (WebSocket JSON-RPC server)
 ├── go.mod / go.sum
 ├── internal/
-│   ├── agent/           # prompt→stream→tools→repeat loop, event emission
+│   ├── agent/           # prompt→stream→tools→repeat loop, event emission, message queue
 │   │   └── compaction/  # auto context compaction (summarize old history)
 │   ├── config/          # JSON config + env overrides
 │   ├── eventbus/        # guaranteed-delivery pub/sub for agent events
 │   ├── llm/             # Provider interface + OpenAI streaming adapter
 │   ├── printmode/       # non-interactive one-shot driver
+│   ├── server/          # server mode
+│   │   ├── core/        # transport-agnostic session manager + run lifecycle
+│   │   ├── rpc/         # minimal JSON-RPC 2.0 framing
+│   │   └── ws/          # WebSocket transport (auth, dispatch, event pumps)
 │   ├── session/         # JSONL persistence (v4, id/parentId chain, compaction, list, resume)
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
 │   ├── tui/             # bubbletea v2 UI: transcript, input, footer
 │   └── types/           # Message / Content / ToolCall / Usage / Event
+├── scripts/
+│   └── ws-smoke.go      # manual server-mode smoke-test client
 ├── myagent-plan.md      # design plan
 ├── pi/                  # upstream TypeScript implementation (reference)
 └── README.md            # this file

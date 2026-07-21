@@ -7,9 +7,13 @@
 //	myagent -p "prompt"           non-interactive: stream a single reply to stdout
 //	myagent sessions              list persisted sessions, newest first
 //	myagent auth                  open provider setup
+//	myagent serve                 run the WebSocket JSON-RPC server
 //
 // Flags for print/resume mode: -p / -print, --continue, --resume <path>,
 // --resume-id <id>, --provider, --model, --base-url.
+//
+// Flags for serve mode: --host, --port, --token, --provider, --model,
+// --base-url.
 package main
 
 import (
@@ -45,12 +49,16 @@ func main() {
 
 func run(argv []string) error {
 	// Subcommand routing. `sessions` lists persisted sessions; `auth` opens
-	// provider setup; `tui` forces the interactive UI.
+	// provider setup; `serve` runs the WebSocket server; `tui` forces the
+	// interactive UI.
 	if len(argv) > 0 && argv[0] == "sessions" {
 		return runSessions(argv[1:])
 	}
 	if len(argv) > 0 && argv[0] == "auth" {
 		return runAuth(argv[1:])
+	}
+	if len(argv) > 0 && argv[0] == "serve" {
+		return runServe(argv[1:])
 	}
 	forceTUI := false
 	if len(argv) > 0 && argv[0] == "tui" {
