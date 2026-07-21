@@ -197,6 +197,32 @@ func TestManagerSaveErrorIsShown(t *testing.T) {
 	}
 }
 
+func TestManagerSavesProviderWhenCustomModelCacheFails(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	blocker := filepath.Join(t.TempDir(), "catalog-blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	m.catalog = modelcatalog.New(blocker)
+	m.openEditor("")
+	saveProvider(t, m, "openai", "sk-test", config.DefaultBaseURL, "gpt-4o-mini")
+	if !m.done || m.result == nil {
+		t.Fatalf("provider was not saved: %s", m.err)
+	}
+	if !strings.Contains(m.err, "Provider saved, but the custom model cache") {
+		t.Fatalf("cache failure warning = %q", m.err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.DefaultModel; got != "openai/gpt-4o-mini" {
+		t.Fatalf("DefaultModel = %q", got)
+	}
+}
+
 func TestManagerDoesNotOverwriteMalformedConfig(t *testing.T) {
 	setTempDir(t)
 	path, err := config.Path()

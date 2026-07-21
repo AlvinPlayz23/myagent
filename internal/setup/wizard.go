@@ -161,12 +161,10 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.models = mergeModels(msg.models, m.fields[3].input.Value())
 		if m.catalog != nil && m.editing != "" && len(m.fields) > 3 {
 			if err := m.catalog.SetCustomModels(m.editing, m.editing, m.models); err != nil {
-				m.err = "Could not save discovered models: " + err.Error()
-				return m, nil
+				m.err = "Discovered models are available for this edit, but the custom model cache could not be updated: " + err.Error()
 			}
 		}
 		m.modelIndex = 0
-		m.err = ""
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
@@ -433,17 +431,15 @@ func (m *wizardModel) onDeleteKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		name := m.selectedProvider()
 		delete(m.cfg.Providers, name)
-		if m.catalog != nil {
-			if err := m.catalog.RemoveCustomProvider(name); err != nil {
-				m.err = "Could not update custom model catalog: " + err.Error()
-				m.screen = screenList
-				return m, nil
-			}
-		}
 		if err := config.Save(m.cfg); err != nil {
 			m.err = "Failed to write config: " + err.Error()
 			m.screen = screenList
 			return m, nil
+		}
+		if m.catalog != nil {
+			if err := m.catalog.RemoveCustomProvider(name); err != nil {
+				m.err = "Provider deleted, but the custom model cache could not be updated: " + err.Error()
+			}
 		}
 		m.refreshProviders()
 		m.screen = screenList
@@ -679,20 +675,8 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		delete(m.cfg.Providers, m.editing)
-		if m.catalog != nil {
-			if err := m.catalog.RemoveCustomProvider(m.editing); err != nil {
-				m.err = "Could not update custom model catalog: " + err.Error()
-				return m, nil
-			}
-		}
 	}
 	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model}
-	if m.catalog != nil {
-		if err := m.catalog.SetCustomModels(name, name, append(m.models, model)); err != nil {
-			m.err = "Could not save custom models: " + err.Error()
-			return m, nil
-		}
-	}
 	m.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(m.cfg); err != nil {
 		m.err = "Failed to write config: " + err.Error()
@@ -701,6 +685,16 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 	if _, _, err := m.cfg.Resolve("", "", ""); err != nil {
 		m.err = "Config saved but is invalid: " + err.Error()
 		return m, nil
+	}
+	if m.catalog != nil {
+		if m.editing != "" && m.editing != name {
+			if err := m.catalog.RemoveCustomProvider(m.editing); err != nil {
+				m.err = "Provider saved, but the custom model cache could not be updated: " + err.Error()
+			}
+		}
+		if err := m.catalog.SetCustomModels(name, name, append(m.models, model)); err != nil {
+			m.err = "Provider saved, but the custom model cache could not be updated: " + err.Error()
+		}
 	}
 	m.refreshProviders()
 	m.selected = m.indexOf(name)

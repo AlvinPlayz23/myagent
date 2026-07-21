@@ -43,6 +43,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		r.reset()
 		return nil
 	})
+	if agent.HasRepositoryGuidance(cwd) {
+		m.statusMsg = "Loaded AGENTS.md"
+	}
 	m.availableModels = func() []modelcatalog.Model {
 		return availableModelCandidates(catalog, persistedConfig, authStore)
 	}

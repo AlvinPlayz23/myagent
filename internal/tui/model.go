@@ -21,6 +21,9 @@ import (
 // tickMsg drives the streaming-tail refresh + spinner animation.
 type tickMsg struct{}
 
+// clearStatusMsg clears a startup status after its configured lifetime.
+type clearStatusMsg struct{ status string }
+
 // spinnerFrames is the working-state spinner (pi uses an animated Loader).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -146,11 +149,19 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 
 // Init starts the event pump and the animation ticker.
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.runner.waitForEvent(), tickCmd())
+	cmds := []tea.Cmd{m.runner.waitForEvent(), tickCmd()}
+	if m.statusMsg != "" {
+		cmds = append(cmds, clearStatusCmd(m.statusMsg))
+	}
+	return tea.Batch(cmds...)
 }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func clearStatusCmd(status string) tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return clearStatusMsg{status: status} })
 }
 
 // Update handles messages: key input, window resize, agent events, and ticks.
@@ -214,6 +225,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 		}
 		return m, tickCmd()
+
+	case clearStatusMsg:
+		if m.statusMsg == msg.status {
+			m.statusMsg = ""
+		}
+		return m, nil
 	}
 
 	// Delegate other messages to the focused input.

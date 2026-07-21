@@ -169,6 +169,14 @@ run under `cmd.exe`.
 
 [gitwin]: https://git-scm.com/download/win
 
+### Repository guidance (`AGENTS.md`)
+
+Before every agent run, myagent looks for `AGENTS.md` starting at the current
+working directory and walking upward to the filesystem root. All discovered
+files are included in the system prompt from outermost to innermost directory,
+so instructions closer to the working directory are more specific. Missing,
+unreadable, or non-file `AGENTS.md` entries are ignored and never prevent a run.
+
 ---
 
 ## Usage

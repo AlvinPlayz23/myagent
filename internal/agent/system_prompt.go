@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/myagent/myagent/internal/tools"
@@ -49,5 +51,52 @@ func BuildSystemPrompt(reg *tools.Registry, cwd string) string {
 	b.WriteString(guidelines)
 	b.WriteString("\n\nCurrent working directory: ")
 	b.WriteString(promptCwd)
+	if guidance := loadRepositoryGuidance(cwd); guidance != "" {
+		b.WriteString("\n\nRepository instructions:\n")
+		b.WriteString(guidance)
+	}
 	return b.String()
+}
+
+// loadRepositoryGuidance collects AGENTS.md files from the filesystem root to
+// cwd. Instructions in deeper directories appear later and are more specific.
+// Missing, unreadable, and non-regular entries are ignored so guidance never
+// prevents the agent from starting.
+func loadRepositoryGuidance(cwd string) string {
+	var paths []string
+	for dir := filepath.Clean(cwd); ; {
+		path := filepath.Join(dir, "AGENTS.md")
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			paths = append(paths, path)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	var b strings.Builder
+	for i := len(paths) - 1; i >= 0; i-- {
+		contents, err := os.ReadFile(paths[i])
+		if err != nil || len(contents) == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Instructions from ")
+		b.WriteString(filepath.ToSlash(paths[i]))
+		b.WriteString(":\n")
+		b.Write(contents)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// HasRepositoryGuidance reports whether cwd has any usable AGENTS.md guidance.
+// It is used by the interactive UI to show a startup status matching the
+// instructions included in the system prompt.
+func HasRepositoryGuidance(cwd string) bool {
+	return loadRepositoryGuidance(cwd) != ""
 }

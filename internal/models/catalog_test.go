@@ -1,6 +1,8 @@
 package models
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -75,5 +77,28 @@ func TestCustomModelsSurviveCatalogRefreshState(t *testing.T) {
 	}
 	if got := c.Models(map[string]struct{}{"local": {}}); len(got) != 0 {
 		t.Fatalf("removed custom models = %#v", got)
+	}
+}
+
+func TestSetCustomModelsUpdatesExistingCacheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, cacheFile)
+	if err := os.WriteFile(path, []byte(`{"custom":[{"provider":"local","providerName":"Local","id":"old"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	c := New(dir)
+	if err := c.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := c.SetCustomModels("local", "Local", []string{"new-model-id"}); err != nil {
+		t.Fatalf("SetCustomModels: %v", err)
+	}
+
+	reloaded := New(dir)
+	if err := reloaded.Load(); err != nil {
+		t.Fatalf("Load updated cache: %v", err)
+	}
+	if got, want := reloaded.Models(map[string]struct{}{"local": {}}), []Model{{Provider: "local", ProviderName: "Local", ID: "new-model-id"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("custom models = %#v, want %#v", got, want)
 	}
 }

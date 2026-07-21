@@ -80,3 +80,21 @@ func TestCommandPickerFitsTerminalAndBorrowsViewportRows(t *testing.T) {
 		t.Fatalf("viewport height after dismiss = %d, want %d", m.viewport.Height(), baseHeight)
 	}
 }
+
+func TestStartupStatusClearsAfterFiveSeconds(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.statusMsg = "Loaded AGENTS.md"
+	m.Update(clearStatusMsg{status: "Loaded AGENTS.md"})
+	if m.statusMsg != "" {
+		t.Fatalf("status = %q, want empty", m.statusMsg)
+	}
+}
+
+func TestStartupStatusDoesNotClearNewerStatus(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.statusMsg = "Model set to test/model."
+	m.Update(clearStatusMsg{status: "Loaded AGENTS.md"})
+	if m.statusMsg != "Model set to test/model." {
+		t.Fatalf("status = %q, want newer status", m.statusMsg)
+	}
+}

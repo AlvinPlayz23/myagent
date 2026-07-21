@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,8 @@ const (
 	cacheFile    = "models.json"
 	maxBodyBytes = 8 << 20
 )
+
+var catalogWriteMu sync.Mutex
 
 // Model is a provider-qualified, selectable model.
 type Model struct {
@@ -54,6 +57,7 @@ type cache struct {
 type Catalog struct {
 	path string
 	data cache
+	mu   sync.Mutex
 }
 
 func New(dir string) *Catalog { return &Catalog{path: filepath.Join(dir, cacheFile)} }
@@ -95,6 +99,8 @@ func (c *Catalog) Models(providers map[string]struct{}) []Model {
 // SetCustomModels stores model IDs discovered from a user-configured endpoint.
 // They are kept independently of models.dev so refreshes cannot erase them.
 func (c *Catalog) SetCustomModels(provider, providerName string, ids []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
 		return fmt.Errorf("custom provider name is required")
@@ -128,6 +134,8 @@ func (c *Catalog) SetCustomModels(provider, providerName string, ids []string) e
 // RemoveCustomProvider removes catalog entries belonging to a deleted or
 // renamed user-configured provider.
 func (c *Catalog) RemoveCustomProvider(provider string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := c.data.Custom[:0]
 	for _, model := range c.data.Custom {
 		if model.Provider != provider {
@@ -169,7 +177,7 @@ func providersFromModels(models []Model) []Provider {
 	return out
 }
 
-// Refresh downloads models.dev and persists an atomic normalized cache.
+// Refresh downloads models.dev and persists the normalized cache.
 func (c *Catalog) Refresh(ctx context.Context, client *http.Client) error {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
@@ -196,11 +204,17 @@ func (c *Catalog) Refresh(ctx context.Context, client *http.Client) error {
 	if len(models) == 0 {
 		return fmt.Errorf("models catalog contains no compatible tool-capable models")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.data = cache{CheckedAt: time.Now(), Models: models, Providers: providers, Custom: c.data.Custom}
 	return c.save()
 }
 
 func (c *Catalog) save() error {
+	// Catalogs are constructed in multiple UI flows, so serialize writes across
+	// instances as well as individual Catalog mutations.
+	catalogWriteMu.Lock()
+	defer catalogWriteMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
 		return err
 	}
@@ -209,20 +223,26 @@ func (c *Catalog) save() error {
 		return err
 	}
 	b = append(b, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(c.path), ".models-*.tmp")
+
+	// Update the existing cache entry directly rather than replacing it with a
+	// rename. Windows can allow writes to a file while denying replacement of
+	// its directory entry. This cache is rebuildable, so direct persistence is
+	// preferable to blocking provider configuration on that restriction.
+	f, err := os.OpenFile(c.path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
+	defer f.Close()
+	if err := f.Truncate(0); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, c.path)
+	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 type provider struct {
