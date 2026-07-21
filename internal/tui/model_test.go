@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -96,5 +97,82 @@ func TestStartupStatusDoesNotClearNewerStatus(t *testing.T) {
 	m.Update(clearStatusMsg{status: "Loaded AGENTS.md"})
 	if m.statusMsg != "Model set to test/model." {
 		t.Fatalf("status = %q, want newer status", m.statusMsg)
+	}
+}
+
+func TestPromptHistoryNavigatesFromNewestToOldest(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.addPromptHistory("first prompt")
+	m.addPromptHistory("second prompt")
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if got := m.input.Value(); got != "second prompt" {
+		t.Fatalf("first up = %q, want newest prompt", got)
+	}
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if got := m.input.Value(); got != "first prompt" {
+		t.Fatalf("second up = %q, want oldest prompt", got)
+	}
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if got := m.input.Value(); got != "first prompt" {
+		t.Fatalf("up at oldest = %q, want oldest prompt", got)
+	}
+}
+
+func TestPromptHistoryDownReturnsToEmptyComposer(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.addPromptHistory("first prompt")
+	m.addPromptHistory("second prompt")
+	m.navigatePromptHistory(-1)
+	m.navigatePromptHistory(-1)
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if got := m.input.Value(); got != "second prompt" {
+		t.Fatalf("first down = %q, want newer prompt", got)
+	}
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("down after newest = %q, want empty composer", got)
+	}
+	if m.historyIndex != -1 {
+		t.Fatalf("history index = %d, want -1", m.historyIndex)
+	}
+}
+
+func TestPromptHistoryExcludesSlashCommandsAndConsecutiveDuplicates(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.addPromptHistory("prompt")
+	m.addPromptHistory("prompt")
+	if len(m.promptHistory) != 1 {
+		t.Fatalf("history length = %d, want 1", len(m.promptHistory))
+	}
+
+	m.input.SetValue("/help")
+	m.submit(false)
+	if len(m.promptHistory) != 1 {
+		t.Fatalf("slash command was added to history: %#v", m.promptHistory)
+	}
+}
+
+func TestEditingRecalledPromptExitsHistoryNavigation(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.addPromptHistory("prompt")
+	m.navigatePromptHistory(-1)
+	m.onKey(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+	if m.historyIndex != -1 {
+		t.Fatalf("history index = %d, want -1 after editing", m.historyIndex)
+	}
+}
+
+func TestPromptHistoryKeepsMostRecentHundredPrompts(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	for i := 0; i <= promptHistoryLimit; i++ {
+		m.addPromptHistory(fmt.Sprintf("prompt %d", i))
+	}
+	if len(m.promptHistory) != promptHistoryLimit {
+		t.Fatalf("history length = %d, want %d", len(m.promptHistory), promptHistoryLimit)
+	}
+	if m.promptHistory[0] != "prompt 100" || m.promptHistory[len(m.promptHistory)-1] != "prompt 1" {
+		t.Fatalf("unexpected retained history: newest=%q oldest=%q", m.promptHistory[0], m.promptHistory[len(m.promptHistory)-1])
 	}
 }

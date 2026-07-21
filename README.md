@@ -214,6 +214,7 @@ go run . "Write a haiku about Go."   # same thing
 | **Esc**              | Abort the current turn                                |
 | **Ctrl+C**           | Quit                                                  |
 | **Ctrl+O**           | Expand / collapse all tool blocks                     |
+| **Up / Down**        | Browse submitted prompts when the input is empty      |
 | **PgUp / PgDn**      | Scroll transcript                                     |
 | **Tab**              | Focus the input area                                  |
 

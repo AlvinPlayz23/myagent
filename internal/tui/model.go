@@ -27,7 +27,10 @@ type clearStatusMsg struct{ status string }
 // spinnerFrames is the working-state spinner (pi uses an animated Loader).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-const sessionPickerMaxVisible = 5
+const (
+	sessionPickerMaxVisible = 5
+	promptHistoryLimit      = 100
+)
 
 type sessionPicker struct {
 	items  []session.Info
@@ -91,10 +94,12 @@ type model struct {
 	width, height int
 	ready         bool
 
-	working      bool // an agent Run is in progress
-	spinnerFrame int
-	startedAt    time.Time
-	statusMsg    string
+	working       bool // an agent Run is in progress
+	spinnerFrame  int
+	startedAt     time.Time
+	statusMsg     string
+	promptHistory []string
+	historyIndex  int // -1 means the composer is not browsing prompt history.
 
 	modelID string
 	cwd     string
@@ -132,18 +137,19 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		createSession = newSession[0]
 	}
 	return &model{
-		ctx:        ctx,
-		runner:     r,
-		queue:      q,
-		th:         th,
-		md:         md,
-		transcript: newTranscript(th, md),
-		input:      ta,
-		keyInput:   key,
-		picker:     newCommandPicker(),
-		modelID:    modelID,
-		cwd:        cwd,
-		newSession: createSession,
+		ctx:          ctx,
+		runner:       r,
+		queue:        q,
+		th:           th,
+		md:           md,
+		transcript:   newTranscript(th, md),
+		input:        ta,
+		keyInput:     key,
+		picker:       newCommandPicker(),
+		historyIndex: -1,
+		modelID:      modelID,
+		cwd:          cwd,
+		newSession:   createSession,
 	}
 }
 
@@ -181,8 +187,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keyInput, cmd = m.keyInput.Update(msg)
 			return m, cmd
 		}
+		previous := m.input.Value()
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
+		if m.input.Value() != previous {
+			m.historyIndex = -1
+		}
 		m.picker.sync(m.input.Value())
 		m.updateLayout()
 		return m, cmd
@@ -423,10 +433,24 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		m.viewport.ScrollDown(m.viewport.Height() / 2)
 		return m, nil
+	case "up":
+		if m.input.Value() == "" || m.historyIndex >= 0 {
+			if m.navigatePromptHistory(-1) {
+				return m, nil
+			}
+		}
+	case "down":
+		if m.historyIndex >= 0 && m.navigatePromptHistory(1) {
+			return m, nil
+		}
 	}
 
+	previous := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
+	if m.input.Value() != previous {
+		m.historyIndex = -1
+	}
 	m.picker.sync(m.input.Value())
 	m.updateLayout()
 	return m, cmd
@@ -492,9 +516,12 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	m.updateLayout()
 	if strings.HasPrefix(text, "/") {
 		m.input.Reset()
+		m.historyIndex = -1
 		return m.runCommand(text)
 	}
+	m.addPromptHistory(text)
 	m.input.Reset()
+	m.historyIndex = -1
 	um := userMessage(text)
 
 	if m.working {
@@ -523,6 +550,40 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	m.statusMsg = ""
 	m.lastErr = nil
 	return m, m.runner.start(runCtx, um)
+}
+
+// addPromptHistory stores recent submitted prompts for the current TUI session.
+func (m *model) addPromptHistory(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" || (len(m.promptHistory) > 0 && m.promptHistory[0] == text) {
+		return
+	}
+	m.promptHistory = append([]string{text}, m.promptHistory...)
+	if len(m.promptHistory) > promptHistoryLimit {
+		m.promptHistory = m.promptHistory[:promptHistoryLimit]
+	}
+}
+
+// navigatePromptHistory recalls older (-1) or newer (1) submitted prompts.
+// It returns false when the requested direction has no history entry.
+func (m *model) navigatePromptHistory(direction int) bool {
+	if len(m.promptHistory) == 0 {
+		return false
+	}
+
+	index := m.historyIndex - direction
+	if index < -1 || index >= len(m.promptHistory) {
+		return false
+	}
+	m.historyIndex = index
+	if index == -1 {
+		m.input.Reset()
+	} else {
+		m.input.SetValue(m.promptHistory[index])
+	}
+	m.picker.sync(m.input.Value())
+	m.updateLayout()
+	return true
 }
 
 func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
