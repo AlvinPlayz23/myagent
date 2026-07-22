@@ -33,7 +33,7 @@ Everything below assumes you `cd`-ed into this repo.
 - **Go** — see `go.mod` for the minimum toolchain version.
 - An API key for at least one configured **OpenAI-compatible provider**. First
   run collects an OpenAI-compatible provider. The initial endpoint is
-  `https://api.openai.com/v1` and model is `gpt-4o`.
+  `https://api.openai.com/v1` and model is `gpt-5.5`.
 - A real terminal for the TUI:
   - macOS / Linux: any modern terminal.
   - Windows: **Windows Terminal** (ConPTY + 24-bit color). PowerShell
@@ -116,7 +116,7 @@ configuration unexpectedly.
       "baseUrl": "http://localhost:11434/v1"
     }
   },
-  "default_model": "openai/gpt-4o"
+  "default_model": "openai/gpt-5.5"
 }
 ```
 
@@ -153,7 +153,7 @@ Defaults are 10 attempts, a 1 s base delay doubling each attempt, capped at
 ```json
 {
   "providers": { "openai": { "type": "openai-compatible", "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" } },
-  "default_model": "openai/gpt-4o",
+  "default_model": "openai/gpt-5.5",
   "retry": {
     "maxAttempts": 10,
     "baseDelayMs": 1000,

@@ -33,13 +33,13 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 // --- request body shapes ---
 
 type chatRequest struct {
-	Model         string          `json:"model"`
-	Messages      []chatMessage   `json:"messages"`
-	Stream        bool            `json:"stream"`
-	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
-	Tools         []chatTool      `json:"tools,omitempty"`
-	Temperature   *float64        `json:"temperature,omitempty"`
-	MaxTokens     *int            `json:"max_completion_tokens,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []chatMessage  `json:"messages"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Tools         []chatTool     `json:"tools,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
+	MaxTokens     *int           `json:"max_completion_tokens,omitempty"`
 }
 
 type streamOptions struct {
@@ -108,10 +108,10 @@ type deltaToolCall struct {
 }
 
 type chunkUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokens         int `json:"prompt_tokens"`
+	CompletionTokens     int `json:"completion_tokens"`
 	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
-	PromptTokensDetails struct {
+	PromptTokensDetails  struct {
 		CachedTokens     int `json:"cached_tokens"`
 		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -196,11 +196,9 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		return
 	}
 
-	// start event
-	out <- StreamEvent{Type: "start", Partial: cloneMessage(output)}
-
 	acc := newAccumulator(output, out)
 	hasFinishReason := false
+	started := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -217,6 +215,12 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		var chunk chatChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed chunk, mirrors pi tolerance
+		}
+		// Do not expose a started stream until the provider has yielded a valid
+		// SSE chunk. An empty or abruptly dropped response remains safe to retry.
+		if !started {
+			started = true
+			out <- StreamEvent{Type: "start", Partial: cloneMessage(output)}
 		}
 
 		if chunk.Usage != nil {
@@ -246,7 +250,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		emitError(err, false)
+		emitError(err, !started)
 		return
 	}
 
@@ -270,7 +274,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		return
 	}
 	if !hasFinishReason {
-		emitError(fmt.Errorf("Stream ended without finish_reason"), false)
+		emitError(fmt.Errorf("Stream ended without finish_reason"), !started)
 		return
 	}
 

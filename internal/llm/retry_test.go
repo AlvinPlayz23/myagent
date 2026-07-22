@@ -2,6 +2,9 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -202,5 +205,45 @@ func TestRetryAbortsDuringBackoff(t *testing.T) {
 	last := evs[len(evs)-1]
 	if last.Type != "error" || last.Error == nil || last.Error.StopReason != types.StopAborted {
 		t.Fatalf("want terminal aborted error, got %+v", last)
+	}
+}
+
+func TestRetryRetriesEmptySuccessfulResponseBeforeStreamStarts(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls == 1 {
+			return // A 2xx response that closes before yielding an SSE chunk.
+		}
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewRetryProvider(NewOpenAIProvider(""), fastPolicy())
+	ch, err := p.Stream(context.Background(), Model{ID: "m", BaseURL: srv.URL}, Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	evs := collect(t, ch)
+
+	if calls != 2 {
+		t.Fatalf("server called %d times, want 2", calls)
+	}
+	var starts, retries, dones int
+	for _, ev := range evs {
+		switch ev.Type {
+		case "start":
+			starts++
+		case "retry":
+			retries++
+		case "done":
+			dones++
+		case "error":
+			t.Fatalf("unexpected terminal error: %+v", ev)
+		}
+	}
+	if starts != 1 || retries != 1 || dones != 1 {
+		t.Fatalf("events: starts=%d retries=%d dones=%d, want 1 each", starts, retries, dones)
 	}
 }
