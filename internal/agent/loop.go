@@ -212,6 +212,16 @@ func (l *Loop) streamAssistant(ctx context.Context) (types.Message, error) {
 			final = ev.Message
 		case "error":
 			final = ev.Error
+		case "retry":
+			// Transient failure; the provider will re-issue the request. Surface
+			// it as a retry event and keep consuming — no message state changes.
+			if err := l.emit(ctx, types.AgentEvent{
+				Type:        types.EventRetry,
+				Attempt:     ev.Attempt,
+				MaxAttempts: ev.MaxAttempts,
+			}); err != nil {
+				return types.Message{}, err
+			}
 		default:
 			// Streaming deltas: forward as message_update carrying the raw event.
 			evCopy := ev

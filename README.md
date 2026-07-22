@@ -136,6 +136,35 @@ Built-in provider credentials are stored separately at
 `$MYAGENT_DIR/auth/providers.json`; they are not added to the custom provider
 map in `config.json`. Both credential files use restrictive permissions.
 
+### Retry on transient provider errors
+
+When a provider request fails with a transient error — a network/connection
+failure or an HTTP `408`, `429`, `500`, `502`, `503`, or `504` — myagent
+automatically retries with exponential backoff instead of ending the turn.
+Permanent errors (`400`, `401`, `403`, `404`, …) are **not** retried, and an
+aborted turn (Esc / `session.abort`) stops retrying immediately. Each retry is
+surfaced as a `Retrying… (attempt n/N)` notice in the TUI (and a `[retry]` line
+on stderr in print mode).
+
+Defaults are 10 attempts, a 1 s base delay doubling each attempt, capped at
+30 s. Tune or disable it with an optional top-level `retry` block in
+`config.json`:
+
+```json
+{
+  "providers": { "openai": { "type": "openai-compatible", "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" } },
+  "default_model": "openai/gpt-4o",
+  "retry": {
+    "maxAttempts": 10,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000
+  }
+}
+```
+
+Omitted or zero fields fall back to the defaults; set `"maxAttempts": 1` to
+disable retries entirely.
+
 ### Environment overrides
 
 | Variable           | Purpose                              | Default                     |
@@ -316,8 +345,9 @@ notifications:
 - `session.event` — `{sessionId, event}` where `event` is the agent's
   `AgentEvent` verbatim (`agent_start`, `turn_start`, `message_start`,
   `message_update` with streaming deltas, `message_end`,
-  `tool_execution_start/end`, `compaction_start/end`, `turn_end`,
-  `agent_end`) — the same event vocabulary the TUI renders.
+  `tool_execution_start/end`, `compaction_start/end`, `retry` when a transient
+  provider error is being retried, `turn_end`, `agent_end`) — the same event
+  vocabulary the TUI renders.
 - `session.done` — `{sessionId, error?}` after the run finishes; `error` is
   set when the run failed before producing a terminal `agent_end`.
 

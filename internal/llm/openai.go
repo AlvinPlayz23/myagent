@@ -149,26 +149,29 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		Timestamp:  time.Now().UnixMilli(),
 	}
 
-	emitError := func(err error) {
+	// emitError emits a terminal "error" StreamEvent. retryable marks a transient
+	// failure (network or a retryable HTTP status) so a retry wrapper may re-issue
+	// the request; it is ignored when ctx cancellation already makes this an abort.
+	emitError := func(err error, retryable bool) {
 		if ctx.Err() != nil {
 			output.StopReason = types.StopAborted
 		} else {
 			output.StopReason = types.StopError
 		}
 		output.ErrorMessage = err.Error()
-		out <- StreamEvent{Type: "error", Error: output}
+		out <- StreamEvent{Type: "error", Error: output, Retryable: retryable}
 	}
 
 	body, err := buildRequestBody(model, req)
 	if err != nil {
-		emitError(err)
+		emitError(err, false)
 		return
 	}
 
 	url := strings.TrimRight(model.BaseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		emitError(err)
+		emitError(err, false)
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -179,7 +182,9 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 
 	resp, err := p.Client.Do(httpReq)
 	if err != nil {
-		emitError(err)
+		// Network/transport failure is transient (a cancelled ctx is reclassified
+		// as an abort inside emitError and never retried by the wrapper).
+		emitError(err, true)
 		return
 	}
 	defer resp.Body.Close()
@@ -187,7 +192,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		buf := new(bytes.Buffer)
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 4000))
-		emitError(fmt.Errorf("%d: %s", resp.StatusCode, strings.TrimSpace(buf.String())))
+		emitError(fmt.Errorf("%d: %s", resp.StatusCode, strings.TrimSpace(buf.String())), isRetryableStatus(resp.StatusCode))
 		return
 	}
 
@@ -241,7 +246,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		emitError(err)
+		emitError(err, false)
 		return
 	}
 
@@ -249,11 +254,11 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 
 	// Guard checks in pi order.
 	if ctx.Err() != nil {
-		emitError(fmt.Errorf("Request was aborted"))
+		emitError(fmt.Errorf("Request was aborted"), false)
 		return
 	}
 	if output.StopReason == types.StopAborted {
-		emitError(fmt.Errorf("Request was aborted"))
+		emitError(fmt.Errorf("Request was aborted"), false)
 		return
 	}
 	if output.StopReason == types.StopError {
@@ -261,11 +266,11 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		if msg == "" {
 			msg = "Provider returned an error stop reason"
 		}
-		emitError(fmt.Errorf("%s", msg))
+		emitError(fmt.Errorf("%s", msg), false)
 		return
 	}
 	if !hasFinishReason {
-		emitError(fmt.Errorf("Stream ended without finish_reason"))
+		emitError(fmt.Errorf("Stream ended without finish_reason"), false)
 		return
 	}
 
@@ -279,4 +284,21 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// isRetryableStatus reports whether an HTTP status code denotes a transient
+// failure worth retrying: request timeout, rate limiting, and upstream/server
+// errors. Permanent client errors (400/401/403/404/422, …) return false.
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusRequestTimeout, // 408
+		http.StatusTooManyRequests,     // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout:      // 504
+		return true
+	default:
+		return false
+	}
 }

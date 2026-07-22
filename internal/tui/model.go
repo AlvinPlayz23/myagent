@@ -799,6 +799,11 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 				ev.Compaction.TokensBefore, ev.Compaction.TokensAfter,
 			))
 		}
+	case types.EventRetry:
+		m.transcript.addNotice(fmt.Sprintf(
+			"∼ Provider error, retrying… (attempt %d/%d)",
+			ev.Attempt, ev.MaxAttempts,
+		))
 	}
 	m.refreshViewport()
 	return nil

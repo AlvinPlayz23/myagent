@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/llm"
@@ -69,6 +70,35 @@ type ProviderConfig struct {
 type Config struct {
 	Providers    map[string]ProviderConfig `json:"providers"`
 	DefaultModel string                    `json:"default_model"`
+	Retry        *RetryConfig              `json:"retry,omitempty"`
+}
+
+// RetryConfig tunes automatic retries of transient provider failures. Omitted
+// or zero fields fall back to DefaultRetry values. Retries are disabled by
+// setting MaxAttempts to 1.
+type RetryConfig struct {
+	MaxAttempts int `json:"maxAttempts,omitempty"`
+	BaseDelayMs int `json:"baseDelayMs,omitempty"`
+	MaxDelayMs  int `json:"maxDelayMs,omitempty"`
+}
+
+// retryPolicy builds the llm.RetryPolicy for this config, applying defaults for
+// any unset field. A negative MaxAttempts is treated as unset.
+func (c *Config) retryPolicy() llm.RetryPolicy {
+	def := llm.DefaultRetryPolicy()
+	p := def
+	if c != nil && c.Retry != nil {
+		if c.Retry.MaxAttempts > 0 {
+			p.MaxAttempts = c.Retry.MaxAttempts
+		}
+		if c.Retry.BaseDelayMs > 0 {
+			p.BaseDelay = time.Duration(c.Retry.BaseDelayMs) * time.Millisecond
+		}
+		if c.Retry.MaxDelayMs > 0 {
+			p.MaxDelay = time.Duration(c.Retry.MaxDelayMs) * time.Millisecond
+		}
+	}
+	return p
 }
 
 // Dir returns the myagent config/data directory (~/.myagent), honoring
@@ -170,7 +200,8 @@ func (c *Config) ResolveWithAuth(authStore *auth.Store, providerName, modelID, b
 	if v := os.Getenv(EnvAPIKey); v != "" && providerName == defaultProvider {
 		providerCfg.APIKey = v
 	}
-	return llm.NewOpenAIProvider(providerCfg.APIKey), llm.Model{
+	base := llm.NewOpenAIProvider(providerCfg.APIKey)
+	return llm.NewRetryProvider(base, c.retryPolicy()), llm.Model{
 		ID:       modelID,
 		Provider: providerName,
 		BaseURL:  providerCfg.BaseURL,

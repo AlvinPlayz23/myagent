@@ -125,12 +125,19 @@ func (m Message) ToolCalls() []ContentBlock {
 // Mirrors pi's AssistantMessageEvent (packages/ai/src/types.ts). The Partial
 // field carries the in-progress assistant Message on delta events.
 type AssistantMessageEvent struct {
-	Type         string   `json:"type"` // start|text_start|text_delta|...|done|error
+	Type         string   `json:"type"` // start|text_start|text_delta|...|done|error|retry
 	ContentIndex int      `json:"contentIndex,omitempty"`
 	Delta        string   `json:"delta,omitempty"`
 	Partial      *Message `json:"partial,omitempty"`
 	Message      *Message `json:"message,omitempty"` // done
 	Error        *Message `json:"error,omitempty"`   // error
+	// Retryable marks an "error" event whose failure is transient (network or a
+	// retryable HTTP status), so a retry wrapper may re-issue the request.
+	Retryable bool `json:"retryable,omitempty"`
+	// Attempt / MaxAttempts describe a "retry" event: the upcoming attempt
+	// number and the configured attempt ceiling.
+	Attempt     int `json:"attempt,omitempty"`
+	MaxAttempts int `json:"maxAttempts,omitempty"`
 }
 
 // AgentEventType enumerates the agent lifecycle events. Names match pi's
@@ -150,6 +157,7 @@ const (
 	EventToolExecutionEnd    AgentEventType = "tool_execution_end"
 	EventCompactionStart     AgentEventType = "compaction_start"
 	EventCompactionEnd       AgentEventType = "compaction_end"
+	EventRetry               AgentEventType = "retry"
 )
 
 // AgentEvent is a single event emitted by the agent for UIs to render.
@@ -178,6 +186,10 @@ type AgentEvent struct {
 
 	// compaction_start / compaction_end
 	Compaction *CompactionInfo `json:"compaction,omitempty"`
+
+	// retry (Attempt is the upcoming attempt; MaxAttempts is the ceiling)
+	Attempt     int `json:"attempt,omitempty"`
+	MaxAttempts int `json:"maxAttempts,omitempty"`
 }
 
 // CompactionInfo carries the result of an auto-compaction. On compaction_end,

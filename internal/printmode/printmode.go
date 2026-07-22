@@ -64,6 +64,8 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 					return err
 				}
 			}
+		case types.EventRetry:
+			fmt.Fprintf(stderr, "\n[retry] provider error, retrying (attempt %d/%d)...\n", ev.Attempt, ev.MaxAttempts)
 		}
 		return nil
 	}
