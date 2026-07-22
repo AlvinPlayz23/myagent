@@ -30,3 +30,6 @@ pi/
 myagent-plan.md
 compaction-plan.md
 landing/
+desktop/
+tmp/
+.claude/

@@ -80,13 +80,28 @@ func (s *Session) Cwd() string { return s.cwd }
 // Messages returns the reconstructed conversation loaded from disk.
 func (s *Session) Messages() []types.Message { return s.messages }
 
-// Dir returns the sessions directory (~/.myagent/sessions), creating it.
+// SessionsDirEnv overrides the sessions directory. An absolute path is used
+// as-is; a relative value is resolved under config.Dir() so callers stay
+// within the myagent home (and keep sharing config.json + auth/). This lets
+// the desktop app isolate its sessions from the CLI/TUI via a subdirectory
+// while still reading the same provider credentials.
+const SessionsDirEnv = "MYAGENT_SESSIONS_DIR"
+
+// Dir returns the sessions directory (~/.myagent/sessions by default),
+// creating it. Honors SessionsDirEnv when set.
 func Dir() (string, error) {
 	base, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, "sessions")
+	if override := os.Getenv(SessionsDirEnv); override != "" {
+		if filepath.IsAbs(override) {
+			dir = override
+		} else {
+			dir = filepath.Join(base, override)
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
