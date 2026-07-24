@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // ToolResultMaxChars bounds a tool result's serialized text. Ported from pi

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/myagent/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/session"
 )
 
 func TestRunPrintModeRequiresFirstRunSetup(t *testing.T) {

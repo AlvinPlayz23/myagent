@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // scriptedProvider is a test Provider whose Stream emits a canned sequence of

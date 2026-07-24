@@ -7,11 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	"github.com/myagent/myagent/internal/llm"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/server/ws"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/server/ws"
 )
 
 // providerService is the server-owned source of truth for provider settings.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // OpenAIProvider is an OpenAI-compatible chat-completions streaming provider.

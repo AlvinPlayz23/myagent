@@ -27,17 +27,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/printmode"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/setup"
-	"github.com/myagent/myagent/internal/tools"
-	"github.com/myagent/myagent/internal/tui"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/printmode"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/setup"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/tui"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 func main() {

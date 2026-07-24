@@ -1,4 +1,4 @@
-module github.com/myagent/myagent
+module github.com/AlvinPlayz23/myagent
 
 go 1.26
 

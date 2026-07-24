@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/myagent/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 )
 
 // toolSnippets are the one-line "Available tools" descriptions. Adapted from pi

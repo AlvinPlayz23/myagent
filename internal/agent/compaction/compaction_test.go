@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // --- helpers ---

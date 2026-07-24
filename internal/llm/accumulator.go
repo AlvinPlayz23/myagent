@@ -3,7 +3,7 @@ package llm
 import (
 	"encoding/json"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // accumulator builds up the streamed assistant message block-by-block and emits

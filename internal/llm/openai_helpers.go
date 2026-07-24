@@ -3,7 +3,7 @@ package llm
 import (
 	"encoding/json"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // buildRequestBody converts a Request into the OpenAI chat-completions JSON body.

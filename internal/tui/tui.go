@@ -8,14 +8,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	"github.com/myagent/myagent/internal/llm"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // Run starts the interactive TUI. It drives the agent loop over the given

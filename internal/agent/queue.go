@@ -14,7 +14,7 @@ package agent
 import (
 	"sync"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // Queue is a concurrency-safe MessageQueue implementation.

@@ -1,6 +1,6 @@
 package compaction
 
-import "github.com/myagent/myagent/internal/types"
+import "github.com/AlvinPlayz23/myagent/internal/types"
 
 // FindCutPoint returns the index of the first message to KEEP after
 // compaction. Ported from pi findCutPoint, simplified for v1 (no split-turn

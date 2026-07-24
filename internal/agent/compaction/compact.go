@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // CompactionDetails is stored alongside a compaction entry. Ported from pi

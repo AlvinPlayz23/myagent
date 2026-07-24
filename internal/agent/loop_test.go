@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // fakeCompactionProvider is a test Provider that distinguishes summarization

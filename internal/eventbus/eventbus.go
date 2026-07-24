@@ -11,7 +11,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // defaultBuffer is the per-subscriber channel capacity. Large enough to absorb

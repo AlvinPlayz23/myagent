@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // BashTool executes a shell command in the working directory. Ported from pi

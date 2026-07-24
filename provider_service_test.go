@@ -3,10 +3,10 @@ package main
 import (
 	"testing"
 
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/server/ws"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/server/ws"
 )
 
 func TestProviderServiceSavesCustomProvidersWithoutLeakingKeys(t *testing.T) {

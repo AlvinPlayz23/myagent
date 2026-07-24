@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/tools"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // EventSink receives every AgentEvent emitted by the loop, in order.

@@ -18,7 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/myagent/myagent/internal/server/core"
+	"github.com/AlvinPlayz23/myagent/internal/server/core"
 )
 
 // Options configures the WebSocket server.

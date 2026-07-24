@@ -8,7 +8,7 @@ package llm
 import (
 	"context"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // Model describes a target model for a Provider request.

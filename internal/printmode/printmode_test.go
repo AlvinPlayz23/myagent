@@ -5,8 +5,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/session"
 )
 
 // TestRunReturnsSessionAppendFailure ensures a failed JSONL append stops the

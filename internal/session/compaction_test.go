@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // TestCompactionPersistAndReopen verifies that ApplyCompaction persists a

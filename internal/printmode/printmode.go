@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // Run executes a single prompt in print mode. Assistant text is written to

@@ -6,9 +6,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/myagent/myagent/internal/server/core"
-	"github.com/myagent/myagent/internal/server/rpc"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/server/core"
+	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // conn is one live WebSocket connection. A read loop parses JSON-RPC frames

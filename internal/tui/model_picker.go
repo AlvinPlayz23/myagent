@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	modelcatalog "github.com/myagent/myagent/internal/models"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 )
 
 type modelPicker struct {

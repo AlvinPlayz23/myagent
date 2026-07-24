@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // Sentinel errors mapped to JSON-RPC application codes by transports.

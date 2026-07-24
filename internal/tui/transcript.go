@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // blockKind discriminates a transcript block.

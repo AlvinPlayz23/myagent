@@ -12,10 +12,10 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/myagent/myagent/internal/llm"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // tickMsg drives the streaming-tail refresh + spinner animation.

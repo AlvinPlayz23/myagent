@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/myagent/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
 )
 
 func useTempDir(t *testing.T) {

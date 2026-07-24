@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/config"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // currentVersion is the on-disk session format version. Matches pi's

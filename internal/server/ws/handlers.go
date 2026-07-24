@@ -3,10 +3,10 @@ package ws
 import (
 	"errors"
 
-	"github.com/myagent/myagent/internal/server/core"
-	"github.com/myagent/myagent/internal/server/rpc"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/server/core"
+	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // dispatch routes one parsed request to its handler and writes the reply.

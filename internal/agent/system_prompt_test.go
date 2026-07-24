@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/myagent/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 )
 
 func TestBuildSystemPromptLoadsAGENTSFilesFromRootToCwd(t *testing.T) {

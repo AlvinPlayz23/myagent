@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // scriptedProvider is a fake llm.Provider that replies with canned text. If

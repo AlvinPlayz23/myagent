@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // TestRunnerReturnsOnEventFailure ensures persistence-hook failures stop the

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 )
 
 // Env var names. OPENAI_* are temporary overrides for a selected provider;

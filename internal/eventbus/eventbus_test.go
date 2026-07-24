@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // TestNoDroppedEvents verifies guaranteed delivery: every subscriber receives

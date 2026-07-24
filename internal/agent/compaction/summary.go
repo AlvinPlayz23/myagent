@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // GenerateSummary calls the provider/model to produce a structured summary of

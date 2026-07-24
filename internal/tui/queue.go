@@ -5,7 +5,7 @@
 package tui
 
 import (
-	"github.com/myagent/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
 )
 
 // msgQueue is the shared concurrency-safe agent.MessageQueue implementation,

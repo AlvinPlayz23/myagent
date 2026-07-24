@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	modelcatalog "github.com/myagent/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 )
 
 func TestAvailableModelCandidatesIncludesConfiguredCustomModels(t *testing.T) {

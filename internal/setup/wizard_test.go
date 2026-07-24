@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/myagent/myagent/internal/config"
-	modelcatalog "github.com/myagent/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 )
 
 func setTempDir(t *testing.T) {

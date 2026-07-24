@@ -9,13 +9,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/auth"
-	"github.com/myagent/myagent/internal/config"
-	"github.com/myagent/myagent/internal/llm"
-	modelcatalog "github.com/myagent/myagent/internal/models"
-	"github.com/myagent/myagent/internal/server/core"
-	"github.com/myagent/myagent/internal/server/ws"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/server/core"
+	"github.com/AlvinPlayz23/myagent/internal/server/ws"
 )
 
 // serveVersion is reported to clients in the server.hello notification.

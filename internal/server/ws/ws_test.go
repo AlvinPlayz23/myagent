@@ -13,10 +13,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/server/core"
-	"github.com/myagent/myagent/internal/server/rpc"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/server/core"
+	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 // fakeProvider replies to every request with canned text.

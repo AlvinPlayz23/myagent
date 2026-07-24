@@ -6,9 +6,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/types"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 var errNothingToCompact = errors.New("there is not enough conversation history to compact")

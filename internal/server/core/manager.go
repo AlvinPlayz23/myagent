@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/myagent/myagent/internal/agent"
-	"github.com/myagent/myagent/internal/agent/compaction"
-	"github.com/myagent/myagent/internal/llm"
-	"github.com/myagent/myagent/internal/session"
-	"github.com/myagent/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 )
 
 // ResolveFunc resolves a (provider, model) pair — either may be empty for the
