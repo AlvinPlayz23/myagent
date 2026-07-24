@@ -1,0 +1,26 @@
+version: 2.1
+
+jobs:
+  release:
+    docker:
+      - image: cimg/go:1.26
+    steps:
+      - checkout
+      - run:
+          name: Install GoReleaser
+          command: go install github.com/goreleaser/goreleaser@latest
+      - run:
+          name: Release to GitHub
+          command: goreleaser release --clean
+          environment:
+            GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+workflows:
+  release:
+    jobs:
+      - release:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /v.*/
