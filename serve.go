@@ -13,6 +13,7 @@ import (
 	"github.com/myagent/myagent/internal/auth"
 	"github.com/myagent/myagent/internal/config"
 	"github.com/myagent/myagent/internal/llm"
+	modelcatalog "github.com/myagent/myagent/internal/models"
 	"github.com/myagent/myagent/internal/server/core"
 	"github.com/myagent/myagent/internal/server/ws"
 )
@@ -69,6 +70,10 @@ func runServe(argv []string) error {
 	if _, _, err := cfg.ResolveWithAuth(authStore, providerFlag, modelFlag, baseURLFlag); err != nil {
 		return err
 	}
+	providerSettings := newProviderService(cfg, authStore, modelcatalog.New(dir))
+	if err := providerSettings.catalog.Load(); err != nil {
+		return fmt.Errorf("load models catalog: %w", err)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -104,7 +109,7 @@ func runServe(argv []string) error {
 			if modelID == "" {
 				modelID = modelFlag
 			}
-			return cfg.ResolveWithAuth(authStore, providerName, modelID, baseURLFlag)
+			return providerSettings.Resolve(providerName, modelID, baseURLFlag)
 		},
 		DefaultCwd:         cwd,
 		CompactionSettings: compaction.DefaultSettings,
@@ -113,9 +118,10 @@ func runServe(argv []string) error {
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	return ws.Serve(ctx, manager, ws.Options{
-		Addr:    addr,
-		Token:   token,
-		Version: serveVersion,
+		Addr:      addr,
+		Token:     token,
+		Version:   serveVersion,
+		Providers: providerSettings,
 		OnListen: func(addr net.Addr) {
 			fmt.Printf("connect: ws://%s/ws?token=%s\n", addr, token)
 		},

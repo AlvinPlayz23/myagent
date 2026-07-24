@@ -25,6 +25,8 @@ go.work.sum
 Thumbs.db
 *.swp
 
+nul
+
 # ref files
 pi/
 myagent-plan.md

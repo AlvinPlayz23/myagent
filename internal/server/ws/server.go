@@ -32,6 +32,9 @@ type Options struct {
 	Token string
 	// Version is reported to clients in the server.hello notification.
 	Version string
+	// Providers is optional for backwards-compatible server deployments. When
+	// present, it enables the desktop-native provider manager RPC surface.
+	Providers ProviderService
 }
 
 // NewToken generates a random hex token for --token-less startups.
@@ -112,7 +115,7 @@ func serveWS(ctx context.Context, w http.ResponseWriter, r *http.Request, manage
 		return
 	}
 
-	conn := newConn(ctx, c, manager, opts.Version)
+	conn := newConn(ctx, c, manager, opts.Version, opts.Providers)
 	conn.run()
 }
 

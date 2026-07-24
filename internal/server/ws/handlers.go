@@ -167,6 +167,80 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		}
 		return map[string]any{}, nil
 
+	case "provider.list":
+		if c.providers == nil {
+			return nil, rpc.NewError(rpc.CodeMethodNotFound, "provider management is unavailable")
+		}
+		out, err := c.providers.List()
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInternalError, "list providers: %v", err)
+		}
+		return out, nil
+
+	case "provider.save":
+		if c.providers == nil {
+			return nil, rpc.NewError(rpc.CodeMethodNotFound, "provider management is unavailable")
+		}
+		var p ProviderInput
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		out, err := c.providers.Save(p)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		return out, nil
+
+	case "provider.delete":
+		if c.providers == nil {
+			return nil, rpc.NewError(rpc.CodeMethodNotFound, "provider management is unavailable")
+		}
+		var p struct {
+			Name string `json:"name"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		out, err := c.providers.Delete(p.Name)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		return out, nil
+
+	case "provider.setDefault":
+		if c.providers == nil {
+			return nil, rpc.NewError(rpc.CodeMethodNotFound, "provider management is unavailable")
+		}
+		var p struct {
+			Name  string `json:"name"`
+			Model string `json:"model"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		out, err := c.providers.SetDefault(p.Name, p.Model)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		return out, nil
+
+	case "provider.discover":
+		if c.providers == nil {
+			return nil, rpc.NewError(rpc.CodeMethodNotFound, "provider management is unavailable")
+		}
+		var p struct {
+			Name   string `json:"name"`
+			APIKey string `json:"apiKey"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		models, err := c.providers.Discover(c.ctx, p.Name, p.APIKey)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		return map[string]any{"models": models}, nil
+
 	default:
 		return nil, rpc.NewError(rpc.CodeMethodNotFound, "method %q not found", req.Method)
 	}

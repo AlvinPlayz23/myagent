@@ -17,10 +17,11 @@ import (
 // single-writer requirement. Each session the connection owns gets an event
 // pump goroutine forwarding session.event / session.done notifications.
 type conn struct {
-	id      string
-	ws      *websocket.Conn
-	manager *core.Manager
-	version string
+	id        string
+	ws        *websocket.Conn
+	manager   *core.Manager
+	version   string
+	providers ProviderService
 
 	// ctx is canceled when the connection closes (or the server shuts down),
 	// stopping event pumps and in-flight handler writes.
@@ -34,16 +35,17 @@ type conn struct {
 	wg     sync.WaitGroup
 }
 
-func newConn(parent context.Context, ws *websocket.Conn, manager *core.Manager, version string) *conn {
+func newConn(parent context.Context, ws *websocket.Conn, manager *core.Manager, version string, providers ProviderService) *conn {
 	ctx, cancel := context.WithCancel(parent)
 	return &conn{
-		id:      newConnID(),
-		ws:      ws,
-		manager: manager,
-		version: version,
-		ctx:     ctx,
-		cancel:  cancel,
-		pumps:   map[string]struct{}{},
+		id:        newConnID(),
+		ws:        ws,
+		manager:   manager,
+		version:   version,
+		providers: providers,
+		ctx:       ctx,
+		cancel:    cancel,
+		pumps:     map[string]struct{}{},
 	}
 }
 

@@ -52,6 +52,15 @@ func (s *Store) Set(provider string, credentials Credentials) error {
 	return s.Save()
 }
 
+// Delete removes the stored credentials for a built-in provider.
+func (s *Store) Delete(provider string) error {
+	if s.Providers == nil {
+		return nil
+	}
+	delete(s.Providers, provider)
+	return s.Save()
+}
+
 func (s *Store) Save() error {
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
