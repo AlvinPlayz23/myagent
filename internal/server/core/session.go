@@ -263,6 +263,17 @@ func (s *ServerSession) SetModel(provider llm.Provider, model llm.Model) error {
 	return nil
 }
 
+// SetTitle persists a user-assigned title. It may run while an agent turn is
+// active; the session mutex serializes its append with event persistence.
+func (s *ServerSession) SetTitle(title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	return s.sess.SetTitle(title)
+}
+
 // claim binds the session to connID. Fails with ErrNotOwner when a different
 // live connection already owns it; unowned sessions are claimed on access.
 func (s *ServerSession) claim(connID string) error {

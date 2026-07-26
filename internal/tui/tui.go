@@ -44,8 +44,23 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		r.reset()
 		return nil
 	})
-	m.sessionTitle = session.Title(history)
-	m.hasSessionTitle = m.sessionTitle != "new"
+	m.sessionTitle = ""
+	if sess != nil {
+		m.sessionTitle = sess.Title()
+	}
+	m.hasSessionTitle = m.sessionTitle != "" && m.sessionTitle != "new"
+	if persistedConfig != nil {
+		m.welcomeStyle = normalizeWelcomeStyle(persistedConfig.WelcomeStyle)
+		m.saveWelcomeStyle = func(style welcomeStyle) error {
+			previous := persistedConfig.WelcomeStyle
+			persistedConfig.WelcomeStyle = string(style)
+			if err := config.Save(persistedConfig); err != nil {
+				persistedConfig.WelcomeStyle = previous
+				return err
+			}
+			return nil
+		}
+	}
 	m.setTerminalTitle = terminal.SetTitle
 	m.updateTerminalTitle()
 	defer terminal.SetTitle("myagent")
@@ -151,6 +166,12 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		sess = resumed
 		history := resumed.Messages()
 		return history, nil
+	}
+	m.renameSession = func(title string) error {
+		if sess == nil {
+			return fmt.Errorf("no active session")
+		}
+		return sess.SetTitle(title)
 	}
 
 	// Seed the transcript with prior conversation so resumed sessions show

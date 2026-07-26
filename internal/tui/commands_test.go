@@ -27,9 +27,12 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/new", kind: commandNew},
 		{input: "/compact", kind: commandCompact},
 		{input: "/resume", kind: commandResume},
+		{input: "/rename a better title", kind: commandRename, arg: "a better title"},
+		{input: "/rename", want: "usage: /rename <title>"},
 		{input: "/model", kind: commandModel},
 		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
 		{input: "/providers", kind: commandProviders},
+		{input: "/customize", kind: commandCustomize},
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -48,6 +51,49 @@ func TestParseSlashCommand(t *testing.T) {
 				t.Fatalf("command = %#v, want kind %d arg %q", got, tt.kind, tt.arg)
 			}
 		})
+	}
+}
+
+func TestRenameCommandPersistsActiveSessionTitle(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	var renamed string
+	m.renameSession = func(title string) error { renamed = title; return nil }
+
+	m.runCommand("/rename Better session title")
+	if renamed != "Better session title" {
+		t.Fatalf("renamed = %q", renamed)
+	}
+	if m.sessionTitle != "Better session title" || !m.hasSessionTitle {
+		t.Fatalf("title state = %q/%v", m.sessionTitle, m.hasSessionTitle)
+	}
+	if len(r.history) != 1 {
+		t.Fatalf("rename changed history length to %d", len(r.history))
+	}
+}
+
+func TestCustomizeCommandSelectsAndSavesOrb(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	var saved welcomeStyle
+	m.saveWelcomeStyle = func(style welcomeStyle) error {
+		saved = style
+		return nil
+	}
+
+	m.runCommand("/customize")
+	if !m.customize.active || m.customize.selected().style != welcomeDefault {
+		t.Fatal("customize picker did not open on the current default style")
+	}
+	m.customize.move(1)
+	m.applyWelcomeStyle()
+
+	if m.customize.active || m.welcomeStyle != welcomeOrb || saved != welcomeOrb {
+		t.Fatalf("orb selection = active %v style %q saved %q", m.customize.active, m.welcomeStyle, saved)
+	}
+	if !strings.Contains(m.viewport.View(), "●") {
+		t.Fatalf("selected orb is not visible in empty-session viewport: %q", m.viewport.View())
 	}
 }
 

@@ -25,6 +25,9 @@ type theme struct {
 	spinner       lipgloss.Style
 	cmdPickerSel  lipgloss.Style
 	cmdPickerItem lipgloss.Style
+	orbDim        lipgloss.Style
+	orbMedium     lipgloss.Style
+	orbBright     lipgloss.Style
 }
 
 func newTheme() *theme {
@@ -43,6 +46,9 @@ func newTheme() *theme {
 		spinner:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
 		cmdPickerSel:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
 		cmdPickerItem: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		orbDim:        lipgloss.NewStyle().Foreground(lipgloss.Color("24")),
+		orbMedium:     lipgloss.NewStyle().Foreground(lipgloss.Color("31")),
+		orbBright:     lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 	}
 }
 

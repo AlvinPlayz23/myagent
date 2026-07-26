@@ -54,6 +54,9 @@ type entry struct {
 	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int             `json:"tokensBefore,omitempty"`
 	Details          json.RawMessage `json:"details,omitempty"`
+
+	// type == "title"
+	Title string `json:"title,omitempty"`
 }
 
 // Session is an open, append-only session file.
@@ -66,6 +69,7 @@ type Session struct {
 	w        *bufio.Writer
 	messages []types.Message
 	entryIDs []string // entry id parallel to messages; "" for synthetic summary
+	title    string
 }
 
 // ID returns the session id.
@@ -80,9 +84,13 @@ func (s *Session) Cwd() string { return s.cwd }
 // Messages returns the reconstructed conversation loaded from disk.
 func (s *Session) Messages() []types.Message { return s.messages }
 
-// Title returns the first user prompt as a human-readable session title. A
-// generated or user-editable title can replace this fallback in the future.
-func (s *Session) Title() string { return Title(s.messages) }
+// Title returns the user-assigned title, or the first user prompt as a fallback.
+func (s *Session) Title() string {
+	if s.title != "" {
+		return s.title
+	}
+	return Title(s.messages)
+}
 
 // Title returns the first non-summary user prompt in messages, or "new" for
 // an empty conversation.
@@ -200,6 +208,12 @@ func Open(path string) (*Session, error) {
 			// map entry isn't aliased.
 			c := e
 			latestCompaction = &c
+		case "title":
+			if strings.TrimSpace(e.Title) != "" {
+				s.title = e.Title
+			}
+			entriesByID[e.ID] = e
+			order = append(order, e)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -296,6 +310,23 @@ func buildChain(byID map[string]entry, leafID, stopID string) []entry {
 }
 
 // AppendMessage appends a message entry, chaining it to the previous entry.
+// SetTitle persists a user-assigned title for this session. Title entries are
+// chained like messages so later appends retain a valid session tree.
+func (s *Session) SetTitle(title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("session: title cannot be empty")
+	}
+	id := shortID()
+	e := entry{Type: "title", ID: id, ParentID: s.lastID, Timestamp: nowISO(), Title: title}
+	if err := s.writeLine(e); err != nil {
+		return err
+	}
+	s.lastID = &id
+	s.title = title
+	return nil
+}
+
 func (s *Session) AppendMessage(m types.Message) error {
 	id := shortID()
 	e := entry{Type: "message", ID: id, ParentID: s.lastID, Timestamp: nowISO(), Message: &m}
@@ -437,6 +468,7 @@ type Info struct {
 	Modified     time.Time // file mtime
 	MessageCount int       // number of persisted message entries
 	Preview      string    // first user message text, truncated
+	Title        string    // latest user-assigned title
 }
 
 // previewMaxLen bounds the Preview string length.
@@ -502,7 +534,16 @@ func readInfo(path string) (Info, error) {
 			continue
 		}
 		var e entry
-		if err := json.Unmarshal(line, &e); err != nil || e.Type != "message" {
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if e.Type == "title" {
+			if strings.TrimSpace(e.Title) != "" {
+				info.Title = e.Title
+			}
+			continue
+		}
+		if e.Type != "message" {
 			continue
 		}
 		info.MessageCount++

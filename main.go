@@ -277,7 +277,10 @@ func runSessions(argv []string) error {
 	}
 	fmt.Printf("%-36s  %5s  %-19s  %s\n", "ID", "MSGS", "MODIFIED", "PREVIEW")
 	for _, info := range infos {
-		preview := info.Preview
+		preview := info.Title
+		if preview == "" {
+			preview = info.Preview
+		}
 		if preview == "" {
 			preview = "(no messages)"
 		}

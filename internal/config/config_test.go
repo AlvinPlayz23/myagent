@@ -45,6 +45,7 @@ func testConfig() *Config {
 			"local":  {Type: DefaultProviderType, APIKey: "local-key", BaseURL: "http://localhost:11434/v1"},
 		},
 		DefaultModel: "openai/gpt-4o",
+		WelcomeStyle: "orb",
 	}
 }
 
@@ -87,7 +88,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.DefaultModel != want.DefaultModel || len(got.Providers) != 2 || got.Providers["local"].BaseURL != "http://localhost:11434/v1" {
+	if got.DefaultModel != want.DefaultModel || got.WelcomeStyle != want.WelcomeStyle || len(got.Providers) != 2 || got.Providers["local"].BaseURL != "http://localhost:11434/v1" {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if !strings.HasSuffix(string(data), "\n") {

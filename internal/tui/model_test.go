@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/AlvinPlayz23/myagent/internal/agent"
 )
 
 func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
@@ -37,6 +40,77 @@ func TestViewFitsTerminalHeight(t *testing.T) {
 	}
 	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
 		t.Fatalf("view height = %d, terminal height = %d", got, m.height)
+	}
+}
+
+func TestWelcomeShownForEmptySession(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+
+	if content := m.viewport.View(); !strings.Contains(content, "myagent") || !strings.Contains(content, "Type a prompt to begin") {
+		t.Fatalf("empty-session viewport does not contain welcome: %q", content)
+	}
+}
+
+func TestWelcomeHiddenAfterFirstPrompt(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+	m.input.SetValue("hello")
+	m.submit(false)
+
+	content := m.viewport.View()
+	if strings.Contains(content, "Your terminal coding agent") {
+		t.Fatalf("welcome remained after prompt submission: %q", content)
+	}
+	if !strings.Contains(content, "hello") {
+		t.Fatalf("submitted prompt missing from viewport: %q", content)
+	}
+}
+
+func TestWelcomeDoesNotReturnAfterClearingEstablishedConversation(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+	m.hasSessionTitle = true
+	m.transcript.addUser("prior prompt")
+	m.refreshViewport()
+	m.transcript.clear()
+	m.refreshViewport()
+
+	if content := m.viewport.View(); strings.Contains(content, "Your terminal coding agent") {
+		t.Fatalf("welcome returned after clearing an established conversation: %q", content)
+	}
+}
+
+func TestWelcomeUsesCompactCopyInNarrowTerminal(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(30, 20)
+
+	content := m.viewport.View()
+	if !strings.Contains(content, "Type a prompt to begin") {
+		t.Fatalf("narrow welcome missing compact hint: %q", content)
+	}
+	if strings.Contains(content, "/help for commands") {
+		t.Fatalf("narrow welcome retained wide hint: %q", content)
+	}
+}
+
+func TestOrbWelcomeAnimatesWhileSessionIsEmpty(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.welcomeStyle = welcomeOrb
+	m.onResize(80, 24)
+	first := m.viewport.View()
+
+	for range 8 {
+		m.Update(tickMsg{})
+	}
+	second := m.viewport.View()
+	if first == second {
+		t.Fatal("orb welcome did not change across animation ticks")
+	}
+	if !strings.Contains(second, "myagent") || !strings.Contains(second, "●") {
+		t.Fatalf("animated orb welcome is incomplete: %q", second)
 	}
 }
 

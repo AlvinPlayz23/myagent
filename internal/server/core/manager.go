@@ -164,6 +164,15 @@ func (m *Manager) SetModel(connID, sessionID, providerName, modelID string) erro
 	return ss.SetModel(provider, model)
 }
 
+// Rename persists a title for an owned session.
+func (m *Manager) Rename(connID, sessionID, title string) error {
+	ss, err := m.Get(connID, sessionID)
+	if err != nil {
+		return err
+	}
+	return ss.SetTitle(title)
+}
+
 // Close removes the session from the manager and closes its file. The JSONL
 // file remains on disk and can be resumed later.
 func (m *Manager) Close(connID, sessionID string) error {

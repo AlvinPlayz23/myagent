@@ -263,6 +263,7 @@ to run, or **Esc** to dismiss it.
 | `/model`             | Open the searchable model selector for configured providers |
 | `/model <provider/model-id>` | Select an exact model immediately |
 | `/providers`         | Add API keys for compatible catalog providers |
+| `/customize`         | Choose the default text or animated orb startup style |
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
@@ -279,6 +280,10 @@ transport. Providers already saved with an API key are marked `[x]`. Select any
 provider to enter or replace its key in the masked field, then press **Enter**
 to save it. The key is stored in `auth/providers.json`, leaving custom providers
 in `config.json` separate.
+`/customize` selects the empty-session welcome shown at startup and after
+`/new`. The default is the static `myagent` text; the optional dotted orb
+animates only while the empty welcome is visible. The choice is persisted in
+`config.json`.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
@@ -330,6 +335,7 @@ on disk and can be resumed after reconnecting (they interop with the TUI's
 | `session.create`   | `{cwd?, provider?, model?}`       | `{sessionId, model, cwd}`           |
 | `session.resume`   | `{sessionId}`                     | `{sessionId, model, cwd, messages}` |
 | `session.list`     | `{}`                              | `{sessions: [...]}`                 |
+| `session.rename`   | `{sessionId, title}`              | `{title}` — persists a session title |
 | `session.prompt`   | `{sessionId, message}`            | `{}` — ack; turn streams via events |
 | `session.steer`    | `{sessionId, message}`            | `{queued}` (error if idle)          |
 | `session.followUp` | `{sessionId, message}`            | `{queued}` (error if idle)          |

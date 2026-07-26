@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -71,6 +72,55 @@ func (p *sessionPicker) height() int {
 	return 1 + min(sessionPickerMaxVisible, len(p.items))
 }
 
+type welcomeStyle string
+
+const (
+	welcomeDefault welcomeStyle = "default"
+	welcomeOrb     welcomeStyle = "orb"
+)
+
+type welcomeChoice struct {
+	style       welcomeStyle
+	label       string
+	description string
+}
+
+var welcomeChoices = []welcomeChoice{
+	{style: welcomeDefault, label: "Default", description: "myagent text"},
+	{style: welcomeOrb, label: "Orb", description: "animated dotted orb"},
+}
+
+type customizePicker struct {
+	active bool
+	sel    int
+}
+
+func (p *customizePicker) open(current welcomeStyle) {
+	p.active = true
+	p.sel = 0
+	for i, choice := range welcomeChoices {
+		if choice.style == current {
+			p.sel = i
+			break
+		}
+	}
+}
+
+func (p *customizePicker) close() { p.active = false }
+
+func (p *customizePicker) move(delta int) {
+	p.sel = (p.sel + delta + len(welcomeChoices)) % len(welcomeChoices)
+}
+
+func (p *customizePicker) selected() welcomeChoice { return welcomeChoices[p.sel] }
+
+func normalizeWelcomeStyle(style string) welcomeStyle {
+	if welcomeStyle(style) == welcomeOrb {
+		return welcomeOrb
+	}
+	return welcomeDefault
+}
+
 // model is the bubbletea root model for the interactive TUI.
 type model struct {
 	ctx    context.Context
@@ -85,9 +135,11 @@ type model struct {
 	viewport   viewport.Model
 	input      textarea.Model
 	picker     commandPicker
+	files      filePicker
 	sessions   sessionPicker
 	models     modelPicker
 	providers  providerPicker
+	customize  customizePicker
 	keyInput   textinput.Model
 	keyFor     modelcatalog.Provider
 
@@ -100,6 +152,8 @@ type model struct {
 	statusMsg     string
 	promptHistory []string
 	historyIndex  int // -1 means the composer is not browsing prompt history.
+	welcomeStyle  welcomeStyle
+	welcomeFrame  int
 
 	modelID string
 	cwd     string
@@ -112,6 +166,7 @@ type model struct {
 	newSession         func() error
 	listSessions       func() ([]session.Info, error)
 	resumeSession      func(string) ([]types.Message, error)
+	renameSession      func(string) error
 	availableModels    func() []modelcatalog.Model
 	selectModel        func(string, string) (llm.Provider, llm.Model, error)
 	availableProviders func() []modelcatalog.Provider
@@ -119,6 +174,7 @@ type model struct {
 	providerIsCustom   func(string) bool
 	providerAPIKey     func(string) string
 	configureProvider  func(modelcatalog.Provider, string) error
+	saveWelcomeStyle   func(welcomeStyle) error
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
@@ -151,6 +207,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		keyInput:     key,
 		picker:       newCommandPicker(),
 		historyIndex: -1,
+		welcomeStyle: welcomeDefault,
 		modelID:      modelID,
 		cwd:          cwd,
 		newSession:   createSession,
@@ -219,7 +276,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.input.Value() != previous {
 			m.historyIndex = -1
 		}
-		m.picker.sync(m.input.Value())
+		m.syncPickers()
 		m.updateLayout()
 		return m, cmd
 
@@ -256,8 +313,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		refresh := false
 		if m.working {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			refresh = true
+		}
+		if m.showWelcome() && m.welcomeStyle == welcomeOrb {
+			m.welcomeFrame = (m.welcomeFrame + 1) % 32
+			refresh = true
+		}
+		if refresh {
 			m.refreshViewport()
 		}
 		return m, tickCmd()
@@ -305,6 +370,9 @@ func (m *model) panelHeight() int {
 	const fixedHeight = 9
 	available := m.height - fixedHeight - 1
 	desired := m.picker.height()
+	if m.files.active {
+		desired = m.files.height()
+	}
 	if m.sessions.active {
 		desired = m.sessions.height()
 	}
@@ -313,6 +381,9 @@ func (m *model) panelHeight() int {
 	}
 	if m.providers.active || m.keyFor.ID != "" {
 		desired = min(10, max(2, len(m.providers.items)+1))
+	}
+	if m.customize.active {
+		desired = len(welcomeChoices) + 1
 	}
 	return min(desired, max(0, available))
 }
@@ -376,6 +447,21 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.customize.active {
+		switch ks {
+		case "up":
+			m.customize.move(-1)
+		case "down":
+			m.customize.move(1)
+		case "enter":
+			return m.applyWelcomeStyle()
+		case "esc":
+			m.customize.close()
+			m.statusMsg = "Customization cancelled."
+			m.updateLayout()
+		}
+		return m, nil
+	}
 	if m.keyFor.ID != "" {
 		switch ks {
 		case "esc":
@@ -406,6 +492,22 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateLayout()
 		}
 		return m, nil
+	}
+	if m.files.active {
+		switch ks {
+		case "up":
+			m.files.move(-1)
+			return m, nil
+		case "down":
+			m.files.move(1)
+			return m, nil
+		case "tab", "enter":
+			return m.acceptFilePicker()
+		case "esc":
+			m.files.dismiss(m.input.Value())
+			m.updateLayout()
+			return m, nil
+		}
 	}
 	if m.picker.active {
 		switch ks {
@@ -477,9 +579,31 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.input.Value() != previous {
 		m.historyIndex = -1
 	}
-	m.picker.sync(m.input.Value())
+	m.syncPickers()
 	m.updateLayout()
 	return m, cmd
+}
+
+func (m *model) syncPickers() {
+	m.picker.sync(m.input.Value())
+	if !m.picker.active {
+		m.files.sync(m.input.Value(), m.cwd)
+	} else {
+		m.files.close()
+	}
+}
+
+func (m *model) acceptFilePicker() (tea.Model, tea.Cmd) {
+	path, ok := m.files.selected()
+	if !ok {
+		return m, nil
+	}
+	value := m.input.Value()
+	value = value[:m.files.start] + "@" + path + value[m.files.end:]
+	m.input.SetValue(value)
+	m.files.dismiss(value)
+	m.updateLayout()
+	return m, nil
 }
 
 func (m *model) acceptCommandPicker(submit bool) (tea.Model, tea.Cmd) {
@@ -511,7 +635,10 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runner.resume(history)
-	m.sessionTitle = session.Title(history)
+	m.sessionTitle = info.Title
+	if m.sessionTitle == "" {
+		m.sessionTitle = session.Title(history)
+	}
 	m.hasSessionTitle = m.sessionTitle != "new"
 	m.updateTerminalTitle()
 	m.sessions.close()
@@ -542,17 +669,23 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.picker.close()
+	m.files.close()
 	m.updateLayout()
 	if strings.HasPrefix(text, "/") {
 		m.input.Reset()
 		m.historyIndex = -1
 		return m.runCommand(text)
 	}
+	expanded, err := expandFileMentions(text, m.cwd)
+	if err != nil {
+		m.statusMsg = err.Error()
+		return m, nil
+	}
 	m.addPromptHistory(text)
 	m.setSessionTitle(text)
 	m.input.Reset()
 	m.historyIndex = -1
-	um := userMessage(text)
+	um := userMessage(expanded)
 
 	if m.working {
 		if followUp {
@@ -611,7 +744,7 @@ func (m *model) navigatePromptHistory(direction int) bool {
 	} else {
 		m.input.SetValue(m.promptHistory[index])
 	}
-	m.picker.sync(m.input.Value())
+	m.syncPickers()
 	m.updateLayout()
 	return true
 }
@@ -656,6 +789,10 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		return m.openModelPicker(cmd.arg)
 	case commandProviders:
 		return m.openProviderPicker()
+	case commandCustomize:
+		m.customize.open(m.welcomeStyle)
+		m.statusMsg = "Choose the empty-session startup style."
+		m.updateLayout()
 	case commandCompact:
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.cancel = cancel
@@ -681,7 +818,36 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.sessions.open(infos)
 		m.statusMsg = "Select a session to resume."
 		m.updateLayout()
+	case commandRename:
+		if m.renameSession == nil {
+			m.statusMsg = "Unable to rename the current session."
+			return m, nil
+		}
+		if err := m.renameSession(cmd.arg); err != nil {
+			m.statusMsg = "Could not rename session: " + err.Error()
+			return m, nil
+		}
+		m.sessionTitle = cmd.arg
+		m.hasSessionTitle = true
+		m.updateTerminalTitle()
+		m.statusMsg = "Session renamed."
 	}
+	return m, nil
+}
+
+func (m *model) applyWelcomeStyle() (tea.Model, tea.Cmd) {
+	choice := m.customize.selected()
+	if m.saveWelcomeStyle != nil {
+		if err := m.saveWelcomeStyle(choice.style); err != nil {
+			m.statusMsg = "Could not save customization: " + err.Error()
+			return m, nil
+		}
+	}
+	m.welcomeStyle = choice.style
+	m.welcomeFrame = 0
+	m.customize.close()
+	m.statusMsg = "Startup style set to " + choice.label + "."
+	m.updateLayout()
 	return m, nil
 }
 
@@ -857,10 +1023,77 @@ func (m *model) refreshViewport() {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(m.transcript.render(m.width))
+	content := m.transcript.render(m.width)
+	if m.showWelcome() {
+		content = m.renderWelcome()
+	}
+	m.viewport.SetContent(content)
 	if atBottom || m.working {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *model) showWelcome() bool {
+	return !m.hasSessionTitle && len(m.transcript.blocks) == 0
+}
+
+// renderWelcome returns the transient empty-session content. It deliberately
+// lives outside the transcript so it is never persisted as conversation
+// history and disappears as soon as the first prompt gives the session a title.
+func (m *model) renderWelcome() string {
+	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
+	if m.width < 24 {
+		if m.welcomeStyle == welcomeOrb {
+			return m.renderOrb(true) + "\n\n" + title
+		}
+		return title
+	}
+
+	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
+	hint := "Type a prompt to begin · /help for commands"
+	if m.width < 44 {
+		hint = "Type a prompt · /help for commands"
+	}
+	if m.width < 34 {
+		hint = "Type a prompt to begin"
+	}
+	hint = centerLine(m.th.muted.Render(hint), m.width)
+	if m.welcomeStyle == welcomeOrb {
+		compact := m.viewport.Height() < 14
+		return m.renderOrb(compact) + "\n\n" + title + "\n" + subtitle + "\n\n" + hint
+	}
+	return title + "\n" + subtitle + "\n\n" + hint
+}
+
+// renderOrb draws a fixed dotted sphere while a bright, slightly curved band
+// moves across it. Keeping the silhouette stable avoids layout jitter.
+func (m *model) renderOrb(compact bool) string {
+	halfWidths := []int{2, 4, 6, 7, 7, 6, 4, 2}
+	if compact {
+		halfWidths = []int{1, 3, 4, 3, 1}
+	}
+	phase := 2 * math.Pi * float64(m.welcomeFrame) / 32
+	travel := float64(halfWidths[len(halfWidths)/2] - 1)
+	center := travel * math.Sin(phase)
+
+	rows := make([]string, 0, len(halfWidths))
+	for y, halfWidth := range halfWidths {
+		wave := center + 0.7*math.Sin(float64(y)*0.8+phase)
+		var row strings.Builder
+		for x := -halfWidth; x <= halfWidth; x++ {
+			distance := math.Abs(float64(x) - wave)
+			switch {
+			case distance < 1.25:
+				row.WriteString(m.th.orbBright.Render("●"))
+			case distance < 3.25:
+				row.WriteString(m.th.orbMedium.Render("•"))
+			default:
+				row.WriteString(m.th.orbDim.Render("·"))
+			}
+		}
+		rows = append(rows, centerLine(row.String(), m.width))
+	}
+	return strings.Join(rows, "\n")
 }
 
 // View composes the transcript viewport, status line, input, and footer.
@@ -894,11 +1127,17 @@ func (m *model) renderPanel() string {
 	if m.models.active {
 		return m.renderModelPicker()
 	}
+	if m.customize.active {
+		return m.renderCustomizePicker()
+	}
 	if m.keyFor.ID != "" {
 		return m.renderProviderKeyEntry()
 	}
 	if m.providers.active {
 		return m.renderProviderPicker()
+	}
+	if m.files.active {
+		return m.renderFilePicker()
 	}
 	count := m.panelHeight()
 	if count == 0 {
@@ -918,6 +1157,52 @@ func (m *model) renderPanel() string {
 		if len(m.picker.matched) > count && i == end-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.picker.sel+1, len(m.picker.matched)), m.width)
 		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderFilePicker() string {
+	count := m.panelHeight()
+	if count == 0 {
+		return ""
+	}
+	start, end := m.files.visibleRange(count)
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Files — ↑/↓ select, enter or tab insert, esc cancel")}
+	count = min(count-1, end-start)
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start, end = m.files.visibleRange(count)
+	for i := start; i < end; i++ {
+		path := m.files.items[m.files.matched[i]]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.files.sel {
+			marker, style = "› ", m.th.cmdPickerSel
+		}
+		line := marker + path
+		if len(m.files.matched) > count && i == end-1 {
+			line = padBetween(line, fmt.Sprintf("%d/%d", m.files.sel+1, len(m.files.matched)), m.width)
+		}
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderCustomizePicker() string {
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Startup style — ↑/↓ select, enter save, esc cancel")}
+	for i, choice := range welcomeChoices {
+		marker := "  "
+		style := m.th.cmdPickerItem
+		if i == m.customize.sel {
+			marker = "> "
+			style = m.th.cmdPickerSel
+		}
+		current := ""
+		if choice.style == m.welcomeStyle {
+			current = "  (current)"
+		}
+		line := fmt.Sprintf("%s%-10s %s%s", marker, choice.label, choice.description, current)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
 	}
 	return strings.Join(lines, "\n")
@@ -952,11 +1237,14 @@ func (m *model) renderSessionPicker() string {
 		if len(id) > 8 {
 			id = id[:8]
 		}
-		preview := info.Preview
-		if preview == "" {
-			preview = "(no messages)"
+		title := info.Title
+		if title == "" {
+			title = info.Preview
 		}
-		line := fmt.Sprintf("%s%s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, preview)
+		if title == "" {
+			title = "(no messages)"
+		}
+		line := fmt.Sprintf("%s%s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
 		if len(m.sessions.items) > count && i == start+count-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
 		}

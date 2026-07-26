@@ -2,6 +2,7 @@ package ws
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
@@ -31,6 +32,11 @@ type sessionRef struct {
 type sessionText struct {
 	SessionID string `json:"sessionId"`
 	Message   string `json:"message"`
+}
+
+type sessionRename struct {
+	SessionID string `json:"sessionId"`
+	Title     string `json:"title"`
 }
 
 func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
@@ -153,6 +159,23 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			return nil, coreError(err)
 		}
 		return map[string]any{}, nil
+
+	case "session.rename":
+		var p sessionRename
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		if p.SessionID == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		}
+		p.Title = strings.TrimSpace(p.Title)
+		if p.Title == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "title is required")
+		}
+		if err := c.manager.Rename(c.id, p.SessionID, p.Title); err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{"title": p.Title}, nil
 
 	case "session.close":
 		var p sessionRef
@@ -317,5 +340,6 @@ func sessionInfoJSON(info session.Info) map[string]any {
 		"modified":     info.Modified.UTC().Format("2006-01-02T15:04:05.000Z"),
 		"messageCount": info.MessageCount,
 		"preview":      info.Preview,
+		"title":        info.Title,
 	}
 }

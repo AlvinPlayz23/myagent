@@ -71,6 +71,7 @@ type Config struct {
 	Providers    map[string]ProviderConfig `json:"providers"`
 	DefaultModel string                    `json:"default_model"`
 	Retry        *RetryConfig              `json:"retry,omitempty"`
+	WelcomeStyle string                    `json:"welcomeStyle,omitempty"`
 }
 
 // RetryConfig tunes automatic retries of transient provider failures. Omitted

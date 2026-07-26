@@ -49,3 +49,13 @@ func padBetween(left, right string, width int) string {
 	}
 	return left + strings.Repeat(" ", gap) + right
 }
+
+// centerLine horizontally centers styled terminal text without counting ANSI
+// escape sequences as visible cells.
+func centerLine(text string, width int) string {
+	padding := (width - lipgloss.Width(text)) / 2
+	if padding <= 0 {
+		return text
+	}
+	return strings.Repeat(" ", padding) + text
+}

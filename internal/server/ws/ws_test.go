@@ -360,13 +360,16 @@ func TestSessionListAndResume(t *testing.T) {
 	c.result(c.call("session.create", nil), &created)
 	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "hello"}), &struct{}{})
 	c.waitNotif("session.done")
-	c.result(c.call("session.close", map[string]any{"sessionId": created.SessionID}), &struct{}{})
+	c.result(c.call("session.rename", map[string]any{"sessionId": created.SessionID, "title": "renamed over RPC"}), &struct {
+		Title string `json:"title"`
+	}{})
 
 	// List shows the persisted session.
 	var list struct {
 		Sessions []struct {
 			ID           string `json:"id"`
 			MessageCount int    `json:"messageCount"`
+			Title        string `json:"title"`
 		} `json:"sessions"`
 	}
 	c.result(c.call("session.list", nil), &list)
@@ -375,6 +378,10 @@ func TestSessionListAndResume(t *testing.T) {
 	}
 	if list.Sessions[0].MessageCount != 2 {
 		t.Errorf("messageCount = %d, want 2", list.Sessions[0].MessageCount)
+	}
+
+	if list.Sessions[0].Title != "renamed over RPC" {
+		t.Errorf("title = %q, want renamed over RPC", list.Sessions[0].Title)
 	}
 
 	// Resume restores history.
@@ -399,6 +406,9 @@ func TestTwoClientsOwnership(t *testing.T) {
 	c1.result(c1.call("session.create", nil), &created)
 
 	// Second client cannot act on the first client's session.
+	if resp := c2.call("session.rename", map[string]any{"sessionId": created.SessionID, "title": "steal"}); resp.Error == nil || resp.Error.Code != rpc.CodeNotOwner {
+		t.Errorf("cross-client rename error = %+v", resp.Error)
+	}
 	if resp := c2.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "steal"}); resp.Error == nil || resp.Error.Code != rpc.CodeNotOwner {
 		t.Errorf("cross-client prompt error = %+v", resp.Error)
 	}
