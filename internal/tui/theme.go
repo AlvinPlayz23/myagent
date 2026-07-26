@@ -17,6 +17,10 @@ type theme struct {
 	toolSuccess   lipgloss.Style
 	toolError     lipgloss.Style
 	toolTitle     lipgloss.Style
+	diffMeta      lipgloss.Style
+	diffHunk      lipgloss.Style
+	diffAdd       lipgloss.Style
+	diffRemove    lipgloss.Style
 	muted         lipgloss.Style
 	accent        lipgloss.Style
 	errorText     lipgloss.Style
@@ -38,6 +42,10 @@ func newTheme() *theme {
 		toolSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
 		toolError:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
 		toolTitle:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+		diffMeta:      lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		diffHunk:      lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		diffAdd:       lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
+		diffRemove:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
 		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		accent:        lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
 		errorText:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),

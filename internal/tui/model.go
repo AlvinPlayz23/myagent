@@ -34,13 +34,25 @@ const (
 )
 
 type sessionPicker struct {
-	items  []session.Info
-	sel    int
-	active bool
+	items     []session.Info
+	sel       int
+	active    bool
+	currentID string
 }
 
-func (p *sessionPicker) open(items []session.Info) {
+// open pins the active session at the top of the picker. It remains selectable
+// so Enter can explicitly mean "keep working in this session."
+func (p *sessionPicker) open(items []session.Info, currentID string) {
 	p.items = items
+	p.currentID = currentID
+	if currentID != "" {
+		for i, info := range p.items {
+			if info.ID == currentID {
+				p.items[0], p.items[i] = p.items[i], p.items[0]
+				break
+			}
+		}
+	}
 	p.sel = 0
 	p.active = len(items) > 0
 }
@@ -49,6 +61,7 @@ func (p *sessionPicker) close() {
 	p.items = nil
 	p.sel = 0
 	p.active = false
+	p.currentID = ""
 }
 
 func (p *sessionPicker) move(delta int) {
@@ -68,6 +81,11 @@ func (p *sessionPicker) selected() (session.Info, bool) {
 func (p *sessionPicker) height() int {
 	if !p.active {
 		return 0
+	}
+	// Header, the pinned current row, and its divider precede up to five
+	// historical sessions. Without a current row this is the ordinary list.
+	if len(p.items) > 0 && p.currentID != "" && p.items[0].ID == p.currentID {
+		return 3 + min(sessionPickerMaxVisible, len(p.items)-1)
 	}
 	return 1 + min(sessionPickerMaxVisible, len(p.items))
 }
@@ -165,6 +183,7 @@ type model struct {
 
 	newSession         func() error
 	listSessions       func() ([]session.Info, error)
+	currentSessionID   func() string
 	resumeSession      func(string) ([]types.Message, error)
 	renameSession      func(string) error
 	availableModels    func() []modelcatalog.Model
@@ -629,6 +648,12 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 	if !ok || m.resumeSession == nil {
 		return m, nil
 	}
+	if info.ID == m.sessions.currentID {
+		m.sessions.close()
+		m.statusMsg = "Continuing current session."
+		m.updateLayout()
+		return m, nil
+	}
 	history, err := m.resumeSession(info.ID)
 	if err != nil {
 		m.statusMsg = "Could not resume session: " + err.Error()
@@ -815,7 +840,11 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 			m.statusMsg = "No sessions found."
 			return m, nil
 		}
-		m.sessions.open(infos)
+		currentID := ""
+		if m.currentSessionID != nil {
+			currentID = m.currentSessionID()
+		}
+		m.sessions.open(infos, currentID)
 		m.statusMsg = "Select a session to resume."
 		m.updateLayout()
 	case commandRename:
@@ -1214,38 +1243,40 @@ func (m *model) renderSessionPicker() string {
 		return ""
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Resume session — ↑/↓ select, enter resume, esc cancel")}
-	count := min(height-1, len(m.sessions.items))
-	if count <= 0 {
-		return strings.Join(lines, "\n")
-	}
-	start := m.sessions.sel - count + 1
-	if start < 0 {
-		start = 0
-	}
-	if maxStart := len(m.sessions.items) - count; start > maxStart {
-		start = maxStart
-	}
-	for i := start; i < start+count; i++ {
-		info := m.sessions.items[i]
-		marker := "  "
-		style := m.th.cmdPickerItem
-		if i == m.sessions.sel {
-			marker = "› "
-			style = m.th.cmdPickerSel
+	current := len(m.sessions.items) > 0 && m.sessions.currentID != "" && m.sessions.items[0].ID == m.sessions.currentID
+	first, fixedRows := 0, 1
+	if current {
+		info := m.sessions.items[0]
+		marker, style := "  ", m.th.cmdPickerItem
+		if m.sessions.sel == 0 {
+			marker, style = "› ", m.th.cmdPickerSel
 		}
 		id := info.ID
-		if len(id) > 8 {
-			id = id[:8]
-		}
+		if len(id) > 8 { id = id[:8] }
 		title := info.Title
-		if title == "" {
-			title = info.Preview
-		}
-		if title == "" {
-			title = "(no messages)"
-		}
+		if title == "" { title = info.Preview }
+		if title == "" { title = "(no messages)" }
+		line := fmt.Sprintf("%s● CURRENT  %s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		lines = append(lines, m.th.muted.MaxWidth(max(1, m.width)).Render(strings.Repeat("─", max(1, m.width))))
+		first, fixedRows = 1, 3
+	}
+	count := min(height-fixedRows, len(m.sessions.items)-first)
+	if count <= 0 { return strings.Join(lines, "\n") }
+	start := m.sessions.sel - count + 1
+	if start < first { start = first }
+	if maxStart := len(m.sessions.items) - count; start > maxStart { start = maxStart }
+	for i := start; i < start+count; i++ {
+		info := m.sessions.items[i]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.sessions.sel { marker, style = "› ", m.th.cmdPickerSel }
+		id := info.ID
+		if len(id) > 8 { id = id[:8] }
+		title := info.Title
+		if title == "" { title = info.Preview }
+		if title == "" { title = "(no messages)" }
 		line := fmt.Sprintf("%s%s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
-		if len(m.sessions.items) > count && i == start+count-1 {
+		if len(m.sessions.items)-first > count && i == start+count-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))

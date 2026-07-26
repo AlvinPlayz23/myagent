@@ -140,17 +140,13 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		return provider, model, nil
 	}
 	m.listSessions = func() ([]session.Info, error) {
-		infos, err := session.List()
-		if err != nil || sess == nil {
-			return infos, err
+		return session.List()
+	}
+	m.currentSessionID = func() string {
+		if sess == nil {
+			return ""
 		}
-		available := infos[:0]
-		for _, info := range infos {
-			if info.ID != sess.ID() {
-				available = append(available, info)
-			}
-		}
-		return available, nil
+		return sess.ID()
 	}
 	m.resumeSession = func(id string) ([]types.Message, error) {
 		resumed, err := session.ResumeByID(id)

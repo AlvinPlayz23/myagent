@@ -34,6 +34,7 @@ type block struct {
 	toolCallID string
 	toolName   string
 	toolArgs   map[string]any
+	toolDiff   []diffLine // proposal diff for edit/write calls
 	toolOutput string
 	toolErr    bool
 	toolDone   bool
@@ -134,6 +135,7 @@ func (t *transcript) startTool(callID, name string, args map[string]any) {
 		toolCallID: callID,
 		toolName:   name,
 		toolArgs:   args,
+		toolDiff:   proposalDiff(name, args),
 	})
 }
 
@@ -219,11 +221,19 @@ func (t *transcript) renderTool(b *block, width int) string {
 	var sb strings.Builder
 	sb.WriteString(statusStyle.Render(header))
 
+	// Edit and write calls show their requested change as a Git-style proposal
+	// only after the tool succeeds. Failed calls show their error output instead,
+	// so the transcript never presents an unapplied change as if it landed.
+	if len(b.toolDiff) > 0 && b.toolDone && !b.toolErr {
+		sb.WriteByte('\n')
+		sb.WriteString(t.renderDiff(b.toolDiff))
+		return sb.String()
+	}
+
 	body := strings.TrimRight(b.toolOutput, "\n")
 	if body == "" {
 		return sb.String()
 	}
-
 	lines := strings.Split(body, "\n")
 	const previewLines = 8
 	if !t.expanded && len(lines) > previewLines {
@@ -239,6 +249,132 @@ func (t *transcript) renderTool(b *block, width int) string {
 			sb.WriteByte('\n')
 			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
 		}
+	}
+	return sb.String()
+}
+
+// diffLine is one display line in a proposal-style unified diff.
+type diffLine struct {
+	prefix byte
+	text   string
+}
+
+const diffPreviewLines = 8
+
+// proposalDiff turns edit/write tool arguments into a Git-style diff without
+// reading the filesystem. A write is deliberately represented as a new file:
+// it is a preview of the requested content, not a claim about prior contents.
+func proposalDiff(name string, args map[string]any) []diffLine {
+	path := toolArg(args, "path")
+	if path == "" {
+		path = toolArg(args, "file_path")
+	}
+	if path == "" {
+		return nil
+	}
+	newPath := "b/" + strings.TrimPrefix(strings.ReplaceAll(path, "\\", "/"), "./")
+
+	switch name {
+	case "write":
+		content, ok := args["content"].(string)
+		if !ok {
+			return nil
+		}
+		lines := []diffLine{{text: "--- /dev/null"}, {text: "+++ " + newPath}, {text: "@@"}}
+		return append(lines, prefixedDiffLines('+', content)...)
+	case "edit":
+		rawEdits, ok := args["edits"].([]any)
+		if !ok {
+			return nil
+		}
+		lines := []diffLine{{text: "--- a/" + strings.TrimPrefix(strings.ReplaceAll(path, "\\", "/"), "./")}, {text: "+++ " + newPath}}
+		for _, raw := range rawEdits {
+			edit, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			oldText, oldOK := edit["oldText"].(string)
+			newText, newOK := edit["newText"].(string)
+			if !oldOK || !newOK {
+				continue
+			}
+			lines = append(lines, prefixedDiffLines('-', oldText)...)
+			lines = append(lines, prefixedDiffLines('+', newText)...)
+		}
+		if len(lines) == 2 {
+			return nil
+		}
+		return lines
+	default:
+		return nil
+	}
+}
+
+func toolArg(args map[string]any, key string) string {
+	if args == nil {
+		return ""
+	}
+	s, _ := args[key].(string)
+	return s
+}
+
+func prefixedDiffLines(prefix byte, text string) []diffLine {
+	// strings.Split intentionally retains a final empty line: an added or
+	// removed trailing newline is meaningful in this compact preview.
+	parts := strings.Split(text, "\n")
+	lines := make([]diffLine, len(parts))
+	for i, part := range parts {
+		lines[i] = diffLine{prefix: prefix, text: part}
+	}
+	return lines
+}
+
+// renderDiff applies Git-like line coloring and the transcript's global
+// ctrl+o preview limit. File headers and hunk markers are always retained.
+func (t *transcript) renderDiff(lines []diffLine) string {
+	visible := lines
+	hidden := 0
+	if !t.expanded {
+		changeCount := 0
+		visible = make([]diffLine, 0, len(lines))
+		for _, line := range lines {
+			if line.prefix != 0 {
+				if changeCount >= diffPreviewLines {
+					hidden++
+					continue
+				}
+				changeCount++
+			}
+			visible = append(visible, line)
+		}
+	}
+
+	var sb strings.Builder
+	for i, line := range visible {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		text := line.text
+		if line.prefix != 0 {
+			text = string(line.prefix) + text
+		}
+		switch {
+		case line.prefix == '+':
+			sb.WriteString(t.th.diffAdd.Render(text))
+		case line.prefix == '-':
+			sb.WriteString(t.th.diffRemove.Render(text))
+		case strings.HasPrefix(line.text, "@@"):
+			sb.WriteString(t.th.diffHunk.Render(text))
+		default:
+			sb.WriteString(t.th.diffMeta.Render(text))
+		}
+	}
+	if hidden > 0 {
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more changed lines, ctrl+o to expand)", hidden)))
+	} else if t.expanded && len(lines) > diffPreviewLines {
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
 	}
 	return sb.String()
 }
