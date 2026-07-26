@@ -80,6 +80,26 @@ func (s *Session) Cwd() string { return s.cwd }
 // Messages returns the reconstructed conversation loaded from disk.
 func (s *Session) Messages() []types.Message { return s.messages }
 
+// Title returns the first user prompt as a human-readable session title. A
+// generated or user-editable title can replace this fallback in the future.
+func (s *Session) Title() string { return Title(s.messages) }
+
+// Title returns the first non-summary user prompt in messages, or "new" for
+// an empty conversation.
+func Title(messages []types.Message) string {
+	for _, message := range messages {
+		if message.Role != types.RoleUser || compaction.IsSummaryMessage(message) {
+			continue
+		}
+		for _, content := range message.Content {
+			if content.Type == types.ContentText && strings.TrimSpace(content.Text) != "" {
+				return content.Text
+			}
+		}
+	}
+	return "new"
+}
+
 // SessionsDirEnv overrides the sessions directory. An absolute path is used
 // as-is; a relative value is resolved under config.Dir() so callers stay
 // within the myagent home (and keep sharing config.json + auth/). This lets

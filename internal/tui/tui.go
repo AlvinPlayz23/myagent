@@ -15,6 +15,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/terminal"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -43,6 +44,11 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		r.reset()
 		return nil
 	})
+	m.sessionTitle = session.Title(history)
+	m.hasSessionTitle = m.sessionTitle != "new"
+	m.setTerminalTitle = terminal.SetTitle
+	m.updateTerminalTitle()
+	defer terminal.SetTitle("myagent")
 	if agent.HasRepositoryGuidance(cwd) {
 		m.statusMsg = "Loaded AGENTS.md"
 	}

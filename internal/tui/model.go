@@ -105,6 +105,10 @@ type model struct {
 	cwd     string
 	lastErr error
 
+	sessionTitle     string
+	hasSessionTitle  bool
+	setTerminalTitle func(string)
+
 	newSession         func() error
 	listSessions       func() ([]session.Info, error)
 	resumeSession      func(string) ([]types.Message, error)
@@ -151,6 +155,28 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		cwd:          cwd,
 		newSession:   createSession,
 	}
+}
+
+func (m *model) updateTerminalTitle() {
+	if m.setTerminalTitle == nil {
+		return
+	}
+	title := "new"
+	if m.hasSessionTitle {
+		title = m.sessionTitle
+	}
+	m.setTerminalTitle("myagent - " + title)
+}
+
+// setSessionTitle records the first prompt as the session title. Future
+// generated or user-editable titles should be applied here instead.
+func (m *model) setSessionTitle(title string) {
+	if m.hasSessionTitle {
+		return
+	}
+	m.sessionTitle = title
+	m.hasSessionTitle = true
+	m.updateTerminalTitle()
 }
 
 // Init starts the event pump and the animation ticker.
@@ -485,6 +511,9 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runner.resume(history)
+	m.sessionTitle = session.Title(history)
+	m.hasSessionTitle = m.sessionTitle != "new"
+	m.updateTerminalTitle()
 	m.sessions.close()
 	m.transcript.clear()
 	seedTranscript(m.transcript, history)
@@ -520,6 +549,7 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 		return m.runCommand(text)
 	}
 	m.addPromptHistory(text)
+	m.setSessionTitle(text)
 	m.input.Reset()
 	m.historyIndex = -1
 	um := userMessage(text)
@@ -617,6 +647,9 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		}
 		m.transcript.clear()
 		m.usage = types.Usage{}
+		m.sessionTitle = ""
+		m.hasSessionTitle = false
+		m.updateTerminalTitle()
 		m.statusMsg = "Started a new conversation."
 		m.refreshViewport()
 	case commandModel:
