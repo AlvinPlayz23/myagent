@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // blockKind discriminates a transcript block.
@@ -178,9 +179,12 @@ func (t *transcript) renderBlock(b *block, width int) string {
 	var out string
 	switch b.kind {
 	case blockUser:
-		// User = filled neutral block, rendered as markdown inside a bg box.
-		body := strings.TrimRight(t.md.render(b.text, max(1, width-2)), "\n")
-		out = t.th.userBlock.Render(body)
+		// User messages are plain text, not markdown. Glamour emits ANSI style
+		// resets which can override the userBlock background behind the text.
+		// Give the block an explicit width too, so its neutral background fills
+		// every cell of the transcript row, including wrapped-line padding.
+		body := strings.TrimRight(wordwrap.String(b.text, max(1, width-2)), "\n")
+		out = t.th.userBlock.Width(max(1, width)).Render(body)
 	case blockAssistant:
 		out = strings.TrimRight(t.md.render(b.text, width), "\n")
 	case blockError:
