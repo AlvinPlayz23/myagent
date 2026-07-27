@@ -20,16 +20,20 @@ func TestRunnerReturnsOnEventFailure(t *testing.T) {
 		Role:    types.RoleUser,
 		Content: []types.ContentBlock{types.TextBlock("hello")},
 	})()
-	done, ok := msg.(agentDoneMsg)
-	if !ok {
-		t.Fatalf("start returned %T, want agentDoneMsg", msg)
+	if msg != nil {
+		t.Fatalf("start returned %T, want nil", msg)
 	}
+	event := <-r.events
+	if event.done == nil {
+		t.Fatalf("runner event = %#v, want completion", event)
+	}
+	done := *event.done
 	if !errors.Is(done.err, want) {
 		t.Fatalf("agentDoneMsg.err = %v, want %v", done.err, want)
 	}
 	select {
 	case ev := <-r.events:
-		t.Fatalf("unexpected UI event after persistence failure: %s", ev.ev.Type)
+		t.Fatalf("unexpected UI event after completion: %#v", ev)
 	default:
 	}
 }

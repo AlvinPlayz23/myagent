@@ -11,32 +11,45 @@ import (
 // (userMessageBg, toolPending/Success/ErrorBg, muted, accent, error) at a
 // coarse level; we keep a small palette rather than pi's ~50 tokens.
 type theme struct {
-	userBlock     lipgloss.Style
-	assistantTxt  lipgloss.Style
-	toolPending   lipgloss.Style
-	toolSuccess   lipgloss.Style
-	toolError     lipgloss.Style
-	toolTitle     lipgloss.Style
-	diffMeta      lipgloss.Style
-	diffHunk      lipgloss.Style
-	diffAdd       lipgloss.Style
-	diffRemove    lipgloss.Style
-	muted         lipgloss.Style
-	accent        lipgloss.Style
-	errorText     lipgloss.Style
-	footer        lipgloss.Style
-	footerRight   lipgloss.Style
-	spinner       lipgloss.Style
-	cmdPickerSel  lipgloss.Style
-	cmdPickerItem lipgloss.Style
-	orbDim        lipgloss.Style
-	orbMedium     lipgloss.Style
-	orbBright     lipgloss.Style
+	userBlock       lipgloss.Style
+	queuedUserBlock lipgloss.Style
+	queuedLabel     lipgloss.Style
+	assistantTxt    lipgloss.Style
+	toolPending     lipgloss.Style
+	toolSuccess     lipgloss.Style
+	toolError       lipgloss.Style
+	toolTitle       lipgloss.Style
+	diffMeta        lipgloss.Style
+	diffHunk        lipgloss.Style
+	diffAdd         lipgloss.Style
+	diffRemove      lipgloss.Style
+	muted           lipgloss.Style
+	accent          lipgloss.Style
+	errorText       lipgloss.Style
+	footer          lipgloss.Style
+	footerRight     lipgloss.Style
+	spinner         lipgloss.Style
+	selection       lipgloss.Style
+	cmdPickerSel    lipgloss.Style
+	cmdPickerItem   lipgloss.Style
+	orbDim          lipgloss.Style
+	orbMedium       lipgloss.Style
+	orbBright       lipgloss.Style
 }
 
 func newTheme() *theme {
 	return &theme{
-		userBlock:     lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		userBlock: lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		queuedUserBlock: lipgloss.NewStyle().
+			Background(lipgloss.Color("237")).
+			Foreground(lipgloss.Color("252")).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("39")).
+			BorderTop(true).
+			BorderLeft(true).
+			BorderRight(true).
+			Padding(0, 1),
+		queuedLabel:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 		assistantTxt:  lipgloss.NewStyle(),
 		toolPending:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		toolSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
@@ -52,6 +65,7 @@ func newTheme() *theme {
 		footer:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		footerRight:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		spinner:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		selection:     lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("25")),
 		cmdPickerSel:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
 		cmdPickerItem: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		orbDim:        lipgloss.NewStyle().Foreground(lipgloss.Color("24")),

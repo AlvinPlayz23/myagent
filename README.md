@@ -240,13 +240,14 @@ go run . "Write a haiku about Go."   # same thing
 
 | Key                  | Action                                                |
 | -------------------- | ----------------------------------------------------- |
-| **Enter**            | Send (steer if a turn is currently running)           |
-| **Alt+Enter**        | Send as a follow-up (runs after the current turn)     |
+| **Enter**            | Send (queue a follow-up if a turn is currently running) |
+| **Alt+Enter**        | Steer the currently running turn                      |
 | **Esc**              | Abort the current turn                                |
 | **Ctrl+C**           | Quit                                                  |
 | **Ctrl+O**           | Expand / collapse all tool blocks                     |
 | **Up / Down**        | Browse submitted prompts when the input is empty      |
 | **PgUp / PgDn**      | Scroll transcript                                     |
+| **Mouse drag**       | Select displayed transcript text; release to copy     |
 | **Tab**              | Focus the input area                                  |
 
 ### TUI slash commands

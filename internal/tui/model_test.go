@@ -9,7 +9,162 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(50, 20)
+	message := userMessage("run the tests after this")
+	m.queuedFollowUps = []queuedMessage{{display: "run the tests after this", message: message}}
+	m.updateLayout()
+
+	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "Queued follow-up") {
+		t.Fatalf("queued follow-up has no pending label: %q", queued)
+	}
+	m.onAgentEvent(userMessageStartEvent("run the tests after this"))
+	if len(m.queuedFollowUps) != 0 {
+		t.Fatalf("queued follow-ups = %#v, want empty", m.queuedFollowUps)
+	}
+	if got := m.transcript.render(50); !strings.Contains(got, "run the tests after this") || strings.Contains(got, "Queued follow-up") {
+		t.Fatalf("consumed follow-up was not promoted to transcript: %q", got)
+	}
+}
+
+func TestFollowUpConsumptionClearsQueuedStatus(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	m.statusMsg = "Queued follow-up (1 pending)"
+	message := userMessage("later")
+	m.queuedFollowUps = []queuedMessage{{display: "later", message: message}}
+
+	m.onAgentEvent(userMessageStartEvent("later"))
+	if m.statusMsg != "" {
+		t.Fatalf("status = %q, want empty", m.statusMsg)
+	}
+	if status := m.statusLine(); !strings.Contains(status, "Working…") || strings.Contains(status, "Queued follow-up") {
+		t.Fatalf("running status = %q", status)
+	}
+}
+
+func TestEnterQueuesFollowUpOutsideTranscriptWhileWorking(t *testing.T) {
+	q := newMsgQueue()
+	m := newModel(nil, nil, q, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	m.input.SetValue("hi")
+	m.onResize(50, 20)
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "hi" {
+		t.Fatalf("queued follow-ups = %#v, want hi", m.queuedFollowUps)
+	}
+	if got := m.transcript.render(50); strings.Contains(got, "hi") {
+		t.Fatalf("queued follow-up leaked into transcript: %q", got)
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "NEXT") || !strings.Contains(view, "hi") {
+		t.Fatalf("queued follow-up is not attached to composer: %q", view)
+	}
+}
+
+func TestAltEnterSteersWhileWorking(t *testing.T) {
+	q := newMsgQueue()
+	m := newModel(nil, nil, q, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	m.input.SetValue("change direction")
+	m.onResize(50, 20)
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModAlt}))
+	if len(m.queuedFollowUps) != 0 || len(m.queuedSteering) != 1 {
+		t.Fatalf("follow-ups=%#v steering=%#v", m.queuedFollowUps, m.queuedSteering)
+	}
+	if got := m.transcript.render(50); !strings.Contains(got, "change direction") {
+		t.Fatalf("steering missing from transcript: %q", got)
+	}
+}
+
+func TestQueuedFollowUpsPromoteInFIFOOrder(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(50, 20)
+	first := userMessage("first")
+	second := userMessage("second")
+	m.queuedFollowUps = []queuedMessage{{display: "first", message: first}, {display: "second", message: second}}
+	m.updateLayout()
+
+	m.onAgentEvent(userMessageStartEvent("first"))
+	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "second" {
+		t.Fatalf("queued follow-ups after first promotion = %#v", m.queuedFollowUps)
+	}
+	if queued := m.renderQueuedFollowUps(); strings.Contains(queued, "first") || !strings.Contains(queued, "second") {
+		t.Fatalf("unexpected queued cards after first promotion: %q", queued)
+	}
+	if transcript := m.transcript.render(50); !strings.Contains(transcript, "first") || strings.Contains(transcript, "second") {
+		t.Fatalf("unexpected transcript after first promotion: %q", transcript)
+	}
+}
+
+func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.queuedFollowUps = []queuedMessage{{display: "run the tests after this", message: userMessage("run the tests after this")}}
+	m.onResize(80, 16)
+
+	view := m.View()
+	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
+		t.Fatalf("view height with queued follow-up = %d, terminal height = %d", got, m.height)
+	}
+	if !strings.Contains(view.Content, "Queued follow-up") {
+		t.Fatalf("view does not contain queued follow-up: %q", view.Content)
+	}
+}
+
+func TestSteeringEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.queuedSteering = []types.Message{userMessage("steer")}
+	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
+
+	m.onAgentEvent(userMessageStartEvent("steer"))
+	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "later" {
+		t.Fatalf("steering removed queued follow-up: %#v", m.queuedFollowUps)
+	}
+}
+
+func TestInitialPromptEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	initial := userMessage("initial")
+	m.activePrompt = &initial
+	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
+
+	m.onAgentEvent(userMessageStartEvent("initial"))
+	if m.activePrompt != nil {
+		t.Fatal("initial prompt remained active after its event")
+	}
+	if len(m.queuedFollowUps) != 1 {
+		t.Fatalf("initial prompt removed queued follow-up: %#v", m.queuedFollowUps)
+	}
+}
+
+func TestSubmissionIsRejectedWhileAborting(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	m.abortRequested = true
+	m.input.SetValue("do not queue")
+
+	m.submit(submitFollowUp)
+	if len(m.queuedFollowUps) != 0 {
+		t.Fatalf("queued during abort: %#v", m.queuedFollowUps)
+	}
+	if m.input.Value() != "do not queue" {
+		t.Fatalf("composer was cleared during abort: %q", m.input.Value())
+	}
+	if m.statusMsg != "Wait for the current run to finish aborting." {
+		t.Fatalf("status = %q", m.statusMsg)
+	}
+}
+
+func userMessageStartEvent(text string) types.AgentEvent {
+	message := userMessage(text)
+	return types.AgentEvent{Type: types.EventMessageStart, Message: &message}
+}
 
 func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
@@ -27,6 +182,82 @@ func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 	m.onMouseWheel(tea.MouseWheelMsg{Y: m.viewport.Height(), Button: tea.MouseWheelDown})
 	if m.viewport.YOffset() != scrolledOffset {
 		t.Fatalf("wheel outside transcript offset = %d, want %d", m.viewport.YOffset(), scrolledOffset)
+	}
+}
+
+func TestTranscriptDragCopiesDisplayedText(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("hello world")
+	m.onResize(40, 20)
+	var copied string
+	m.clipboardWrite = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+
+	if copied != "hello" {
+		t.Fatalf("clipboard = %q, want %q", copied, "hello")
+	}
+	if m.selection != nil {
+		t.Fatal("selection remained active after mouse release")
+	}
+	if m.statusMsg != "Copied 5 characters." {
+		t.Fatalf("status = %q", m.statusMsg)
+	}
+}
+
+func TestTranscriptClickWithoutDragDoesNotCopy(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("hello")
+	m.onResize(40, 20)
+	calls := 0
+	m.clipboardWrite = func(string) error {
+		calls++
+		return nil
+	}
+
+	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+
+	if calls != 0 {
+		t.Fatalf("clipboard writes = %d, want 0", calls)
+	}
+}
+
+func TestTranscriptCopyFailureIsReported(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("hello")
+	m.onResize(40, 20)
+	m.clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
+
+	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+
+	if m.statusMsg != "Could not copy selection: clipboard unavailable" {
+		t.Fatalf("status = %q", m.statusMsg)
+	}
+}
+
+func TestTranscriptPointIncludesViewportOffset(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(20, 12)
+	m.viewport.SetContent(strings.Repeat("line\n", m.viewport.Height()*2))
+	m.viewport.GotoBottom()
+
+	point, ok := m.transcriptPoint(3, 1)
+	if !ok {
+		t.Fatal("transcript point was rejected")
+	}
+	if point.row != m.viewport.YOffset()+1 || point.col != m.viewport.XOffset()+3 {
+		t.Fatalf("point = %#v, offsets = (%d,%d)", point, m.viewport.XOffset(), m.viewport.YOffset())
 	}
 }
 
@@ -58,7 +289,7 @@ func TestWelcomeHiddenAfterFirstPrompt(t *testing.T) {
 	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(80, 20)
 	m.input.SetValue("hello")
-	m.submit(false)
+	m.submit(submitFollowUp)
 
 	content := m.viewport.View()
 	if strings.Contains(content, "Your terminal coding agent") {
@@ -222,7 +453,7 @@ func TestPromptHistoryExcludesSlashCommandsAndConsecutiveDuplicates(t *testing.T
 	}
 
 	m.input.SetValue("/help")
-	m.submit(false)
+	m.submit(submitFollowUp)
 	if len(m.promptHistory) != 1 {
 		t.Fatalf("slash command was added to history: %#v", m.promptHistory)
 	}

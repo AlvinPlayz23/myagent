@@ -28,7 +28,8 @@ type agentDoneMsg struct {
 }
 
 type runnerEvent struct {
-	ev         types.AgentEvent
+	ev         *types.AgentEvent
+	done       *agentDoneMsg
 	generation uint64
 }
 
@@ -73,13 +74,8 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 }
 
 // start launches an agent Run for the given prompt in a background goroutine.
-// The returned tea.Cmd yields agentDoneMsg when the run completes. Events flow
-// separately through r.events (consumed by waitForEvent). Because start and
-// waitForEvent are distinct commands running on separate goroutines,
-// agentDoneMsg may be processed by Update slightly before the last buffered
-// events are drained; those trailing events still render correctly. The UI
-// gates starting a new run on working==false, so runs never overlap and their
-// events never interleave on the shared channel.
+// Completion travels through the same FIFO channel as AgentEvents, ensuring the
+// UI cannot become idle before the final transcript event has rendered.
 func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 	r.generation++
 	generation := r.generation
@@ -116,7 +112,7 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 				}
 			}
 			select {
-			case r.events <- runnerEvent{ev: ev, generation: generation}:
+			case r.events <- runnerEvent{ev: &ev, generation: generation}:
 				return nil
 			case <-sctx.Done():
 				return sctx.Err()
@@ -126,7 +122,9 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 		err := action(loop)
 		// Persist the full conversation so subsequent prompts continue it.
 		r.history = loop.Messages()
-		return agentDoneMsg{err: err, generation: generation}
+		done := agentDoneMsg{err: err, generation: generation}
+		r.events <- runnerEvent{done: &done, generation: generation}
+		return nil
 	}
 }
 
@@ -159,6 +157,9 @@ func (r *runner) waitForEvent() tea.Cmd {
 		if !ok {
 			return eventChannelClosedMsg{}
 		}
-		return agentEventMsg{ev: ev.ev, generation: ev.generation}
+		if ev.done != nil {
+			return *ev.done
+		}
+		return agentEventMsg{ev: *ev.ev, generation: ev.generation}
 	}
 }

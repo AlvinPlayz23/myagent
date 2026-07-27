@@ -55,16 +55,17 @@ func (q *Queue) Steering() []types.Message {
 	return out
 }
 
-// FollowUp drains and returns any queued follow-up messages.
+// FollowUp returns the oldest queued follow-up. Processing one message per poll
+// gives each follow-up its own assistant turn while preserving FIFO order.
 func (q *Queue) FollowUp() []types.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.followUp) == 0 {
 		return nil
 	}
-	out := q.followUp
-	q.followUp = nil
-	return out
+	out := q.followUp[0]
+	q.followUp = q.followUp[1:]
+	return []types.Message{out}
 }
 
 // PendingCount returns how many messages are queued (for UI hints).

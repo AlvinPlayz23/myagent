@@ -166,6 +166,12 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 			if err := l.emit(ctx, types.AgentEvent{Type: types.EventTurnEnd, Message: &msg, ToolResults: toolResults}); err != nil {
 				return err
 			}
+			// Tool cancellation is terminal. Tool-result messages above are kept so
+			// the assistant's tool calls remain structurally paired in persisted
+			// context, but they must never trigger another provider request.
+			if runWasAborted(ctx) {
+				return ctx.Err()
+			}
 
 			pending = l.steering()
 		}
@@ -262,22 +268,37 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 	var results []types.Message
 	allTerminate := len(toolCalls) > 0
 	for _, tc := range toolCalls {
-		_ = l.emit(ctx, types.AgentEvent{
-			Type:       types.EventToolExecutionStart,
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Args:       tc.Arguments,
-		})
+		// Once cancellation is observed, do not announce or execute this or any
+		// later tool. We still append an interrupted result below so persisted
+		// history keeps every assistant tool call structurally paired and valid
+		// when the session is resumed.
+		abortedBeforeStart := runWasAborted(ctx)
+		if !abortedBeforeStart {
+			_ = l.emit(ctx, types.AgentEvent{
+				Type:       types.EventToolExecutionStart,
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Args:       tc.Arguments,
+			})
+		}
 
-		result, isError := l.runTool(ctx, tc)
+		var result *types.ToolResult
+		var isError bool
+		if abortedBeforeStart {
+			result, isError = types.TextResult("Operation aborted before execution", nil), true
+		} else {
+			result, isError = l.runTool(ctx, tc)
+		}
 
-		_ = l.emit(ctx, types.AgentEvent{
-			Type:       types.EventToolExecutionEnd,
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Result:     result,
-			IsError:    isError,
-		})
+		if !abortedBeforeStart {
+			_ = l.emit(ctx, types.AgentEvent{
+				Type:       types.EventToolExecutionEnd,
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Result:     result,
+				IsError:    isError,
+			})
+		}
 
 		msg := l.toolResultMessage(tc, result, isError)
 		_ = l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg})
@@ -286,9 +307,6 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 
 		if !result.Terminate {
 			allTerminate = false
-		}
-		if ctx.Err() != nil {
-			break
 		}
 	}
 	return results, allTerminate

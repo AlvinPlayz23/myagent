@@ -83,6 +83,39 @@ func hasEvent(events []types.AgentEvent, typ types.AgentEventType) bool {
 	return false
 }
 
+func TestLoopProcessesFollowUpsOnePerAssistantTurn(t *testing.T) {
+	q := NewQueue()
+	q.EnqueueFollowUp(types.Message{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("first")}})
+	q.EnqueueFollowUp(types.Message{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("second")}})
+	provider := &fakeCompactionProvider{regularText: "response"}
+	loop := New(Config{Provider: provider, Model: llm.Model{ID: "test"}, Queue: q}, nil, func(context.Context, types.AgentEvent) error {
+		return nil
+	})
+
+	_, err := loop.Run(context.Background(), []types.Message{{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("initial")}}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if provider.numRequests() != 3 {
+		t.Fatalf("provider requests = %d, want initial plus two follow-ups", provider.numRequests())
+	}
+	if got := lastUserText(provider.request(1).Messages); got != "first" {
+		t.Fatalf("first follow-up request ends with %q", got)
+	}
+	if got := lastUserText(provider.request(2).Messages); got != "second" {
+		t.Fatalf("second follow-up request ends with %q", got)
+	}
+}
+
+func lastUserText(messages []types.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == types.RoleUser && len(messages[i].Content) > 0 {
+			return messages[i].Content[0].Text
+		}
+	}
+	return ""
+}
+
 // TestLoopAutoCompaction verifies that the loop triggers compaction when the
 // context window is nearly full, replaces history with [summary] + [kept],
 // and the subsequent regular call receives the compacted history.

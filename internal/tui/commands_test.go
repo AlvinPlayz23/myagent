@@ -268,7 +268,7 @@ func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
 		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
 	}
 	m.input.SetValue("/model local/new-model")
-	m.submit(false)
+	m.submit(submitFollowUp)
 	if r.cfg.Model.ID != "new-model" || m.modelID != "local/new-model" {
 		t.Fatalf("model ids = %q/%q, want local/new-model", r.cfg.Model.ID, m.modelID)
 	}
@@ -277,7 +277,7 @@ func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
 	}
 
 	m.input.SetValue("/clear")
-	m.submit(false)
+	m.submit(submitFollowUp)
 	if len(m.transcript.blocks) != 0 {
 		t.Fatalf("clear left %d transcript blocks", len(m.transcript.blocks))
 	}
@@ -298,7 +298,7 @@ func TestNewCommandResetsConversation(t *testing.T) {
 	m.transcript.addUser("prior")
 	m.usage.Input = 10
 	m.input.SetValue("/new")
-	m.submit(false)
+	m.submit(submitFollowUp)
 
 	if !created {
 		t.Fatal("new-session callback was not called")

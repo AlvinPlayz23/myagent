@@ -12,6 +12,8 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
@@ -24,6 +26,18 @@ type tickMsg struct{}
 
 // clearStatusMsg clears a startup status after its configured lifetime.
 type clearStatusMsg struct{ status string }
+
+type submissionMode int
+
+const (
+	submitFollowUp submissionMode = iota
+	submitSteering
+)
+
+type queuedMessage struct {
+	display string
+	message types.Message
+}
 
 // spinnerFrames is the working-state spinner (pi uses an animated Loader).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -164,14 +178,20 @@ type model struct {
 	width, height int
 	ready         bool
 
-	working       bool // an agent Run is in progress
-	spinnerFrame  int
-	startedAt     time.Time
-	statusMsg     string
-	promptHistory []string
-	historyIndex  int // -1 means the composer is not browsing prompt history.
-	welcomeStyle  welcomeStyle
-	welcomeFrame  int
+	working         bool // an agent Run is in progress
+	abortRequested  bool // cancellation requested; runner is still unwinding
+	queuedSteering  []types.Message
+	queuedFollowUps []queuedMessage
+	activePrompt    *types.Message
+	spinnerFrame    int
+	startedAt       time.Time
+	statusMsg       string
+	selection       *textSelection
+	clipboardWrite  func(string) error
+	promptHistory   []string
+	historyIndex    int // -1 means the composer is not browsing prompt history.
+	welcomeStyle    welcomeStyle
+	welcomeFrame    int
 
 	modelID string
 	cwd     string
@@ -216,20 +236,21 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		createSession = newSession[0]
 	}
 	return &model{
-		ctx:          ctx,
-		runner:       r,
-		queue:        q,
-		th:           th,
-		md:           md,
-		transcript:   newTranscript(th, md),
-		input:        ta,
-		keyInput:     key,
-		picker:       newCommandPicker(),
-		historyIndex: -1,
-		welcomeStyle: welcomeDefault,
-		modelID:      modelID,
-		cwd:          cwd,
-		newSession:   createSession,
+		ctx:            ctx,
+		runner:         r,
+		queue:          q,
+		th:             th,
+		md:             md,
+		transcript:     newTranscript(th, md),
+		input:          ta,
+		keyInput:       key,
+		picker:         newCommandPicker(),
+		clipboardWrite: clipboard.WriteAll,
+		historyIndex:   -1,
+		welcomeStyle:   welcomeDefault,
+		modelID:        modelID,
+		cwd:            cwd,
+		newSession:     createSession,
 	}
 }
 
@@ -276,6 +297,7 @@ func clearStatusCmd(status string) tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.cancelSelection()
 		return m.onResize(msg.Width, msg.Height)
 
 	case tea.KeyPressMsg:
@@ -302,6 +324,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		return m.onMouseWheel(msg)
 
+	case tea.MouseClickMsg:
+		return m.onMouseClick(msg)
+
+	case tea.MouseMotionMsg:
+		return m.onMouseMotion(msg)
+
+	case tea.MouseReleaseMsg:
+		return m.onMouseRelease(msg)
+
 	case agentEventMsg:
 		if msg.generation != m.runner.generation {
 			return m, m.runner.waitForEvent()
@@ -315,13 +346,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDoneMsg:
 		if msg.generation != m.runner.generation {
-			return m, nil
+			return m, m.runner.waitForEvent()
 		}
+		wasAborted := m.abortRequested
 		m.working = false
+		m.abortRequested = false
+		m.activePrompt = nil
 		m.statusMsg = ""
 		if errors.Is(msg.err, errNothingToCompact) {
 			m.statusMsg = msg.err.Error()
-		} else if msg.err != nil && m.ctx.Err() == nil {
+		} else if msg.err != nil && m.ctx.Err() == nil && !wasAborted {
 			m.lastErr = msg.err
 			m.transcript.addErrorText("Error: " + msg.err.Error())
 			m.refreshViewport()
@@ -329,7 +363,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cancel != nil {
 			m.cancel = nil
 		}
-		return m, nil
+		return m, m.runner.waitForEvent()
 
 	case tickMsg:
 		refresh := false
@@ -381,8 +415,15 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // borrows rows from the transcript while always leaving it at least one row.
 func (m *model) viewportHeight() int {
 	const fixedHeight = 9
-	height := m.height - fixedHeight - m.panelHeight()
+	height := m.height - fixedHeight - m.panelHeight() - m.queuedFollowUpHeight()
 	return max(1, height)
+}
+
+func (m *model) queuedFollowUpHeight() int {
+	if len(m.queuedFollowUps) == 0 || m.width <= 0 {
+		return 0
+	}
+	return strings.Count(m.renderQueuedFollowUps(), "\n") + 1
 }
 
 func (m *model) panelHeight() int {
@@ -549,30 +590,26 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch ks {
 	case "ctrl+c":
 		// Abort a running turn if any; otherwise quit.
-		if m.working && m.cancel != nil {
-			m.cancel()
+		if m.abortActiveRun() {
 			return m, nil
 		}
 		return m, tea.Quit
 
 	case "ctrl+o":
+		m.cancelSelection()
 		m.transcript.toggleExpand()
 		m.refreshViewport()
 		return m, nil
 
 	case "esc":
-		if m.working && m.cancel != nil {
-			m.cancel()
-			m.statusMsg = "Aborting…"
-			return m, nil
-		}
+		m.abortActiveRun()
 		return m, nil
 
 	case "enter":
-		return m.submit(false)
+		return m.submit(submitFollowUp)
 
 	case "alt+enter":
-		return m.submit(true)
+		return m.submit(submitSteering)
 
 	case "pgup":
 		m.viewport.ScrollUp(m.viewport.Height() / 2)
@@ -638,7 +675,7 @@ func (m *model) acceptCommandPicker(submit bool) (tea.Model, tea.Cmd) {
 	m.picker.dismiss(value)
 	m.updateLayout()
 	if submit && !item.requiresArg {
-		return m.submit(false)
+		return m.submit(submitFollowUp)
 	}
 	return m, nil
 }
@@ -680,17 +717,85 @@ func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	if mouse.Y < 0 || mouse.Y >= m.viewport.Height() {
 		return m, nil
 	}
+	m.cancelSelection()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(mouse)
 	return m, cmd
 }
 
-// submit handles Enter (send/steer) and Alt+Enter (follow-up). When idle, both
-// start a new run; when working, Enter enqueues steering and Alt+Enter
-// enqueues a follow-up, matching pi's message-queue semantics.
-func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
+func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
+	if !m.ready || y < 0 || y >= m.viewport.Height() || x < 0 || x >= m.viewport.Width() {
+		return textPoint{}, false
+	}
+	return textPoint{row: m.viewport.YOffset() + y, col: m.viewport.XOffset() + x}, true
+}
+
+func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if mouse.Button != tea.MouseLeft {
+		return m, nil
+	}
+	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
+	if !ok || m.showWelcome() {
+		m.cancelSelection()
+		return m, nil
+	}
+	m.selection = &textSelection{anchor: point, current: point}
+	return m, nil
+}
+
+func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if m.selection == nil || mouse.Button != tea.MouseLeft {
+		return m, nil
+	}
+	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
+	if !ok {
+		return m, nil
+	}
+	m.selection.current = point
+	m.selection.dragged = point != m.selection.anchor
+	m.refreshViewport()
+	return m, nil
+}
+
+func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
+	if m.selection == nil || (mouse.Button != tea.MouseLeft && mouse.Button != tea.MouseNone) {
+		return m, nil
+	}
+	if point, ok := m.transcriptPoint(mouse.X, mouse.Y); ok {
+		m.selection.current = point
+		m.selection.dragged = m.selection.dragged || point != m.selection.anchor
+	}
+	selection := *m.selection
+	text := selectedRenderedText(m.transcript.render(m.width), selection)
+	m.cancelSelection()
+	if text == "" {
+		return m, nil
+	}
+	if err := m.clipboardWrite(text); err != nil {
+		m.statusMsg = "Could not copy selection: " + err.Error()
+		return m, nil
+	}
+	m.statusMsg = fmt.Sprintf("Copied %d characters.", len([]rune(text)))
+	return m, clearStatusCmd(m.statusMsg)
+}
+
+func (m *model) cancelSelection() {
+	if m.selection == nil {
+		return
+	}
+	m.selection = nil
+	m.refreshViewport()
+}
+
+// submit starts a run while idle. During a run, Enter queues a follow-up and
+// Alt+Enter injects steering into the current work.
+func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
+		return m, nil
+	}
+	if m.abortRequested {
+		m.statusMsg = "Wait for the current run to finish aborting."
 		return m, nil
 	}
 	m.picker.close()
@@ -713,16 +818,21 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	um := userMessage(expanded)
 
 	if m.working {
-		if followUp {
+		if mode == submitFollowUp {
 			m.queue.EnqueueFollowUp(um)
+			m.queuedFollowUps = append(m.queuedFollowUps, queuedMessage{display: text, message: um})
 			m.statusMsg = fmt.Sprintf("Queued follow-up (%d pending)", m.queue.PendingCount())
 		} else {
 			m.queue.EnqueueSteering(um)
+			m.queuedSteering = append(m.queuedSteering, um)
 			m.statusMsg = fmt.Sprintf("Queued steering (%d pending)", m.queue.PendingCount())
 		}
-		// Show the queued user message immediately.
-		m.transcript.addUser(text)
-		m.refreshViewport()
+		// Steering is already active conversation input. Follow-ups remain beside
+		// the composer until the loop begins processing them.
+		if mode == submitSteering {
+			m.transcript.addUser(text)
+		}
+		m.updateLayout()
 		return m, nil
 	}
 
@@ -734,6 +844,8 @@ func (m *model) submit(followUp bool) (tea.Model, tea.Cmd) {
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.cancel = cancel
 	m.working = true
+	m.abortRequested = false
+	m.activePrompt = &um
 	m.startedAt = time.Now()
 	m.statusMsg = ""
 	m.lastErr = nil
@@ -822,6 +934,7 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.cancel = cancel
 		m.working = true
+		m.abortRequested = false
 		m.startedAt = time.Now()
 		m.statusMsg = "Compacting context…"
 		m.lastErr = nil
@@ -989,9 +1102,17 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 		if ev.Message != nil {
 			switch ev.Message.Role {
 			case types.RoleUser:
-				// User prompts submitted from the input are already shown; only
-				// add ones we didn't originate (steering injected by the loop is
-				// also shown at submit time). Skip to avoid duplicates.
+				if m.activePrompt != nil && sameUserMessage(*m.activePrompt, *ev.Message) {
+					m.activePrompt = nil
+				} else if i := messageIndex(m.queuedSteering, *ev.Message); i >= 0 {
+					m.queuedSteering = append(m.queuedSteering[:i], m.queuedSteering[i+1:]...)
+				} else if i := queuedMessageIndex(m.queuedFollowUps, *ev.Message); i >= 0 {
+					queued := m.queuedFollowUps[i]
+					m.queuedFollowUps = append(m.queuedFollowUps[:i], m.queuedFollowUps[i+1:]...)
+					m.transcript.addUser(queued.display)
+					m.statusMsg = ""
+					m.updateLayout()
+				}
 			case types.RoleAssistant:
 				m.transcript.beginAssistant()
 			}
@@ -1055,9 +1176,11 @@ func (m *model) refreshViewport() {
 	content := m.transcript.render(m.width)
 	if m.showWelcome() {
 		content = m.renderWelcome()
+	} else {
+		content = renderTextSelection(content, m.selection, m.th.selection)
 	}
 	m.viewport.SetContent(content)
-	if atBottom || m.working {
+	if m.selection == nil && (atBottom || m.working) {
 		m.viewport.GotoBottom()
 	}
 }
@@ -1139,6 +1262,10 @@ func (m *model) View() tea.View {
 		sb.WriteString(picker)
 		sb.WriteByte('\n')
 	}
+	if queued := m.renderQueuedFollowUps(); queued != "" {
+		sb.WriteString(queued)
+		sb.WriteByte('\n')
+	}
 	sb.WriteString(m.input.View())
 	sb.WriteByte('\n')
 	sb.WriteString(m.footer())
@@ -1147,6 +1274,46 @@ func (m *model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m *model) renderQueuedFollowUps() string {
+	if len(m.queuedFollowUps) == 0 {
+		return ""
+	}
+	width := max(1, m.width)
+	bodyWidth := max(1, width-4)
+	items := make([]string, 0, len(m.queuedFollowUps))
+	for i, queued := range m.queuedFollowUps {
+		label := "NEXT  Queued follow-up"
+		if len(m.queuedFollowUps) > 1 {
+			label = fmt.Sprintf("NEXT %d/%d  Queued follow-up", i+1, len(m.queuedFollowUps))
+		}
+		body := strings.TrimRight(wordwrap.String(queued.display, bodyWidth), "\n")
+		items = append(items, m.th.queuedLabel.Render(label)+"\n"+body)
+	}
+	return m.th.queuedUserBlock.Width(max(1, width-2)).Render(strings.Join(items, "\n\n"))
+}
+
+func messageIndex(messages []types.Message, want types.Message) int {
+	for i, message := range messages {
+		if sameUserMessage(message, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+func queuedMessageIndex(messages []queuedMessage, want types.Message) int {
+	for i, message := range messages {
+		if sameUserMessage(message.message, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+func sameUserMessage(a, b types.Message) bool {
+	return a.Role == b.Role && a.Timestamp == b.Timestamp && textOf(a) == textOf(b)
 }
 
 func (m *model) renderPanel() string {
@@ -1252,29 +1419,49 @@ func (m *model) renderSessionPicker() string {
 			marker, style = "› ", m.th.cmdPickerSel
 		}
 		id := info.ID
-		if len(id) > 8 { id = id[:8] }
+		if len(id) > 8 {
+			id = id[:8]
+		}
 		title := info.Title
-		if title == "" { title = info.Preview }
-		if title == "" { title = "(no messages)" }
+		if title == "" {
+			title = info.Preview
+		}
+		if title == "" {
+			title = "(no messages)"
+		}
 		line := fmt.Sprintf("%s● CURRENT  %s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
 		lines = append(lines, m.th.muted.MaxWidth(max(1, m.width)).Render(strings.Repeat("─", max(1, m.width))))
 		first, fixedRows = 1, 3
 	}
 	count := min(height-fixedRows, len(m.sessions.items)-first)
-	if count <= 0 { return strings.Join(lines, "\n") }
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
 	start := m.sessions.sel - count + 1
-	if start < first { start = first }
-	if maxStart := len(m.sessions.items) - count; start > maxStart { start = maxStart }
+	if start < first {
+		start = first
+	}
+	if maxStart := len(m.sessions.items) - count; start > maxStart {
+		start = maxStart
+	}
 	for i := start; i < start+count; i++ {
 		info := m.sessions.items[i]
 		marker, style := "  ", m.th.cmdPickerItem
-		if i == m.sessions.sel { marker, style = "› ", m.th.cmdPickerSel }
+		if i == m.sessions.sel {
+			marker, style = "› ", m.th.cmdPickerSel
+		}
 		id := info.ID
-		if len(id) > 8 { id = id[:8] }
+		if len(id) > 8 {
+			id = id[:8]
+		}
 		title := info.Title
-		if title == "" { title = info.Preview }
-		if title == "" { title = "(no messages)" }
+		if title == "" {
+			title = info.Preview
+		}
+		if title == "" {
+			title = "(no messages)"
+		}
 		line := fmt.Sprintf("%s%s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
 		if len(m.sessions.items)-first > count && i == start+count-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
