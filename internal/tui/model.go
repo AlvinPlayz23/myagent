@@ -222,7 +222,7 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message (enter to send, ctrl+c to quit)…"
+	ta.Placeholder = "Send a message (enter to send, ctrl+enter for newline, ctrl+c to quit)…"
 	ta.ShowLineNumbers = false
 	ta.Focus()
 	key := textinput.New()
@@ -456,7 +456,9 @@ func (m *model) updateLayout() {
 	m.refreshViewport()
 }
 
-// onKey routes key presses. Uses Keystroke() strings for robust v2 matching.
+// Keys: enter sends or queues a follow-up; ctrl+enter inserts a newline.
+// ctrl+j is retained as a reliable newline alternative for terminals that do
+// not encode Ctrl+Enter distinctly; alt+enter sends a steering message.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	ks := k.Keystroke()
 	if m.sessions.active {
@@ -607,6 +609,16 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		return m.submit(submitFollowUp)
+
+	case "ctrl+enter", "ctrl+j":
+		// Ctrl+Enter is distinct in terminals with keyboard enhancements. Ctrl+J
+		// is retained as the unambiguous fallback for terminals that do not
+		// encode the modifier on Enter.
+		m.input.InsertString("\n")
+		m.historyIndex = -1
+		m.syncPickers()
+		m.updateLayout()
+		return m, nil
 
 	case "alt+enter":
 		return m.submit(submitSteering)
@@ -1273,6 +1285,11 @@ func (m *model) View() tea.View {
 	v := tea.NewView(sb.String())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	// Ask compatible terminals to encode modifiers on every key. Without this,
+	// terminals that collapse Shift+Enter to Enter make the two actions
+	// indistinguishable.
+	v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
+	v.KeyboardEnhancements.ReportAssociatedText = true
 	return v
 }
 

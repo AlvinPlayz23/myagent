@@ -52,7 +52,7 @@ const (
 	DefaultProviderName = "openai"
 	DefaultProviderType = "openai-compatible"
 	DefaultBaseURL      = "https://api.openai.com/v1"
-	DefaultModel        = "gpt-4o"
+	DefaultModel        = "gpt-5.6-luna"
 )
 
 // ProviderConfig describes one named endpoint. Only openai-compatible is

@@ -67,6 +67,34 @@ func TestEnterQueuesFollowUpOutsideTranscriptWhileWorking(t *testing.T) {
 	}
 }
 
+func TestCtrlEnterInsertsNewlineInsteadOfSubmitting(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.input.SetValue("first line")
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModCtrl}))
+
+	if got := m.input.Value(); got != "first line\n" {
+		t.Fatalf("input = %q, want newline inserted", got)
+	}
+	if len(m.queuedFollowUps) != 0 {
+		t.Fatalf("ctrl+enter queued follow-ups = %#v, want none", m.queuedFollowUps)
+	}
+}
+
+func TestCtrlJInsertsNewlineInsteadOfSubmitting(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.input.SetValue("first line")
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: 'j', Mod: tea.ModCtrl}))
+
+	if got := m.input.Value(); got != "first line\n" {
+		t.Fatalf("input = %q, want newline inserted", got)
+	}
+	if len(m.queuedFollowUps) != 0 {
+		t.Fatalf("ctrl+j queued follow-ups = %#v, want none", m.queuedFollowUps)
+	}
+}
+
 func TestAltEnterSteersWhileWorking(t *testing.T) {
 	q := newMsgQueue()
 	m := newModel(nil, nil, q, newTheme(), newMDRenderer(), "model", "")

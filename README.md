@@ -6,9 +6,6 @@ interactive **TUI** built on [bubbletea v2][btea] for multi-turn work, and a
 JSON-RPC. Speaks the OpenAI streaming protocol against any compatible
 endpoint (OpenAI, Ollama, LM Studio, vLLM, etc.).
 
-See [`myagent-plan.md`](./myagent-plan.md) for the full design plan and
-shipped status.
-
 [btea]: https://github.com/charmbracelet/bubbletea
 
 ---
@@ -269,6 +266,7 @@ to run, or **Esc** to dismiss it.
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
 | `/resume`            | Open the session selector and resume a previous conversation |
+| `/rename <title>`    | Rename the current session                              |
 
 `/model` searches tool-capable models from [models.dev](https://models.dev) for
 all configured compatible providers. The normalized catalog is cached at
@@ -289,6 +287,8 @@ animates only while the empty welcome is visible. The choice is persisted in
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
 navigate, resume, or cancel.
+`/rename <title>` sets a human-readable name for the current session. The
+session title is reflected in the terminal window title.
 
 ---
 
@@ -379,7 +379,7 @@ created session appears in `myagent sessions` and can be resumed in the TUI.
 
 ## Sessions
 
-Each run creates or resumes a JSONL file under
+Each run creates or resumes a JSONL file (format v4) under
 `$MYAGENT_DIR/sessions/<id>.jsonl`. The file is append-only: line 1 is a
 session header (`type`, `version`, `id`, `cwd`, `timestamp`); each
 following line is a message or compaction entry linked to the previous one

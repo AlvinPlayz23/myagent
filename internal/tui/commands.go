@@ -166,6 +166,6 @@ func buildHelpText() string {
 	for _, item := range commandItems {
 		fmt.Fprintf(&b, "  %-21s %s\n", item.usage, item.description)
 	}
-	b.WriteString("\nKeys: enter send/queue follow-up, alt+enter steer, esc cancel, ctrl+o expand tools, ctrl+c quit")
+	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand tools, ctrl+c quit")
 	return b.String()
 }
