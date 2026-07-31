@@ -258,6 +258,7 @@ to run, or **Esc** to dismiss it.
 | Command              | Action                                                  |
 | -------------------- | ------------------------------------------------------- |
 | `/help`              | Show available commands and keybindings                 |
+| `/init`              | Analyse the repository and write an `AGENTS.md`         |
 | `/model`             | Open the searchable model selector for configured providers |
 | `/model <provider/model-id>` | Select an exact model immediately |
 | `/providers`         | Add API keys for compatible catalog providers |
@@ -289,6 +290,13 @@ timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
 navigate, resume, or cancel.
 `/rename <title>` sets a human-readable name for the current session. The
 session title is reflected in the terminal window title.
+
+`/init` starts a normal agent turn with a prepared instruction: the agent
+explores the repository with its own tools and writes an `AGENTS.md` at the
+root. An existing `AGENTS.md` is used as the base and corrected rather than
+overwritten, and rules already written for other agents (`.cursorrules`,
+`.github/copilot-instructions.md`, `CLAUDE.md`, …) are folded in. Because it is
+an ordinary turn, **Esc** aborts it and the result is part of the session.
 
 ---
 

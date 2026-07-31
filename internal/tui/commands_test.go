@@ -33,6 +33,7 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
 		{input: "/providers", kind: commandProviders},
 		{input: "/customize", kind: commandCustomize},
+		{input: "/init", kind: commandInit},
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -51,6 +52,32 @@ func TestParseSlashCommand(t *testing.T) {
 				t.Fatalf("command = %#v, want kind %d arg %q", got, tt.kind, tt.arg)
 			}
 		})
+	}
+}
+
+func TestInitCommandStartsRunWithInitPrompt(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+
+	if _, cmd := m.runCommand("/init"); cmd == nil {
+		t.Fatal("/init did not start a run")
+	}
+	if !m.working {
+		t.Fatal("/init left the model idle")
+	}
+	// The model receives the full instruction, but the transcript shows the
+	// command the user actually typed.
+	if m.activePrompt == nil || !strings.Contains(m.activePrompt.Content[0].Text, "AGENTS.md") {
+		t.Fatalf("active prompt = %#v, want the init prompt", m.activePrompt)
+	}
+	rendered := m.transcript.render(80)
+	if !strings.Contains(rendered, "/init") {
+		t.Fatalf("transcript does not echo the command: %q", rendered)
+	}
+	if strings.Contains(rendered, "Analyse this repository") {
+		t.Fatalf("transcript leaked the full init prompt: %q", rendered)
 	}
 }
 

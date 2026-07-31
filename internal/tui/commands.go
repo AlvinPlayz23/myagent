@@ -18,6 +18,7 @@ const (
 	commandResume
 	commandRename
 	commandExport
+	commandInit
 )
 
 type slashCommand struct {
@@ -44,6 +45,7 @@ var commandItems = []commandItem{
 	{name: "/resume", usage: "/resume", description: "Resume a different persisted session", kind: commandResume},
 	{name: "/rename", usage: "/rename <title>", description: "Rename the current session", kind: commandRename, requiresArg: true},
 	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
+	{name: "/init", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
 }
 
 const commandPickerMaxVisible = 5
@@ -159,6 +161,39 @@ func parseSlashCommand(text string) (slashCommand, error) {
 	}
 	return slashCommand{}, fmt.Errorf("unknown command: %s (try /help)", name)
 }
+
+// initPrompt drives /init. It is sent to the model as a normal user turn, so
+// the agent explores the repository with its own tools and writes the file
+// itself rather than the TUI emitting a fixed template.
+const initPrompt = `Analyse this repository and create an AGENTS.md file at its root.
+
+AGENTS.md is read automatically at the start of every future run in this
+directory, so it should capture what an agent cannot cheaply rediscover each
+time. Work in this order:
+
+1. Explore before writing. Read the README, the build/package manifests, the
+   CI configuration, and enough of the source tree to understand how the code
+   is actually laid out. Prefer verifying a command over assuming it.
+2. If an AGENTS.md already exists, treat it as the base: correct anything now
+   wrong, fill in gaps, and preserve instructions that are still accurate. Do
+   not silently discard existing guidance.
+3. Also fold in any rules already written down for other agents — for example
+   .cursorrules, .cursor/rules/, .github/copilot-instructions.md, or CLAUDE.md.
+
+Cover, where they apply:
+
+- The exact build, test, lint, and run commands, including how to run a single
+  test, and any prerequisite setup.
+- The architecture: the handful of things worth knowing up front that reading
+  one file would not reveal.
+- Project-specific conventions that differ from the language's defaults.
+- Gotchas: platform quirks, required environment variables, slow or flaky
+  steps, and anything that has a non-obvious workaround.
+
+Keep it concise and factual — aim for something a new contributor could act on
+immediately, not a restatement of the README. Omit sections that do not apply
+rather than padding them. When you are done, tell me what you wrote and what
+you were unsure about.`
 
 var helpText = buildHelpText()
 
