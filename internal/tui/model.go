@@ -15,6 +15,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/muesli/reflow/wordwrap"
 
+	"github.com/AlvinPlayz23/myagent/internal/export"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -153,6 +154,21 @@ func normalizeWelcomeStyle(style string) welcomeStyle {
 	return welcomeDefault
 }
 
+type exportPicker struct {
+	active bool
+	sel    int
+}
+
+func (p *exportPicker) open()          { p.active, p.sel = true, 0 }
+func (p *exportPicker) close()         { p.active = false }
+func (p *exportPicker) move(delta int) { p.sel = (p.sel + delta + 2) % 2 }
+func (p *exportPicker) format() export.Format {
+	if p.sel == 1 {
+		return export.HTML
+	}
+	return export.Markdown
+}
+
 // model is the bubbletea root model for the interactive TUI.
 type model struct {
 	ctx    context.Context
@@ -163,17 +179,21 @@ type model struct {
 	th     *theme
 	md     *mdRenderer
 
-	transcript *transcript
-	viewport   viewport.Model
-	input      textarea.Model
-	picker     commandPicker
-	files      filePicker
-	sessions   sessionPicker
-	models     modelPicker
-	providers  providerPicker
-	customize  customizePicker
-	keyInput   textinput.Model
-	keyFor     modelcatalog.Provider
+	transcript      *transcript
+	viewport        viewport.Model
+	input           textarea.Model
+	picker          commandPicker
+	files           filePicker
+	sessions        sessionPicker
+	models          modelPicker
+	providers       providerPicker
+	customize       customizePicker
+	exportPick      exportPicker
+	exportName      textinput.Model
+	exportFormat    export.Format
+	exportOverwrite bool
+	keyInput        textinput.Model
+	keyFor          modelcatalog.Provider
 
 	width, height int
 	ready         bool
@@ -214,6 +234,7 @@ type model struct {
 	providerAPIKey     func(string) string
 	configureProvider  func(modelcatalog.Provider, string) error
 	saveWelcomeStyle   func(welcomeStyle) error
+	exportSession      func(export.Format, string, bool) (string, error)
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
@@ -229,7 +250,8 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 	key.Placeholder = "Paste API key"
 	key.CharLimit = 0
 	key.EchoMode = textinput.EchoPassword
-	key.EchoCharacter = '*'
+	exportName := textinput.New()
+	exportName.Placeholder = "File name"
 
 	var createSession func() error
 	if len(newSession) > 0 {
@@ -244,6 +266,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		transcript:     newTranscript(th, md),
 		input:          ta,
 		keyInput:       key,
+		exportName:     exportName,
 		picker:         newCommandPicker(),
 		clipboardWrite: clipboard.WriteAll,
 		historyIndex:   -1,
@@ -442,7 +465,9 @@ func (m *model) panelHeight() int {
 	if m.providers.active || m.keyFor.ID != "" {
 		desired = min(10, max(2, len(m.providers.items)+1))
 	}
-	if m.customize.active {
+	if m.exportPick.active || m.exportFormat != "" || m.exportOverwrite {
+		desired = 3
+	} else if m.customize.active {
 		desired = len(welcomeChoices) + 1
 	}
 	return min(desired, max(0, available))
@@ -461,6 +486,56 @@ func (m *model) updateLayout() {
 // not encode Ctrl+Enter distinctly; alt+enter sends a steering message.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	ks := k.Keystroke()
+	if m.exportPick.active {
+		switch ks {
+		case "up":
+			m.exportPick.move(-1)
+		case "down":
+			m.exportPick.move(1)
+		case "enter":
+			m.exportFormat = m.exportPick.format()
+			m.exportPick.close()
+			m.exportName.SetValue(export.DefaultFilename(m.sessionTitle))
+			m.exportName.Focus()
+			m.statusMsg = "Enter a file name, then press enter to export."
+			m.updateLayout()
+		case "esc":
+			m.exportPick.close()
+			m.statusMsg = "Export cancelled."
+			m.updateLayout()
+		}
+		return m, nil
+	}
+	if m.exportOverwrite {
+		switch ks {
+		case "up", "down":
+			m.exportOverwrite = false
+			m.updateLayout()
+		case "enter":
+			return m.writeExport(true)
+		case "esc":
+			m.exportOverwrite = false
+			m.exportFormat = ""
+			m.statusMsg = "Export cancelled."
+			m.updateLayout()
+		}
+		return m, nil
+	}
+	if m.exportFormat != "" {
+		switch ks {
+		case "esc":
+			m.exportFormat = ""
+			m.exportName.Reset()
+			m.statusMsg = "Export cancelled."
+			m.updateLayout()
+			return m, nil
+		case "enter":
+			return m.writeExport(false)
+		}
+		var cmd tea.Cmd
+		m.exportName, cmd = m.exportName.Update(k)
+		return m, cmd
+	}
 	if m.sessions.active {
 		switch ks {
 		case "up":
@@ -972,6 +1047,14 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.sessions.open(infos, currentID)
 		m.statusMsg = "Select a session to resume."
 		m.updateLayout()
+	case commandExport:
+		if m.exportSession == nil {
+			m.statusMsg = "Export is unavailable."
+			return m, nil
+		}
+		m.exportPick.open()
+		m.statusMsg = "Choose an export format."
+		m.updateLayout()
 	case commandRename:
 		if m.renameSession == nil {
 			m.statusMsg = "Unable to rename the current session."
@@ -986,6 +1069,29 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.updateTerminalTitle()
 		m.statusMsg = "Session renamed."
 	}
+	return m, nil
+}
+
+func (m *model) writeExport(overwrite bool) (tea.Model, tea.Cmd) {
+	if m.exportSession == nil {
+		return m, nil
+	}
+	path, err := m.exportSession(m.exportFormat, m.exportName.Value(), overwrite)
+	if errors.Is(err, export.ErrFileExists) {
+		m.exportOverwrite = true
+		m.statusMsg = "File exists — enter overwrite, up/down return to name."
+		m.updateLayout()
+		return m, nil
+	}
+	if err != nil {
+		m.statusMsg = "Could not export session: " + err.Error()
+		return m, nil
+	}
+	m.exportFormat = ""
+	m.exportOverwrite = false
+	m.exportName.Reset()
+	m.statusMsg = "Exported session to " + path
+	m.updateLayout()
 	return m, nil
 }
 
@@ -1334,6 +1440,15 @@ func sameUserMessage(a, b types.Message) bool {
 }
 
 func (m *model) renderPanel() string {
+	if m.exportPick.active {
+		return m.renderExportPicker()
+	}
+	if m.exportOverwrite {
+		return m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("File exists — enter overwrite, ↑/↓ return to name, esc cancel")
+	}
+	if m.exportFormat != "" {
+		return m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Export as " + export.Label(m.exportFormat) + " — " + m.exportName.View() + " · enter export, esc cancel")
+	}
 	if m.sessions.active {
 		return m.renderSessionPicker()
 	}
@@ -1371,6 +1486,18 @@ func (m *model) renderPanel() string {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.picker.sel+1, len(m.picker.matched)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderExportPicker() string {
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Export session as — ↑/↓ select, enter continue, esc cancel")}
+	for i, format := range []export.Format{export.Markdown, export.HTML} {
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.exportPick.sel {
+			marker, style = "› ", m.th.cmdPickerSel
+		}
+		lines = append(lines, style.Render(marker+export.Label(format)))
 	}
 	return strings.Join(lines, "\n")
 }

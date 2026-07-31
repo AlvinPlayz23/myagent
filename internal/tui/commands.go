@@ -17,6 +17,7 @@ const (
 	commandCustomize
 	commandResume
 	commandRename
+	commandExport
 )
 
 type slashCommand struct {
@@ -42,6 +43,7 @@ var commandItems = []commandItem{
 	{name: "/new", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},
 	{name: "/resume", usage: "/resume", description: "Resume a different persisted session", kind: commandResume},
 	{name: "/rename", usage: "/rename <title>", description: "Rename the current session", kind: commandRename, requiresArg: true},
+	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
 }
 
 const commandPickerMaxVisible = 5

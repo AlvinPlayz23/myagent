@@ -12,6 +12,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
 	"github.com/AlvinPlayz23/myagent/internal/auth"
 	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/export"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -162,6 +163,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		sess = resumed
 		history := resumed.Messages()
 		return history, nil
+	}
+	m.exportSession = func(format export.Format, name string, overwrite bool) (string, error) {
+		return export.Write(sess, format, name, overwrite)
 	}
 	m.renameSession = func(title string) error {
 		if sess == nil {
