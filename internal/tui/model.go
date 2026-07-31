@@ -13,7 +13,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -908,7 +907,8 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 		if mode == submitFollowUp {
 			m.queue.EnqueueFollowUp(um)
 			m.queuedFollowUps = append(m.queuedFollowUps, queuedMessage{display: text, message: um})
-			m.statusMsg = fmt.Sprintf("Queued follow-up (%d pending)", m.queue.PendingCount())
+			// The "↳ next" line beside the composer reports queue state; no
+			// status message needed.
 		} else {
 			m.queue.EnqueueSteering(um)
 			m.queuedSteering = append(m.queuedSteering, um)
@@ -1404,17 +1404,21 @@ func (m *model) renderQueuedFollowUps() string {
 		return ""
 	}
 	width := max(1, m.width)
-	bodyWidth := max(1, width-4)
-	items := make([]string, 0, len(m.queuedFollowUps))
+	lines := make([]string, 0, len(m.queuedFollowUps))
 	for i, queued := range m.queuedFollowUps {
-		label := "NEXT  Queued follow-up"
+		label := "↳ next"
 		if len(m.queuedFollowUps) > 1 {
-			label = fmt.Sprintf("NEXT %d/%d  Queued follow-up", i+1, len(m.queuedFollowUps))
+			label = fmt.Sprintf("↳ next %d/%d", i+1, len(m.queuedFollowUps))
 		}
-		body := strings.TrimRight(wordwrap.String(queued.display, bodyWidth), "\n")
-		items = append(items, m.th.queuedLabel.Render(label)+"\n"+body)
+		// One dim line per queued prompt: collapse newlines, truncate to fit.
+		body := strings.Join(strings.Fields(queued.display), " ")
+		bodyWidth := max(1, width-len([]rune(label))-4)
+		if r := []rune(body); len(r) > bodyWidth {
+			body = string(r[:bodyWidth-1]) + "…"
+		}
+		lines = append(lines, " "+m.th.queuedLabel.Render(label)+"  "+m.th.muted.Render(body))
 	}
-	return m.th.queuedUserBlock.Width(max(1, width-2)).Render(strings.Join(items, "\n\n"))
+	return strings.Join(lines, "\n")
 }
 
 func messageIndex(messages []types.Message, want types.Message) int {

@@ -19,14 +19,14 @@ func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	m.queuedFollowUps = []queuedMessage{{display: "run the tests after this", message: message}}
 	m.updateLayout()
 
-	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "Queued follow-up") {
+	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "next") {
 		t.Fatalf("queued follow-up has no pending label: %q", queued)
 	}
 	m.onAgentEvent(userMessageStartEvent("run the tests after this"))
 	if len(m.queuedFollowUps) != 0 {
 		t.Fatalf("queued follow-ups = %#v, want empty", m.queuedFollowUps)
 	}
-	if got := m.transcript.render(50); !strings.Contains(got, "run the tests after this") || strings.Contains(got, "Queued follow-up") {
+	if got := m.transcript.render(50); !strings.Contains(got, "run the tests after this") || strings.Contains(got, "next") {
 		t.Fatalf("consumed follow-up was not promoted to transcript: %q", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestEnterQueuesFollowUpOutsideTranscriptWhileWorking(t *testing.T) {
 		t.Fatalf("queued follow-up leaked into transcript: %q", got)
 	}
 	view := m.View().Content
-	if !strings.Contains(view, "NEXT") || !strings.Contains(view, "hi") {
+	if !strings.Contains(view, "next") || !strings.Contains(view, "hi") {
 		t.Fatalf("queued follow-up is not attached to composer: %q", view)
 	}
 }
@@ -140,7 +140,7 @@ func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
 	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
 		t.Fatalf("view height with queued follow-up = %d, terminal height = %d", got, m.height)
 	}
-	if !strings.Contains(view.Content, "Queued follow-up") {
+	if !strings.Contains(view.Content, "run the tests after this") {
 		t.Fatalf("view does not contain queued follow-up: %q", view.Content)
 	}
 }

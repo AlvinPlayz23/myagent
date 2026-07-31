@@ -12,7 +12,6 @@ import (
 // coarse level; we keep a small palette rather than pi's ~50 tokens.
 type theme struct {
 	userBlock       lipgloss.Style
-	queuedUserBlock lipgloss.Style
 	queuedLabel     lipgloss.Style
 	assistantTxt    lipgloss.Style
 	toolPending     lipgloss.Style
@@ -40,16 +39,7 @@ type theme struct {
 func newTheme() *theme {
 	return &theme{
 		userBlock: lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
-		queuedUserBlock: lipgloss.NewStyle().
-			Background(lipgloss.Color("237")).
-			Foreground(lipgloss.Color("252")).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("39")).
-			BorderTop(true).
-			BorderLeft(true).
-			BorderRight(true).
-			Padding(0, 1),
-		queuedLabel:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
+		queuedLabel:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
 		assistantTxt:  lipgloss.NewStyle(),
 		toolPending:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		toolSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
