@@ -434,22 +434,26 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 ├── internal/
 │   ├── agent/           # prompt→stream→tools→repeat loop, event emission, message queue
 │   │   └── compaction/  # auto context compaction (summarize old history)
+│   ├── auth/            # built-in provider credential storage
 │   ├── config/          # JSON config + env overrides
 │   ├── eventbus/        # guaranteed-delivery pub/sub for agent events
+│   ├── export/          # /export session transcript export
 │   ├── llm/             # Provider interface + OpenAI streaming adapter
+│   ├── models/          # models.dev catalog cache + model discovery
 │   ├── printmode/       # non-interactive one-shot driver
 │   ├── server/          # server mode
 │   │   ├── core/        # transport-agnostic session manager + run lifecycle
 │   │   ├── rpc/         # minimal JSON-RPC 2.0 framing
 │   │   └── ws/          # WebSocket transport (auth, dispatch, event pumps)
 │   ├── session/         # JSONL persistence (v4, id/parentId chain, compaction, list, resume)
+│   ├── setup/           # first-run setup + provider manager wizard
+│   ├── terminal/        # terminal capability helpers
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
 │   ├── tui/             # bubbletea v2 UI: transcript, input, footer
 │   └── types/           # Message / Content / ToolCall / Usage / Event
+├── desktop/             # Electron desktop client (connects to `myagent serve`)
 ├── scripts/
 │   └── ws-smoke.go      # manual server-mode smoke-test client
-├── myagent-plan.md      # design plan
-├── pi/                  # upstream TypeScript implementation (reference)
 └── README.md            # this file
 ```
 
@@ -552,4 +556,4 @@ Either none exist yet (run an interactive session first), or
 
 ## License
 
-Same upstream license as the `pi/` reference (see that directory).
+No license file yet — all rights reserved until one is added.
