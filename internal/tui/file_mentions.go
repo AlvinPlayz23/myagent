@@ -232,15 +232,27 @@ func expandFileMentions(text, cwd string) (string, error) {
 		return "", fmt.Errorf("at most %d file mentions are allowed per message", maxMentionFiles)
 	}
 
+	// Abs alone is insufficient here: an in-project symlink can point outside
+	// cwd. Canonicalize cwd and every mentioned file before checking containment
+	// so @mentions cannot exfiltrate arbitrary readable files into the prompt.
+	cleanCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", err
+	}
+	cleanCwd, err = filepath.EvalSymlinks(cleanCwd)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+
 	var context strings.Builder
 	for _, mention := range mentions {
 		path := filepath.Join(cwd, filepath.FromSlash(mention))
-		cleanCwd, err := filepath.Abs(cwd)
-		if err != nil {
-			return "", err
-		}
 		cleanPath, err := filepath.Abs(path)
-		if err != nil || (cleanPath != cleanCwd && !strings.HasPrefix(cleanPath, cleanCwd+string(filepath.Separator))) {
+		if err != nil {
+			return "", fmt.Errorf("file mention %q is outside the working directory", mention)
+		}
+		cleanPath, err = filepath.EvalSymlinks(cleanPath)
+		if err != nil || !pathWithin(cleanCwd, cleanPath) {
 			return "", fmt.Errorf("file mention %q is outside the working directory", mention)
 		}
 		info, err := os.Stat(cleanPath)
@@ -260,6 +272,16 @@ func expandFileMentions(text, cwd string) (string, error) {
 		fmt.Fprintf(&context, "\n\n<file path=%q>\n%s\n</file>", mention, contents)
 	}
 	return text + context.String(), nil
+}
+
+// pathWithin reports whether path is cwd itself or a descendant of cwd. Both
+// paths must already be absolute and have had symlinks resolved.
+func pathWithin(cwd, path string) bool {
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func mentionedPaths(text string) []string {

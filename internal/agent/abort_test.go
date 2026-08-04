@@ -57,6 +57,15 @@ func (p *toolCallProvider) Stream(_ context.Context, _ llm.Model, _ llm.Request)
 
 func (p *toolCallProvider) requestCount() int { p.mu.Lock(); defer p.mu.Unlock(); return p.requests }
 
+type successfulTestTool struct{ name string }
+
+func (t *successfulTestTool) Name() string               { return t.name }
+func (t *successfulTestTool) Description() string        { return "test" }
+func (t *successfulTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (t *successfulTestTool) Execute(context.Context, string, map[string]any) (*types.ToolResult, error) {
+	return types.TextResult("done", nil), nil
+}
+
 func TestAbortDuringToolDoesNotRunLaterToolsOrRequestAgain(t *testing.T) {
 	provider := &toolCallProvider{}
 	first := &abortTestTool{name: "first", started: make(chan struct{})}
@@ -106,5 +115,39 @@ func TestAbortDuringToolDoesNotRunLaterToolsOrRequestAgain(t *testing.T) {
 	}
 	if results != 2 {
 		t.Fatalf("tool results in history = %d, want 2", results)
+	}
+}
+
+func TestToolResultPersistenceFailureStopsBeforeHistoryMutation(t *testing.T) {
+	provider := &toolCallProvider{}
+	want := context.DeadlineExceeded
+	loop := New(Config{
+		Provider: provider,
+		Model:    llm.Model{ID: "test"},
+		Registry: tools.NewRegistry(&successfulTestTool{name: "first"}, &successfulTestTool{name: "second"}),
+	}, nil, func(_ context.Context, ev types.AgentEvent) error {
+		if ev.Type == types.EventMessageEnd && ev.Message != nil && ev.Message.Role == types.RoleToolResult {
+			return want
+		}
+		return nil
+	})
+
+	_, err := loop.Run(context.Background(), []types.Message{{
+		Role:    types.RoleUser,
+		Content: []types.ContentBlock{types.TextBlock("go")},
+	}})
+	if err != want {
+		t.Fatalf("Run error = %v, want %v", err, want)
+	}
+	if got := provider.requestCount(); got != 1 {
+		t.Fatalf("provider requests = %d, want 1", got)
+	}
+
+	// The assistant tool-call message was successfully emitted before tool
+	// execution, but the failed tool result was not admitted to loop history.
+	for _, msg := range loop.Messages() {
+		if msg.Role == types.RoleToolResult {
+			t.Fatalf("history contains a tool result after its persistence failed: %#v", msg)
+		}
 	}
 }

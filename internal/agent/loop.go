@@ -151,9 +151,12 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 			if len(toolCalls) > 0 {
 				var terminate bool
 				if message.StopReason == types.StopLength {
-					toolResults, terminate = l.failTruncatedToolCalls(ctx, toolCalls)
+					toolResults, terminate, err = l.failTruncatedToolCalls(ctx, toolCalls)
 				} else {
-					toolResults, terminate = l.executeToolCalls(ctx, toolCalls)
+					toolResults, terminate, err = l.executeToolCalls(ctx, toolCalls)
+				}
+				if err != nil {
+					return err
 				}
 				hasMoreToolCalls = !terminate
 				for i := range toolResults {
@@ -264,7 +267,7 @@ func (l *Loop) streamAssistant(ctx context.Context) (types.Message, error) {
 // executeToolCalls runs each tool call sequentially in call order, emitting
 // tool_execution_* events and building toolResult messages. Ported from pi
 // executeToolCallsSequential.
-func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBlock) ([]types.Message, bool) {
+func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBlock) ([]types.Message, bool, error) {
 	var results []types.Message
 	allTerminate := len(toolCalls) > 0
 	for _, tc := range toolCalls {
@@ -274,12 +277,14 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 		// when the session is resumed.
 		abortedBeforeStart := runWasAborted(ctx)
 		if !abortedBeforeStart {
-			_ = l.emit(ctx, types.AgentEvent{
+			if err := l.emit(ctx, types.AgentEvent{
 				Type:       types.EventToolExecutionStart,
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 				Args:       tc.Arguments,
-			})
+			}); err != nil {
+				return nil, false, err
+			}
 		}
 
 		var result *types.ToolResult
@@ -291,25 +296,31 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 		}
 
 		if !abortedBeforeStart {
-			_ = l.emit(ctx, types.AgentEvent{
+			if err := l.emit(ctx, types.AgentEvent{
 				Type:       types.EventToolExecutionEnd,
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 				Result:     result,
 				IsError:    isError,
-			})
+			}); err != nil {
+				return nil, false, err
+			}
 		}
 
 		msg := l.toolResultMessage(tc, result, isError)
-		_ = l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg})
-		_ = l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg})
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
+			return nil, false, err
+		}
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg}); err != nil {
+			return nil, false, err
+		}
 		results = append(results, msg)
 
 		if !result.Terminate {
 			allTerminate = false
 		}
 	}
-	return results, allTerminate
+	return results, allTerminate, nil
 }
 
 // runTool validates and executes a single tool call, converting a returned
@@ -335,31 +346,39 @@ func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (*types.ToolR
 
 // failTruncatedToolCalls rejects every tool call from a length-truncated
 // message. Ported from pi failToolCallsFromTruncatedMessage.
-func (l *Loop) failTruncatedToolCalls(ctx context.Context, toolCalls []types.ContentBlock) ([]types.Message, bool) {
+func (l *Loop) failTruncatedToolCalls(ctx context.Context, toolCalls []types.ContentBlock) ([]types.Message, bool, error) {
 	var results []types.Message
 	for _, tc := range toolCalls {
-		_ = l.emit(ctx, types.AgentEvent{
+		if err := l.emit(ctx, types.AgentEvent{
 			Type:       types.EventToolExecutionStart,
 			ToolCallID: tc.ID,
 			ToolName:   tc.Name,
 			Args:       tc.Arguments,
-		})
+		}); err != nil {
+			return nil, false, err
+		}
 		result := types.TextResult(fmt.Sprintf(
 			"Tool call %q was not executed: the response hit the output token limit, so its arguments "+
 				"may be truncated. Re-issue the tool call with complete arguments.", tc.Name), nil)
-		_ = l.emit(ctx, types.AgentEvent{
+		if err := l.emit(ctx, types.AgentEvent{
 			Type:       types.EventToolExecutionEnd,
 			ToolCallID: tc.ID,
 			ToolName:   tc.Name,
 			Result:     result,
 			IsError:    true,
-		})
+		}); err != nil {
+			return nil, false, err
+		}
 		msg := l.toolResultMessage(tc, result, true)
-		_ = l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg})
-		_ = l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg})
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
+			return nil, false, err
+		}
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg}); err != nil {
+			return nil, false, err
+		}
 		results = append(results, msg)
 	}
-	return results, false
+	return results, false, nil
 }
 
 // toolResultMessage builds a toolResult Message. Ported from pi

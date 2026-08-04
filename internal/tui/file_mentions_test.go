@@ -3,6 +3,8 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +29,48 @@ func TestDiscoverFilesPrioritizesRootFiles(t *testing.T) {
 		if files[i] != want[i] {
 			t.Fatalf("files = %v, want %v", files, want)
 		}
+	}
+}
+
+func TestExpandFileMentionsRejectsSymlinkOutsideWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated privileges or Developer Mode on Windows")
+	}
+
+	cwd := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("do not expose"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cwd, "linked-secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := expandFileMentions("review @linked-secret", cwd)
+	if err == nil || !strings.Contains(err.Error(), "outside the working directory") {
+		t.Fatalf("expandFileMentions error = %v, want outside-working-directory error", err)
+	}
+}
+
+func TestExpandFileMentionsAllowsSymlinkWithinWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated privileges or Developer Mode on Windows")
+	}
+
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "actual.txt"), []byte("safe content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("actual.txt", filepath.Join(cwd, "linked.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := expandFileMentions("review @linked.txt", cwd)
+	if err != nil {
+		t.Fatalf("expandFileMentions: %v", err)
+	}
+	if !strings.Contains(got, "safe content") {
+		t.Fatalf("expanded prompt = %q, want linked file content", got)
 	}
 }
 
