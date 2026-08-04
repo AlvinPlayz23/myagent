@@ -377,6 +377,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-arm the pump to keep consuming events.
 		return m, tea.Batch(cmd, m.runner.waitForEvent())
 
+	case agentTitleMsg:
+		if msg.generation != m.runner.generation || msg.title == "" {
+			return m, m.runner.waitForEvent()
+		}
+		m.sessionTitle = msg.title
+		m.hasSessionTitle = true
+		m.updateTerminalTitle()
+		return m, m.runner.waitForEvent()
+
 	case eventChannelClosedMsg:
 		return m, nil
 
@@ -912,7 +921,6 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.addPromptHistory(text)
-	m.setSessionTitle(text)
 	m.input.Reset()
 	m.historyIndex = -1
 	um := userMessage(expanded)

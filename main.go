@@ -35,6 +35,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/printmode"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/setup"
+	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/tui"
 	"github.com/AlvinPlayz23/myagent/internal/types"
@@ -208,6 +209,13 @@ func run(argv []string) error {
 		return nil
 	}
 	defer sess.Close()
+	if len(history) == 0 && sess.Title() == "new" {
+		titleCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		if title, titleErr := titlegen.Generate(titleCtx, provider, model, printPrompt); titleErr == nil {
+			_ = sess.SetGeneratedTitle(title)
+		}
+		cancel()
+	}
 	return printmode.Run(ctx, agentCfg, sess, history, printPrompt, os.Stdout, os.Stderr)
 }
 

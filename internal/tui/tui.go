@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,6 +18,7 @@ import (
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/terminal"
+	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -172,6 +174,22 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			return fmt.Errorf("no active session")
 		}
 		return sess.SetTitle(title)
+	}
+
+	r.generateTitle = func(parent context.Context, prompt string) (string, error) {
+		if sess == nil || sess.Title() != "new" {
+			return "", nil
+		}
+		titleCtx, cancel := context.WithTimeout(parent, 4*time.Second)
+		defer cancel()
+		title, err := titlegen.Generate(titleCtx, r.cfg.Provider, r.cfg.Model, prompt)
+		if err != nil {
+			return "", err
+		}
+		if err := sess.SetGeneratedTitle(title); err != nil {
+			return "", err
+		}
+		return title, nil
 	}
 
 	// Seed the transcript with prior conversation so resumed sessions show

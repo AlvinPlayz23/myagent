@@ -14,6 +14,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -119,7 +120,7 @@ func (s *ServerSession) Prompt(text string) error {
 	return s.startRun(func(loop *agent.Loop, runCtx context.Context) error {
 		_, err := loop.Run(runCtx, []types.Message{userMessage(text)})
 		return err
-	})
+	}, text)
 }
 
 // Compact starts a forced compaction run. Like Prompt it returns immediately;
@@ -141,7 +142,7 @@ func (s *ServerSession) Compact() error {
 // startRun spawns the run goroutine shared by Prompt and Compact, mirroring
 // tui/runner.run: build a fresh Loop over the current history, stream events
 // through the sink, and persist messages/compactions as they complete.
-func (s *ServerSession) startRun(action func(*agent.Loop, context.Context) error) error {
+func (s *ServerSession) startRun(action func(*agent.Loop, context.Context) error, initialPrompt ...string) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -156,10 +157,25 @@ func (s *ServerSession) startRun(action func(*agent.Loop, context.Context) error
 	s.cancelRun = cancel
 	history := s.history
 	cfg := s.cfg
+	needsTitle := len(s.history) == 0 && s.sess.Title() == "new" && len(initialPrompt) == 1
+	prompt := ""
+	if needsTitle {
+		prompt = initialPrompt[0]
+	}
 	s.mu.Unlock()
 
 	go func() {
 		defer cancel()
+		if needsTitle {
+			titleCtx, titleCancel := context.WithTimeout(runCtx, 4*time.Second)
+			title, titleErr := titlegen.Generate(titleCtx, cfg.Provider, cfg.Model, prompt)
+			titleCancel()
+			if titleErr == nil {
+				s.mu.Lock()
+				_ = s.sess.SetGeneratedTitle(title)
+				s.mu.Unlock()
+			}
+		}
 		sink := func(sctx context.Context, ev types.AgentEvent) error {
 			// Persist messages/compactions before forwarding, so the session
 			// file stays in sync with the loop's in-memory history (same

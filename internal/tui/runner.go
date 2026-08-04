@@ -27,9 +27,17 @@ type agentDoneMsg struct {
 	generation uint64
 }
 
+// agentTitleMsg carries the isolated title-generator result to the UI. It is
+// deliberately not an AgentEvent, so it cannot appear in the transcript.
+type agentTitleMsg struct {
+	title      string
+	generation uint64
+}
+
 type runnerEvent struct {
 	ev         *types.AgentEvent
 	done       *agentDoneMsg
+	title      *agentTitleMsg
 	generation uint64
 }
 
@@ -54,6 +62,10 @@ type runner struct {
 	events chan runnerEvent
 
 	generation uint64
+
+	// generateTitle is invoked once, before the first main-agent request of a
+	// fresh session. It must persist the title itself and returns it for UI use.
+	generateTitle func(context.Context, string) (string, error)
 
 	// onEvent, if set, is called for every AgentEvent (on the loop goroutine,
 	// before the event is forwarded to the UI channel). Used to persist
@@ -80,6 +92,11 @@ func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
 	r.generation++
 	generation := r.generation
 	return r.run(ctx, generation, func(loop *agent.Loop) error {
+		if len(r.history) == 0 && r.generateTitle != nil {
+			if title, err := r.generateTitle(ctx, textOf(prompt)); err == nil && title != "" {
+				r.events <- runnerEvent{title: &agentTitleMsg{title: title, generation: generation}, generation: generation}
+			}
+		}
 		_, err := loop.Run(ctx, []types.Message{prompt})
 		return err
 	})
@@ -156,6 +173,9 @@ func (r *runner) waitForEvent() tea.Cmd {
 		ev, ok := <-r.events
 		if !ok {
 			return eventChannelClosedMsg{}
+		}
+		if ev.title != nil {
+			return *ev.title
 		}
 		if ev.done != nil {
 			return *ev.done

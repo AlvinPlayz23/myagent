@@ -310,9 +310,22 @@ func buildChain(byID map[string]entry, leafID, stopID string) []entry {
 }
 
 // AppendMessage appends a message entry, chaining it to the previous entry.
-// SetTitle persists a user-assigned title for this session. Title entries are
-// chained like messages so later appends retain a valid session tree.
+// SetGeneratedTitle persists an LLM-generated title, but never overwrites an
+// existing generated or user-assigned title.
+func (s *Session) SetGeneratedTitle(title string) error {
+	if s.title != "" {
+		return nil
+	}
+	return s.setTitle(title)
+}
+
+// SetTitle persists a user-assigned title. Title entries are chained like
+// messages so later appends retain a valid session tree.
 func (s *Session) SetTitle(title string) error {
+	return s.setTitle(title)
+}
+
+func (s *Session) setTitle(title string) error {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return fmt.Errorf("session: title cannot be empty")
