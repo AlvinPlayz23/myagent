@@ -1990,7 +1990,8 @@ func (m *model) footer() string {
 
 func userMessage(text string) types.Message {
 	return types.Message{
-		Role:    types.RoleUser,
-		Content: []types.ContentBlock{types.TextBlock(text)},
+		Role:      types.RoleUser,
+		Content:   []types.ContentBlock{types.TextBlock(text)},
+		Timestamp: time.Now().UnixMilli(),
 	}
 }
