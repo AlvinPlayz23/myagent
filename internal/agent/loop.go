@@ -155,14 +155,14 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 				} else {
 					toolResults, terminate, err = l.executeToolCalls(ctx, toolCalls)
 				}
-				if err != nil {
-					return err
-				}
-				hasMoreToolCalls = !terminate
 				for i := range toolResults {
 					l.messages = append(l.messages, toolResults[i])
 					*produced = append(*produced, toolResults[i])
 				}
+				if err != nil {
+					return err
+				}
+				hasMoreToolCalls = !terminate
 			}
 
 			msg := message
@@ -283,7 +283,7 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 				ToolName:   tc.Name,
 				Args:       tc.Arguments,
 			}); err != nil {
-				return nil, false, err
+				return results, false, err
 			}
 		}
 
@@ -303,16 +303,16 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 				Result:     result,
 				IsError:    isError,
 			}); err != nil {
-				return nil, false, err
+				return results, false, err
 			}
 		}
 
 		msg := l.toolResultMessage(tc, result, isError)
 		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		results = append(results, msg)
 
@@ -355,7 +355,7 @@ func (l *Loop) failTruncatedToolCalls(ctx context.Context, toolCalls []types.Con
 			ToolName:   tc.Name,
 			Args:       tc.Arguments,
 		}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		result := types.TextResult(fmt.Sprintf(
 			"Tool call %q was not executed: the response hit the output token limit, so its arguments "+
@@ -367,14 +367,14 @@ func (l *Loop) failTruncatedToolCalls(ctx context.Context, toolCalls []types.Con
 			Result:     result,
 			IsError:    true,
 		}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		msg := l.toolResultMessage(tc, result, true)
 		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg}); err != nil {
-			return nil, false, err
+			return results, false, err
 		}
 		results = append(results, msg)
 	}

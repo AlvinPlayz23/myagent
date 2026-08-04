@@ -151,3 +151,51 @@ func TestToolResultPersistenceFailureStopsBeforeHistoryMutation(t *testing.T) {
 		}
 	}
 }
+
+func TestToolResultPersistenceFailurePreservesPriorResults(t *testing.T) {
+	provider := &toolCallProvider{}
+	want := context.DeadlineExceeded
+	toolResultEnds := 0
+	loop := New(Config{
+		Provider: provider,
+		Model:    llm.Model{ID: "test"},
+		Registry: tools.NewRegistry(&successfulTestTool{name: "first"}, &successfulTestTool{name: "second"}),
+	}, nil, func(_ context.Context, ev types.AgentEvent) error {
+		if ev.Type == types.EventMessageEnd && ev.Message != nil && ev.Message.Role == types.RoleToolResult {
+			toolResultEnds++
+			if toolResultEnds == 2 {
+				return want
+			}
+		}
+		return nil
+	})
+
+	produced, err := loop.Run(context.Background(), []types.Message{{
+		Role:    types.RoleUser,
+		Content: []types.ContentBlock{types.TextBlock("go")},
+	}})
+	if err != want {
+		t.Fatalf("Run error = %v, want %v", err, want)
+	}
+	if got := provider.requestCount(); got != 1 {
+		t.Fatalf("provider requests = %d, want 1", got)
+	}
+
+	assertSingleToolResult := func(name string, messages []types.Message) {
+		t.Helper()
+		var results []types.Message
+		for _, msg := range messages {
+			if msg.Role == types.RoleToolResult {
+				results = append(results, msg)
+			}
+		}
+		if len(results) != 1 {
+			t.Fatalf("tool results in %s = %d, want 1", name, len(results))
+		}
+		if results[0].ToolCallID != "1" {
+			t.Fatalf("tool result in %s has call ID %q, want %q", name, results[0].ToolCallID, "1")
+		}
+	}
+	assertSingleToolResult("history", loop.Messages())
+	assertSingleToolResult("produced messages", produced)
+}
