@@ -117,10 +117,20 @@ func (s *ServerSession) Running() bool {
 // progress streams through Events() and completion is signaled with a Done
 // event. Returns ErrBusy if a run is already active.
 func (s *ServerSession) Prompt(text string) error {
+	return s.PromptContent([]types.ContentBlock{types.TextBlock(text)})
+}
+
+// PromptContent starts an agent run with text and/or image content.
+func (s *ServerSession) PromptContent(content []types.ContentBlock) error {
+	message := userMessageContent(content)
+	titleText := messageText(message)
+	if titleText == "" {
+		titleText = "Image attachment"
+	}
 	return s.startRun(func(loop *agent.Loop, runCtx context.Context) error {
-		_, err := loop.Run(runCtx, []types.Message{userMessage(text)})
+		_, err := loop.Run(runCtx, []types.Message{message})
 		return err
-	}, text)
+	}, titleText)
 }
 
 // Compact starts a forced compaction run. Like Prompt it returns immediately;
@@ -232,24 +242,34 @@ func (s *ServerSession) persist(ev types.AgentEvent) error {
 // run is active so clients get explicit feedback instead of a silently
 // deferred message.
 func (s *ServerSession) Steer(text string) error {
+	return s.SteerContent([]types.ContentBlock{types.TextBlock(text)})
+}
+
+// SteerContent enqueues a mid-run message containing text and/or images.
+func (s *ServerSession) SteerContent(content []types.ContentBlock) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.running {
 		return ErrNotRunning
 	}
-	s.queue.EnqueueSteering(userMessage(text))
+	s.queue.EnqueueSteering(userMessageContent(content))
 	return nil
 }
 
 // FollowUp enqueues a message processed after the current run would stop.
 // Returns ErrNotRunning when idle (clients should use Prompt instead).
 func (s *ServerSession) FollowUp(text string) error {
+	return s.FollowUpContent([]types.ContentBlock{types.TextBlock(text)})
+}
+
+// FollowUpContent enqueues a follow-up containing text and/or images.
+func (s *ServerSession) FollowUpContent(content []types.ContentBlock) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.running {
 		return ErrNotRunning
 	}
-	s.queue.EnqueueFollowUp(userMessage(text))
+	s.queue.EnqueueFollowUp(userMessageContent(content))
 	return nil
 }
 
@@ -360,9 +380,22 @@ func (s *ServerSession) close() {
 
 // userMessage wraps text as a user Message.
 func userMessage(text string) types.Message {
+	return userMessageContent([]types.ContentBlock{types.TextBlock(text)})
+}
+
+func userMessageContent(content []types.ContentBlock) types.Message {
 	return types.Message{
 		Role:      types.RoleUser,
-		Content:   []types.ContentBlock{types.TextBlock(text)},
+		Content:   append([]types.ContentBlock(nil), content...),
 		Timestamp: time.Now().UnixMilli(),
 	}
+}
+
+func messageText(message types.Message) string {
+	for _, block := range message.Content {
+		if block.Type == types.ContentText && block.Text != "" {
+			return block.Text
+		}
+	}
+	return ""
 }

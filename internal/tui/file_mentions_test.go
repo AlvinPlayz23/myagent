@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 func TestDiscoverFilesPrioritizesRootFiles(t *testing.T) {
@@ -71,6 +73,41 @@ func TestExpandFileMentionsAllowsSymlinkWithinWorkingDirectory(t *testing.T) {
 	}
 	if !strings.Contains(got, "safe content") {
 		t.Fatalf("expanded prompt = %q, want linked file content", got)
+	}
+}
+
+func TestExpandPromptContentAttachesMentionedImage(t *testing.T) {
+	cwd := t.TempDir()
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	if err := os.WriteFile(filepath.Join(cwd, "screen.png"), png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := expandPromptContent("explain @screen.png", cwd)
+	if err != nil {
+		t.Fatalf("expandPromptContent: %v", err)
+	}
+	if len(content) != 2 || content[0].Type != types.ContentText || content[0].Text != "explain @screen.png" {
+		t.Fatalf("content = %#v", content)
+	}
+	if content[1].Type != types.ContentImage || content[1].MimeType != "image/png" || content[1].Data == "" {
+		t.Fatalf("image block = %#v", content[1])
+	}
+}
+
+func TestExpandPromptContentRecognizesJFIFAsJPEG(t *testing.T) {
+	cwd := t.TempDir()
+	jpeg := append([]byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00"), make([]byte, 32)...)
+	if err := os.WriteFile(filepath.Join(cwd, "photo.jfif"), jpeg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := expandPromptContent("explain @photo.jfif", cwd)
+	if err != nil {
+		t.Fatalf("expandPromptContent: %v", err)
+	}
+	if len(content) != 2 || content[1].Type != types.ContentImage || content[1].MimeType != "image/jpeg" {
+		t.Fatalf("content = %#v", content)
 	}
 }
 

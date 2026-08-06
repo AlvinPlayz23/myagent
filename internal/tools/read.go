@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/AlvinPlayz23/myagent/internal/images"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -21,7 +22,7 @@ func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
 	// Verbatim from pi read.ts createReadToolDefinition.
 	return fmt.Sprintf(
-		"Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). "+
+		"Read the contents of a file. Supports text files and images (jpg, png, gif, webp). "+
 			"Images are sent as attachments. For text files, output is truncated to %d lines or %dKB "+
 			"(whichever is hit first). Use offset/limit for large files. When you need the full file, "+
 			"continue with offset until complete.",
@@ -57,6 +58,16 @@ func (t *ReadTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := images.Detect(data); ok {
+		image, err := images.FromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		return &types.ToolResult{
+			Content: []types.ContentBlock{image},
+			Details: map[string]any{"path": path},
+		}, nil
 	}
 	text := string(data)
 	allLines := strings.Split(text, "\n")

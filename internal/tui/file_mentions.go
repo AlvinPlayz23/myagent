@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/AlvinPlayz23/myagent/internal/images"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 const (
@@ -104,7 +107,7 @@ func discoverFiles(cwd string) []string {
 			return
 		}
 		info, err := d.Info()
-		if err != nil || info.Size() > maxMentionFileBytes {
+		if err != nil || (info.Size() > maxMentionFileBytes && (!isImagePath(path) || info.Size() > images.MaxImageBytes)) {
 			return
 		}
 		rel, err := filepath.Rel(cwd, path)
@@ -167,6 +170,15 @@ func discoverFiles(cwd string) []string {
 	return files
 }
 
+func isImagePath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".gif", ".jpe", ".jfif", ".jpeg", ".jpg", ".png", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
 // loadGitignore implements the common project-local .gitignore patterns used
 // for picker discovery. Ignored directories are skipped before they are walked.
 func loadGitignore(cwd string) func(path string, isDir bool) bool {
@@ -221,15 +233,32 @@ func isMentionBoundary(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
 
-// expandFileMentions appends the contents of every @path token to the message
-// delivered to the CLI agent. The visible prompt is intentionally unchanged.
+// expandFileMentions preserves the text-only helper used by existing callers
+// and tests. Interactive submission uses expandPromptContent so images remain
+// first-class content blocks instead of being coerced to binary text.
 func expandFileMentions(text, cwd string) (string, error) {
+	content, err := expandPromptContent(text, cwd)
+	if err != nil {
+		return "", err
+	}
+	var result strings.Builder
+	for _, block := range content {
+		if block.Type == types.ContentText {
+			result.WriteString(block.Text)
+		}
+	}
+	return result.String(), nil
+}
+
+// expandPromptContent appends text-file context and emits mentioned images as
+// image blocks. The visible prompt itself remains the first text block.
+func expandPromptContent(text, cwd string) ([]types.ContentBlock, error) {
 	mentions := mentionedPaths(text)
 	if len(mentions) == 0 {
-		return text, nil
+		return []types.ContentBlock{types.TextBlock(text)}, nil
 	}
 	if len(mentions) > maxMentionFiles {
-		return "", fmt.Errorf("at most %d file mentions are allowed per message", maxMentionFiles)
+		return nil, fmt.Errorf("at most %d file mentions are allowed per message", maxMentionFiles)
 	}
 
 	// Abs alone is insufficient here: an in-project symlink can point outside
@@ -237,41 +266,56 @@ func expandFileMentions(text, cwd string) (string, error) {
 	// so @mentions cannot exfiltrate arbitrary readable files into the prompt.
 	cleanCwd, err := filepath.Abs(cwd)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	cleanCwd, err = filepath.EvalSymlinks(cleanCwd)
 	if err != nil {
-		return "", fmt.Errorf("resolve working directory: %w", err)
+		return nil, fmt.Errorf("resolve working directory: %w", err)
 	}
 
 	var context strings.Builder
+	var imageBlocks []types.ContentBlock
 	for _, mention := range mentions {
 		path := filepath.Join(cwd, filepath.FromSlash(mention))
 		cleanPath, err := filepath.Abs(path)
 		if err != nil {
-			return "", fmt.Errorf("file mention %q is outside the working directory", mention)
+			return nil, fmt.Errorf("file mention %q is outside the working directory", mention)
 		}
 		cleanPath, err = filepath.EvalSymlinks(cleanPath)
 		if err != nil || !pathWithin(cleanCwd, cleanPath) {
-			return "", fmt.Errorf("file mention %q is outside the working directory", mention)
+			return nil, fmt.Errorf("file mention %q is outside the working directory", mention)
 		}
 		info, err := os.Stat(cleanPath)
 		if err != nil {
-			return "", fmt.Errorf("read mentioned file %q: %w", mention, err)
+			return nil, fmt.Errorf("read mentioned file %q: %w", mention, err)
 		}
 		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("mentioned path %q is not a regular file", mention)
+			return nil, fmt.Errorf("mentioned path %q is not a regular file", mention)
+		}
+		if isImagePath(cleanPath) {
+			block, err := images.Load(cleanPath)
+			if err != nil {
+				return nil, fmt.Errorf("read mentioned image %q: %w", mention, err)
+			}
+			imageBlocks = append(imageBlocks, block)
+			continue
 		}
 		if info.Size() > maxMentionFileBytes {
-			return "", fmt.Errorf("mentioned file %q exceeds the %d KB limit", mention, maxMentionFileBytes/1024)
+			return nil, fmt.Errorf("mentioned file %q exceeds the %d KB limit", mention, maxMentionFileBytes/1024)
 		}
 		contents, err := os.ReadFile(cleanPath)
 		if err != nil {
-			return "", fmt.Errorf("read mentioned file %q: %w", mention, err)
+			return nil, fmt.Errorf("read mentioned file %q: %w", mention, err)
 		}
 		fmt.Fprintf(&context, "\n\n<file path=%q>\n%s\n</file>", mention, contents)
 	}
-	return text + context.String(), nil
+	content := []types.ContentBlock{types.TextBlock(text + context.String())}
+	content = append(content, imageBlocks...)
+	validated, err := images.ValidateContent(content)
+	if err != nil {
+		return nil, err
+	}
+	return validated, nil
 }
 
 // pathWithin reports whether path is cwd itself or a descendant of cwd. Both

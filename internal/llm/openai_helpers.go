@@ -37,10 +37,11 @@ func convertMessages(systemPrompt string, messages []types.Message) []chatMessag
 	if systemPrompt != "" {
 		out = append(out, chatMessage{Role: "system", Content: systemPrompt})
 	}
-	for _, m := range messages {
+	for i := 0; i < len(messages); i++ {
+		m := messages[i]
 		switch m.Role {
 		case types.RoleUser:
-			out = append(out, chatMessage{Role: "user", Content: textOf(m.Content)})
+			out = append(out, chatMessage{Role: "user", Content: userContent(m.Content)})
 		case types.RoleAssistant:
 			cm := chatMessage{Role: "assistant"}
 			if txt := textOf(m.Content); txt != "" {
@@ -61,15 +62,80 @@ func convertMessages(systemPrompt string, messages []types.Message) []chatMessag
 			}
 			out = append(out, cm)
 		case types.RoleToolResult:
-			out = append(out, chatMessage{
-				Role:       "tool",
-				ToolCallID: m.ToolCallID,
-				Name:       m.ToolName,
-				Content:    textOf(m.Content),
-			})
+			var images []chatContentPart
+			for {
+				text := textOf(m.Content)
+				hasImage := false
+				for _, block := range m.Content {
+					if block.Type == types.ContentImage {
+						hasImage = true
+						images = append(images, chatContentPart{
+							Type:     "image_url",
+							ImageURL: &chatImageURL{URL: "data:" + block.MimeType + ";base64," + block.Data},
+						})
+					}
+				}
+				if text == "" {
+					if hasImage {
+						text = "(see attached image)"
+					} else {
+						text = "(no tool output)"
+					}
+				}
+				out = append(out, chatMessage{
+					Role:       "tool",
+					ToolCallID: m.ToolCallID,
+					Name:       m.ToolName,
+					Content:    text,
+				})
+				if i+1 >= len(messages) || messages[i+1].Role != types.RoleToolResult {
+					break
+				}
+				i++
+				m = messages[i]
+			}
+			if len(images) > 0 {
+				out = append(out, chatMessage{
+					Role: "user",
+					Content: append([]chatContentPart{{
+						Type: "text",
+						Text: "Attached image(s) from tool result:",
+					}}, images...),
+				})
+			}
 		}
 	}
 	return out
+}
+
+// userContent uses OpenAI's multipart shape when a user message contains an
+// image. Text-only messages remain strings for broad compatible-provider support.
+func userContent(blocks []types.ContentBlock) any {
+	hasImage := false
+	for _, block := range blocks {
+		if block.Type == types.ContentImage {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return textOf(blocks)
+	}
+	parts := make([]chatContentPart, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Type {
+		case types.ContentText:
+			if block.Text != "" {
+				parts = append(parts, chatContentPart{Type: "text", Text: block.Text})
+			}
+		case types.ContentImage:
+			parts = append(parts, chatContentPart{
+				Type:     "image_url",
+				ImageURL: &chatImageURL{URL: "data:" + block.MimeType + ";base64," + block.Data},
+			})
+		}
+	}
+	return parts
 }
 
 // textOf concatenates text content blocks.

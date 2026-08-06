@@ -21,6 +21,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 )
 
+const maxClientMessageBytes = 32 << 20
+
 // Options configures the WebSocket server.
 type Options struct {
 	// Addr is the listen address, e.g. "127.0.0.1:8765".
@@ -114,6 +116,7 @@ func serveWS(ctx context.Context, w http.ResponseWriter, r *http.Request, manage
 	if err != nil {
 		return
 	}
+	c.SetReadLimit(maxClientMessageBytes)
 
 	conn := newConn(ctx, c, manager, opts.Version, opts.Providers)
 	conn.run()

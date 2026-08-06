@@ -54,6 +54,11 @@ func TextBlock(text string) ContentBlock {
 	return ContentBlock{Type: ContentText, Text: text}
 }
 
+// ImageBlock is a convenience constructor for a base64-encoded image block.
+func ImageBlock(data, mimeType string) ContentBlock {
+	return ContentBlock{Type: ContentImage, Data: data, MimeType: mimeType}
+}
+
 // StopReason mirrors pi's StopReason (packages/ai/src/types.ts).
 type StopReason string
 

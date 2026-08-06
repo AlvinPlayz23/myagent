@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -296,6 +297,66 @@ func TestEndToEndPromptFlow(t *testing.T) {
 	c.result(c.call("session.messages", map[string]any{"sessionId": created.SessionID}), &msgs)
 	if len(msgs.Messages) != 2 {
 		t.Errorf("messages = %d, want 2", len(msgs.Messages))
+	}
+}
+
+func TestMultimodalPromptPersistsAndReachesProvider(t *testing.T) {
+	provider := &fakeProvider{reply: "I see it"}
+	url, _ := testServer(t, provider)
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	content := []types.ContentBlock{
+		types.TextBlock("explain this"),
+		types.ImageBlock(base64.StdEncoding.EncodeToString(png), "image/png"),
+	}
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "content": content}), &struct{}{})
+	c.waitNotif("session.done")
+
+	provider.mu.Lock()
+	if len(provider.requests) < 1 {
+		provider.mu.Unlock()
+		t.Fatalf("provider requests = %#v", provider.requests)
+	}
+	request := provider.requests[len(provider.requests)-1]
+	if len(request.Messages) != 1 {
+		provider.mu.Unlock()
+		t.Fatalf("agent request messages = %#v", request.Messages)
+	}
+	got := request.Messages[0]
+	provider.mu.Unlock()
+	if len(got.Content) != 2 || got.Content[1].Type != types.ContentImage || got.Content[1].Data == "" {
+		t.Fatalf("provider message = %#v", got)
+	}
+
+	var history struct {
+		Messages []types.Message `json:"messages"`
+	}
+	c.result(c.call("session.messages", map[string]any{"sessionId": created.SessionID}), &history)
+	if len(history.Messages) != 2 || len(history.Messages[0].Content) != 2 || history.Messages[0].Content[1].Data == "" {
+		t.Fatalf("persisted messages = %#v", history.Messages)
+	}
+}
+
+func TestMultimodalPromptRejectsInvalidImage(t *testing.T) {
+	url, _ := testServer(t, &fakeProvider{reply: "x"})
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	resp := c.call("session.prompt", map[string]any{
+		"sessionId": created.SessionID,
+		"content":   []types.ContentBlock{types.ImageBlock("not-base64", "image/png")},
+	})
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidParams {
+		t.Fatalf("error = %#v, want invalid params", resp.Error)
 	}
 }
 

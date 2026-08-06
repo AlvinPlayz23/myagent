@@ -16,6 +16,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
+	"github.com/AlvinPlayz23/myagent/internal/images"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -221,6 +222,9 @@ type model struct {
 	statusMsg       string
 	selection       *textSelection
 	clipboardWrite  func(string) error
+	clipboardRead   func() (clipboardPayload, error)
+	clipboardBusy   bool
+	attachments     imageAttachments
 	promptHistory   []string
 	historyIndex    int // -1 means the composer is not browsing prompt history.
 	welcomeStyle    welcomeStyle
@@ -256,7 +260,7 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message (enter to send, ctrl+enter for newline, ctrl+c to quit)…"
+	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
 	ta.ShowLineNumbers = false
 	ta.Focus()
 	key := textinput.New()
@@ -282,6 +286,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		exportName:     exportName,
 		picker:         newCommandPicker(),
 		clipboardWrite: clipboard.WriteAll,
+		clipboardRead:  readNativeClipboard,
 		historyIndex:   -1,
 		welcomeStyle:   welcomeDefault,
 		modelID:        modelID,
@@ -356,6 +361,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncPickers()
 		m.updateLayout()
 		return m, cmd
+
+	case clipboardResultMsg:
+		m.clipboardBusy = false
+		if msg.err != nil {
+			m.statusMsg = "Could not read clipboard: " + msg.err.Error()
+			return m, nil
+		}
+		if len(msg.payload.image) > 0 {
+			if err := m.attachments.add(msg.payload.image); err != nil {
+				m.statusMsg = "Could not attach clipboard image: " + err.Error()
+				return m, nil
+			}
+			m.statusMsg = fmt.Sprintf("Attached clipboard image (%d/%d).", m.attachments.len(), images.MaxImages)
+			m.updateLayout()
+			return m, nil
+		}
+		if msg.payload.text != "" {
+			m.input.InsertString(msg.payload.text)
+			m.historyIndex = -1
+			m.syncPickers()
+			m.updateLayout()
+			return m, nil
+		}
+		m.statusMsg = "Clipboard does not contain text or an image."
+		return m, nil
 
 	case tea.MouseWheelMsg:
 		return m.onMouseWheel(msg)
@@ -460,8 +490,15 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // borrows rows from the transcript while always leaving it at least one row.
 func (m *model) viewportHeight() int {
 	const fixedHeight = 9
-	height := m.height - fixedHeight - m.panelHeight() - m.queuedFollowUpHeight()
+	height := m.height - fixedHeight - m.panelHeight() - m.queuedFollowUpHeight() - m.attachmentHeight()
 	return max(1, height)
+}
+
+func (m *model) attachmentHeight() int {
+	if m.attachments.len() == 0 {
+		return 0
+	}
+	return 1
 }
 
 func (m *model) queuedFollowUpHeight() int {
@@ -704,6 +741,21 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.abortActiveRun()
 		return m, nil
 
+	case "ctrl+v":
+		if m.clipboardBusy {
+			return m, nil
+		}
+		m.clipboardBusy = true
+		m.statusMsg = "Reading clipboard."
+		return m, readClipboardCmd(m.clipboardRead)
+
+	case "backspace":
+		if m.input.Value() == "" && m.attachments.removeLast() {
+			m.statusMsg = "Removed the last image attachment."
+			m.updateLayout()
+			return m, nil
+		}
+
 	case "enter":
 		return m.submit(submitFollowUp)
 
@@ -900,7 +952,11 @@ func (m *model) cancelSelection() {
 // Alt+Enter injects steering into the current work.
 func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
-	if text == "" {
+	if text == "" && m.attachments.len() == 0 {
+		return m, nil
+	}
+	if m.clipboardBusy {
+		m.statusMsg = "Wait for the clipboard image to finish loading."
 		return m, nil
 	}
 	if m.abortRequested {
@@ -915,20 +971,31 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 		m.historyIndex = -1
 		return m.runCommand(text)
 	}
-	expanded, err := expandFileMentions(text, m.cwd)
+	content, err := expandPromptContent(text, m.cwd)
 	if err != nil {
 		m.statusMsg = err.Error()
 		return m, nil
 	}
+	attachmentCount := m.attachments.len()
+	content, err = m.attachments.appendTo(content)
+	if err != nil {
+		m.statusMsg = err.Error()
+		return m, nil
+	}
+	display := text
+	if attachmentCount > 0 {
+		display = attachmentDisplay(text, attachmentCount)
+	}
 	m.addPromptHistory(text)
 	m.input.Reset()
+	m.attachments.clear()
 	m.historyIndex = -1
-	um := userMessage(expanded)
+	um := userMessageContent(content)
 
 	if m.working {
 		if mode == submitFollowUp {
 			m.queue.EnqueueFollowUp(um)
-			m.queuedFollowUps = append(m.queuedFollowUps, queuedMessage{display: text, message: um})
+			m.queuedFollowUps = append(m.queuedFollowUps, queuedMessage{display: display, message: um})
 			// The "↳ next" line beside the composer reports queue state; no
 			// status message needed.
 		} else {
@@ -939,14 +1006,14 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 		// Steering is already active conversation input. Follow-ups remain beside
 		// the composer until the loop begins processing them.
 		if mode == submitSteering {
-			m.transcript.addUser(text)
+			m.transcript.addUser(display)
 		}
 		m.updateLayout()
 		return m, nil
 	}
 
 	// Idle: show the user's prompt, then start a fresh run.
-	return m.startRun(text, um)
+	return m.startRun(display, um)
 }
 
 // startRun begins a fresh agent run while idle. display is echoed into the
@@ -1665,6 +1732,10 @@ func (m *model) View() tea.View {
 		sb.WriteString(queued)
 		sb.WriteByte('\n')
 	}
+	if attachments := m.attachments.render(m.th, m.width); attachments != "" {
+		sb.WriteString(attachments)
+		sb.WriteByte('\n')
+	}
 	sb.WriteString(m.input.View())
 	sb.WriteByte('\n')
 	sb.WriteString(m.footer())
@@ -1997,9 +2068,13 @@ func (m *model) footer() string {
 }
 
 func userMessage(text string) types.Message {
+	return userMessageContent([]types.ContentBlock{types.TextBlock(text)})
+}
+
+func userMessageContent(content []types.ContentBlock) types.Message {
 	return types.Message{
 		Role:      types.RoleUser,
-		Content:   []types.ContentBlock{types.TextBlock(text)},
+		Content:   append([]types.ContentBlock(nil), content...),
 		Timestamp: time.Now().UnixMilli(),
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/AlvinPlayz23/myagent/internal/images"
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -30,8 +31,9 @@ type sessionRef struct {
 
 // sessionText carries a session id plus message text.
 type sessionText struct {
-	SessionID string `json:"sessionId"`
-	Message   string `json:"message"`
+	SessionID string               `json:"sessionId"`
+	Message   string               `json:"message"`
+	Content   []types.ContentBlock `json:"content,omitempty"`
 }
 
 type sessionRename struct {
@@ -89,31 +91,31 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		return map[string]any{"sessions": out}, nil
 
 	case "session.prompt":
-		ss, text, rpcErr := c.sessionWithText(req)
+		ss, content, rpcErr := c.sessionWithContent(req)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		if err := ss.Prompt(text); err != nil {
+		if err := ss.PromptContent(content); err != nil {
 			return nil, coreError(err)
 		}
 		return map[string]any{}, nil
 
 	case "session.steer":
-		ss, text, rpcErr := c.sessionWithText(req)
+		ss, content, rpcErr := c.sessionWithContent(req)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		if err := ss.Steer(text); err != nil {
+		if err := ss.SteerContent(content); err != nil {
 			return nil, coreError(err)
 		}
 		return map[string]any{"queued": true}, nil
 
 	case "session.followUp":
-		ss, text, rpcErr := c.sessionWithText(req)
+		ss, content, rpcErr := c.sessionWithContent(req)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		if err := ss.FollowUp(text); err != nil {
+		if err := ss.FollowUpContent(content); err != nil {
 			return nil, coreError(err)
 		}
 		return map[string]any{"queued": true}, nil
@@ -285,23 +287,28 @@ func (c *conn) sessionFromParams(req *rpc.Request) (*core.ServerSession, *rpc.Er
 	return ss, nil
 }
 
-// sessionWithText resolves {sessionId, message} params.
-func (c *conn) sessionWithText(req *rpc.Request) (*core.ServerSession, string, *rpc.Error) {
+// sessionWithContent resolves either the legacy {sessionId, message} shape or
+// the multimodal {sessionId, content} shape and validates user-supplied blocks.
+func (c *conn) sessionWithContent(req *rpc.Request) (*core.ServerSession, []types.ContentBlock, *rpc.Error) {
 	var p sessionText
 	if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
-		return nil, "", rpcErr
+		return nil, nil, rpcErr
 	}
 	if p.SessionID == "" {
-		return nil, "", rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		return nil, nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
 	}
-	if p.Message == "" {
-		return nil, "", rpc.NewError(rpc.CodeInvalidParams, "message is required")
+	if len(p.Content) == 0 && p.Message != "" {
+		p.Content = []types.ContentBlock{types.TextBlock(p.Message)}
+	}
+	content, err := images.ValidateContent(p.Content)
+	if err != nil {
+		return nil, nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
 	}
 	ss, err := c.manager.Get(c.id, p.SessionID)
 	if err != nil {
-		return nil, "", coreError(err)
+		return nil, nil, coreError(err)
 	}
-	return ss, p.Message, nil
+	return ss, content, nil
 }
 
 // coreError maps core sentinel errors to JSON-RPC application errors.

@@ -509,3 +509,92 @@ func TestPromptHistoryKeepsMostRecentHundredPrompts(t *testing.T) {
 		t.Fatalf("unexpected retained history: newest=%q oldest=%q", m.promptHistory[0], m.promptHistory[len(m.promptHistory)-1])
 	}
 }
+
+func TestCtrlVAttachesClipboardImage(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	m.clipboardRead = func() (clipboardPayload, error) {
+		return clipboardPayload{image: png}, nil
+	}
+
+	_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'v', Mod: tea.ModCtrl}))
+	if cmd == nil || !m.clipboardBusy {
+		t.Fatal("ctrl+v did not start an asynchronous clipboard read")
+	}
+	m.Update(cmd())
+
+	if m.clipboardBusy || m.attachments.len() != 1 {
+		t.Fatalf("clipboardBusy=%v attachments=%d", m.clipboardBusy, m.attachments.len())
+	}
+	if view := m.View().Content; !strings.Contains(view, "[image]") || !strings.Contains(view, "1 attached") {
+		t.Fatalf("attachment component missing from view: %q", view)
+	}
+}
+
+func TestCtrlVFallsBackToClipboardText(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.clipboardRead = func() (clipboardPayload, error) {
+		return clipboardPayload{text: "pasted text"}, nil
+	}
+
+	_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'v', Mod: tea.ModCtrl}))
+	m.Update(cmd())
+	if got := m.input.Value(); got != "pasted text" {
+		t.Fatalf("input = %q, want pasted text", got)
+	}
+	if m.attachments.len() != 0 {
+		t.Fatalf("attachments = %d, want none", m.attachments.len())
+	}
+}
+
+func TestSubmitIncludesAndClearsClipboardImage(t *testing.T) {
+	q := newMsgQueue()
+	m := newModel(nil, nil, q, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	m.input.SetValue("describe this")
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	if err := m.attachments.add(png); err != nil {
+		t.Fatal(err)
+	}
+
+	m.submit(submitFollowUp)
+	if m.attachments.len() != 0 {
+		t.Fatalf("attachments remained after submission: %d", m.attachments.len())
+	}
+	if len(m.queuedFollowUps) != 1 {
+		t.Fatalf("queued follow-ups = %#v", m.queuedFollowUps)
+	}
+	content := m.queuedFollowUps[0].message.Content
+	if len(content) != 2 || content[0].Text != "describe this" || content[1].Type != types.ContentImage {
+		t.Fatalf("submitted content = %#v", content)
+	}
+	if !strings.Contains(m.queuedFollowUps[0].display, "1 image attached") {
+		t.Fatalf("queued display = %q", m.queuedFollowUps[0].display)
+	}
+}
+
+func TestImageOnlySubmissionAndBackspaceRemoval(t *testing.T) {
+	q := newMsgQueue()
+	m := newModel(nil, nil, q, newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	if err := m.attachments.add(png); err != nil {
+		t.Fatal(err)
+	}
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	if m.attachments.len() != 0 {
+		t.Fatal("backspace on an empty prompt did not remove the attachment")
+	}
+	if err := m.attachments.add(png); err != nil {
+		t.Fatal(err)
+	}
+
+	m.submit(submitFollowUp)
+	if len(m.queuedFollowUps) != 1 || len(m.queuedFollowUps[0].message.Content) != 2 {
+		t.Fatalf("image-only submission = %#v", m.queuedFollowUps)
+	}
+	if m.queuedFollowUps[0].message.Content[1].Type != types.ContentImage {
+		t.Fatalf("image-only content = %#v", m.queuedFollowUps[0].message.Content)
+	}
+}
