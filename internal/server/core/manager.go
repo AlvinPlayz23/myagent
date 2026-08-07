@@ -63,17 +63,16 @@ func (m *Manager) Create(connID string, p CreateParams) (*ServerSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	sess, err := session.Create(cwd)
-	if err != nil {
-		return nil, err
-	}
 	effort := p.Effort
 	if effort == "" {
 		effort = m.opts.DefaultEffort
 	}
 	effort, err = llm.NormalizeEffort(model, effort)
 	if err != nil {
-		_ = sess.Close()
+		return nil, err
+	}
+	sess, err := session.Create(cwd)
+	if err != nil {
 		return nil, err
 	}
 	ss := m.wrap(sess, provider, model, cwd, effort)

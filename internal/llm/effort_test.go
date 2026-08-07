@@ -43,6 +43,10 @@ func TestNormalizeEffortUsesModelCapabilities(t *testing.T) {
 	if got, err := NormalizeEffort(reasoning, EffortMedium); err != nil || got != EffortHigh {
 		t.Fatalf("clamped effort = %q, %v", got, err)
 	}
+	withoutOff := Model{ID: "reasoning-without-off", ReasoningKnown: true, Reasoning: true, SupportedEfforts: []Effort{EffortLow, EffortHigh}}
+	if got, err := NormalizeEffort(withoutOff, EffortOff); err != nil || got != EffortOff {
+		t.Fatalf("explicit off normalization = %q, %v", got, err)
+	}
 }
 
 func TestParseReasoningDialect(t *testing.T) {

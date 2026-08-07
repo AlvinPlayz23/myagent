@@ -444,6 +444,29 @@ func TestSessionEffortDefaultOverrideAndUpdate(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsInvalidEffortBeforePersistingSession(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			return nil, llm.Model{ID: "plain", Provider: "test", ReasoningKnown: true}, nil
+		},
+		DefaultCwd: t.TempDir(),
+	})
+	t.Cleanup(func() { cancel(); manager.Shutdown() })
+
+	if _, err := manager.Create("conn1", CreateParams{Effort: llm.EffortHigh}); err == nil {
+		t.Fatal("Create accepted reasoning effort for a known non-reasoning model")
+	}
+	infos, err := session.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("persisted sessions after rejected create = %d, want 0", len(infos))
+	}
+}
+
 func TestSetEffortBusyGuard(t *testing.T) {
 	provider := &scriptedProvider{reply: "ok", block: make(chan struct{})}
 	m, _ := newTestManager(t, provider)

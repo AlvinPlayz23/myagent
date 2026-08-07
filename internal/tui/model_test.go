@@ -31,6 +31,21 @@ func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	}
 }
 
+func TestEffortPickerKeepsSelectionVisibleOnShortTerminals(t *testing.T) {
+	m := newModel(nil, newRunner(agent.Config{}, newMsgQueue(), nil), newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 12)
+	m.effort.active = true
+	m.effort.sel = len(effortChoices) - 1
+
+	panel := m.renderEffortPicker()
+	if got, want := strings.Count(panel, "\n")+1, m.panelHeight(); got > want {
+		t.Fatalf("effort picker rows = %d, want at most %d", got, want)
+	}
+	if !strings.Contains(panel, "Max") {
+		t.Fatalf("effort picker omitted selected option: %q", panel)
+	}
+}
+
 func TestFollowUpConsumptionClearsQueuedStatus(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.working = true

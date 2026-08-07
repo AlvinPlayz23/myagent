@@ -318,6 +318,10 @@ func TestSessionEffortRPC(t *testing.T) {
 	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "first"}), &struct{}{})
 	c.waitNotif("session.done")
 	provider.mu.Lock()
+	if len(provider.requests) < 1 {
+		provider.mu.Unlock()
+		t.Fatal("provider recorded no request for first effort prompt")
+	}
 	firstEffort := provider.requests[len(provider.requests)-1].Effort
 	provider.mu.Unlock()
 	if firstEffort != llm.EffortXHigh {
@@ -334,6 +338,10 @@ func TestSessionEffortRPC(t *testing.T) {
 	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "second"}), &struct{}{})
 	c.waitNotif("session.done")
 	provider.mu.Lock()
+	if len(provider.requests) < 2 {
+		provider.mu.Unlock()
+		t.Fatal("provider recorded no request for second effort prompt")
+	}
 	secondEffort := provider.requests[len(provider.requests)-1].Effort
 	provider.mu.Unlock()
 	if secondEffort != llm.EffortLow {
@@ -347,6 +355,10 @@ func TestSessionEffortRPC(t *testing.T) {
 	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "third"}), &struct{}{})
 	c.waitNotif("session.done")
 	provider.mu.Lock()
+	if len(provider.requests) < 3 {
+		provider.mu.Unlock()
+		t.Fatal("provider recorded no request for cleared-effort prompt")
+	}
 	clearedEffort := provider.requests[len(provider.requests)-1].Effort
 	provider.mu.Unlock()
 	if clearedEffort != "" {

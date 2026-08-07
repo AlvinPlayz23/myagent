@@ -2011,9 +2011,19 @@ func (m *model) renderCustomizePicker() string {
 }
 
 func (m *model) renderEffortPicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Reasoning effort — ↑/↓ select, enter apply, esc cancel")}
+	count := min(height-1, len(effortChoices))
+	start := max(0, m.effort.sel-count+1)
+	if maxStart := len(effortChoices) - count; start > maxStart {
+		start = maxStart
+	}
 	current := m.runner.cfg.Effort
-	for i, choice := range effortChoices {
+	for i := start; i < start+count; i++ {
+		choice := effortChoices[i]
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.effort.sel {
 			marker, style = "> ", m.th.cmdPickerSel

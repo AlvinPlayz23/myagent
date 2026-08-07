@@ -110,11 +110,15 @@ func TestBuildRequestBodyReasoningDialectOverridesDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	got = nil
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got["reasoning_effort"] != "high" {
 		t.Fatalf("explicit OpenAI dialect did not override detection: %s", body)
+	}
+	if _, ok := got["reasoning"]; ok {
+		t.Fatalf("explicit OpenAI dialect leaked nested reasoning: %s", body)
 	}
 }
 

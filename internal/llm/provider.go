@@ -58,6 +58,9 @@ func NormalizeEffort(model Model, effort Effort) (Effort, error) {
 	if len(model.SupportedEfforts) == 0 {
 		return effort, nil
 	}
+	if effort == EffortOff {
+		return EffortOff, nil
+	}
 	for _, supported := range model.SupportedEfforts {
 		if effort == supported {
 			return effort, nil

@@ -148,7 +148,10 @@ func run(argv []string) error {
 	}
 	catalog := modelcatalog.New(dir)
 	if err := catalog.Load(); err != nil {
-		return fmt.Errorf("load model catalog: %w", err)
+		if interactive {
+			return fmt.Errorf("load model catalog: %w", err)
+		}
+		catalog = modelcatalog.New(dir)
 	}
 	model = catalog.Enrich(model)
 	effort, err = llm.NormalizeEffort(model, effort)

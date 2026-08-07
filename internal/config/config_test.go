@@ -145,6 +145,7 @@ func TestResolveAllowsSlashInModelID(t *testing.T) {
 }
 
 func TestResolveReasoningDialect(t *testing.T) {
+	useTempDir(t)
 	cfg := &Config{
 		Providers: map[string]ProviderConfig{
 			"gateway": {Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1", ReasoningDialect: "openrouter"},
@@ -192,6 +193,7 @@ func TestResolveWithBuiltinAuth(t *testing.T) {
 }
 
 func TestResolveUsesSelectedProvidersPreferredModel(t *testing.T) {
+	useTempDir(t)
 	cfg := &Config{
 		DefaultModel: "openai/gpt-default",
 		Providers: map[string]ProviderConfig{
