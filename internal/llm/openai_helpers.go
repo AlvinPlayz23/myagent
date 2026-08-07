@@ -2,6 +2,8 @@ package llm
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
@@ -9,13 +11,38 @@ import (
 // buildRequestBody converts a Request into the OpenAI chat-completions JSON body.
 // Ported from pi buildParams (packages/ai/src/api/openai-completions.ts).
 func buildRequestBody(model Model, req Request) ([]byte, error) {
+	effort, err := NormalizeEffort(model, req.Effort)
+	if err != nil {
+		return nil, err
+	}
+	req.Effort = effort
+	provider := reasoningProvider(model)
 	cr := chatRequest{
 		Model:         model.ID,
-		Messages:      convertMessages(req.SystemPrompt, req.Messages),
+		Messages:      convertMessages(req.SystemPrompt, req.Messages, provider != reasoningProviderDefault),
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 		Temperature:   req.Temperature,
 		MaxTokens:     req.MaxTokens,
+	}
+	if req.Effort != "" {
+		wireEffort := req.Effort
+		if wireEffort == EffortOff {
+			wireEffort = EffortNone
+		}
+		switch provider {
+		case reasoningProviderOpenRouter:
+			cr.Reasoning = &reasoningConfig{Effort: wireEffort}
+		case reasoningProviderDeepSeek:
+			if req.Effort == EffortNone || req.Effort == EffortOff {
+				cr.Thinking = &thinkingConfig{Type: "disabled"}
+			} else {
+				cr.ReasoningEffort = deepSeekEffort(wireEffort)
+				cr.Thinking = &thinkingConfig{Type: "enabled"}
+			}
+		default:
+			cr.ReasoningEffort = wireEffort
+		}
 	}
 	for _, t := range req.Tools {
 		cr.Tools = append(cr.Tools, chatTool{
@@ -30,9 +57,57 @@ func buildRequestBody(model Model, req Request) ([]byte, error) {
 	return json.Marshal(cr)
 }
 
+func deepSeekEffort(effort Effort) Effort {
+	// DeepSeek's OpenAI-format reasoning_effort accepts low/high/xhigh/max;
+	// medium has no direct equivalent and is mapped to its default high tier.
+	if effort == EffortMinimal {
+		return EffortLow
+	}
+	if effort == EffortMedium {
+		return EffortHigh
+	}
+	return effort
+}
+
+type reasoningProviderKind int
+
+const (
+	reasoningProviderDefault reasoningProviderKind = iota
+	reasoningProviderOpenRouter
+	reasoningProviderDeepSeek
+)
+
+func reasoningProvider(model Model) reasoningProviderKind {
+	switch model.ReasoningDialect {
+	case ReasoningDialectOpenAI:
+		return reasoningProviderDefault
+	case ReasoningDialectOpenRouter:
+		return reasoningProviderOpenRouter
+	case ReasoningDialectDeepSeek:
+		return reasoningProviderDeepSeek
+	}
+	switch strings.ToLower(strings.TrimSpace(model.Provider)) {
+	case "openrouter":
+		return reasoningProviderOpenRouter
+	case "deepseek":
+		return reasoningProviderDeepSeek
+	}
+	if parsed, err := url.Parse(model.BaseURL); err == nil {
+		host := strings.ToLower(parsed.Hostname())
+		switch {
+		case host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai"):
+			return reasoningProviderOpenRouter
+		case host == "deepseek.com" || strings.HasSuffix(host, ".deepseek.com"):
+			return reasoningProviderDeepSeek
+		}
+	}
+	return reasoningProviderDefault
+}
+
 // convertMessages maps core Messages to OpenAI chat messages. The system prompt
 // becomes a leading "system" message.
-func convertMessages(systemPrompt string, messages []types.Message) []chatMessage {
+func convertMessages(systemPrompt string, messages []types.Message, replayReasoning ...bool) []chatMessage {
+	includeReasoning := len(replayReasoning) > 0 && replayReasoning[0]
 	var out []chatMessage
 	if systemPrompt != "" {
 		out = append(out, chatMessage{Role: "system", Content: systemPrompt})
@@ -48,7 +123,12 @@ func convertMessages(systemPrompt string, messages []types.Message) []chatMessag
 				cm.Content = txt
 			}
 			for _, c := range m.Content {
-				if c.Type == types.ContentToolCall {
+				switch c.Type {
+				case types.ContentThinking:
+					if includeReasoning {
+						cm.ReasoningContent += c.Thinking
+					}
+				case types.ContentToolCall:
 					args, _ := json.Marshal(c.Arguments)
 					cm.ToolCalls = append(cm.ToolCalls, chatToolCall{
 						ID:   c.ID,

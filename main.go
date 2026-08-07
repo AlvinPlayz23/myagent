@@ -10,10 +10,10 @@
 //	myagent serve                 run the WebSocket JSON-RPC server
 //
 // Flags for print/resume mode: -p / -print, --continue, --resume <path>,
-// --resume-id <id>, --provider, --model, --base-url.
+// --resume-id <id>, --provider, --model, --base-url, --effort.
 //
 // Flags for serve mode: --host, --port, --token, --provider, --model,
-// --base-url.
+// --base-url, --effort.
 package main
 
 import (
@@ -31,6 +31,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
 	"github.com/AlvinPlayz23/myagent/internal/auth"
 	"github.com/AlvinPlayz23/myagent/internal/config"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/printmode"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -76,6 +77,7 @@ func run(argv []string) error {
 		providerFlag string
 		modelFlag    string
 		baseURLFlag  string
+		effortFlag   string
 	)
 	fs.StringVar(&printPrompt, "p", "", "run a single prompt non-interactively and print the result")
 	fs.StringVar(&printPrompt, "print", "", "run a single prompt non-interactively and print the result")
@@ -85,7 +87,12 @@ func run(argv []string) error {
 	fs.StringVar(&providerFlag, "provider", "", "configured provider name (overrides default_model provider)")
 	fs.StringVar(&modelFlag, "model", "", "model id (overrides default_model and MYAGENT_MODEL)")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
+	fs.StringVar(&effortFlag, "effort", "", "reasoning effort: off, minimal, low, medium, high, xhigh, or max")
 	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	effort, err := llm.ParseEffort(effortFlag)
+	if err != nil {
 		return err
 	}
 
@@ -139,6 +146,15 @@ func run(argv []string) error {
 	if err != nil {
 		return err
 	}
+	catalog := modelcatalog.New(dir)
+	if err := catalog.Load(); err != nil {
+		return fmt.Errorf("load model catalog: %w", err)
+	}
+	model = catalog.Enrich(model)
+	effort, err = llm.NormalizeEffort(model, effort)
+	if err != nil {
+		return err
+	}
 	modelID := model.Provider + "/" + model.ID
 
 	cwd, err := os.Getwd()
@@ -177,6 +193,7 @@ func run(argv []string) error {
 		Registry:           registry,
 		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
 		CompactionSettings: compaction.DefaultSettings,
+		Effort:             effort,
 	}
 
 	// Prior conversation (empty for a fresh session).
@@ -189,15 +206,18 @@ func run(argv []string) error {
 	defer stop()
 
 	if interactive {
-		catalog := modelcatalog.New(dir)
-		if err := catalog.Load(); err != nil {
-			return fmt.Errorf("load model catalog: %w", err)
-		}
 		if catalog.NeedsRefresh(time.Now()) {
 			refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			_ = catalog.Refresh(refreshCtx, nil)
 			cancel()
 		}
+		model = catalog.Enrich(model)
+		effort, err = llm.NormalizeEffort(model, effort)
+		if err != nil {
+			return err
+		}
+		agentCfg.Model = model
+		agentCfg.Effort = effort
 		sess, err = tui.Run(ctx, agentCfg, cfg, authStore, catalog, sess, history, modelID, cwd)
 		if sess != nil {
 			defer sess.Close()

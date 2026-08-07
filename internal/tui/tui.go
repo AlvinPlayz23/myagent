@@ -136,6 +136,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if err != nil {
 			return nil, llm.Model{}, err
 		}
+		if catalog != nil {
+			model = catalog.Enrich(model)
+		}
 		persistedConfig.DefaultModel = providerName + "/" + modelID
 		if err := config.Save(persistedConfig); err != nil {
 			return nil, llm.Model{}, err

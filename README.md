@@ -216,6 +216,7 @@ unreadable, or non-file `AGENTS.md` entries are ignored and never prevent a run.
 | `go run . -p "..."`                          | One-shot prompt; streams reply to stdout           |
 | `go run . -p "..." --provider=ollama`        | Use a configured provider for this run             |
 | `go run . -p "..." --model=qwen3`            | Override model within the selected provider        |
+| `go run . -p "..." --effort=high`            | Set reasoning effort for this run                  |
 | `go run . --continue`                        | Resume the most recently modified session          |
 | `go run . --resume ./path/session.jsonl`     | Resume by file path                                |
 | `go run . --resume-id <uuid>`                | Resume by session id                               |
@@ -261,6 +262,8 @@ to run, or **Esc** to dismiss it.
 | `/init`              | Analyse the repository and write an `AGENTS.md`         |
 | `/model`             | Open the searchable model selector for configured providers |
 | `/model <provider/model-id>` | Select an exact model immediately |
+| `/effort`            | Open the reasoning-effort selector |
+| `/effort <level>`    | Set `default`, `none`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `/providers`         | Add API keys for compatible catalog providers |
 | `/customize`         | Choose the default text or animated orb startup style |
 | `/compact`           | Force context compaction when a safe boundary exists    |
@@ -311,6 +314,7 @@ can speak JSON-RPC 2.0 over a WebSocket. Setup must be completed first (run
 go run . serve                       # 127.0.0.1:8765, auto-generated token
 go run . serve --token dev           # fixed token (development)
 go run . serve --port 9000 --model qwen3
+go run . serve --effort medium
 ```
 
 | Flag           | Purpose                                        | Default       |
@@ -321,6 +325,7 @@ go run . serve --port 9000 --model qwen3
 | `--provider`   | Default provider for new sessions              | configured    |
 | `--model`      | Default model id for new sessions              | configured    |
 | `--base-url`   | Provider base URL override                     | configured    |
+| `--effort`     | Default reasoning effort for new sessions      | provider      |
 
 On startup the server prints the connect URL, e.g.
 `ws://127.0.0.1:8765/ws?token=<token>`. The token is checked at upgrade time
@@ -341,8 +346,8 @@ on disk and can be resumed after reconnecting (they interop with the TUI's
 
 | Method             | Params                            | Result                              |
 | ------------------ | --------------------------------- | ----------------------------------- |
-| `session.create`   | `{cwd?, provider?, model?}`       | `{sessionId, model, cwd}`           |
-| `session.resume`   | `{sessionId}`                     | `{sessionId, model, cwd, messages}` |
+| `session.create`   | `{cwd?, provider?, model?, effort?}` | `{sessionId, model, cwd, effort?}` |
+| `session.resume`   | `{sessionId}`                     | `{sessionId, model, cwd, effort?, messages}` |
 | `session.list`     | `{}`                              | `{sessions: [...]}`                 |
 | `session.rename`   | `{sessionId, title}`              | `{title}` — persists a session title |
 | `session.prompt`   | `{sessionId, message}`            | `{}` — ack; turn streams via events |
@@ -352,6 +357,7 @@ on disk and can be resumed after reconnecting (they interop with the TUI's
 | `session.compact`  | `{sessionId}`                     | `{}` (error if running)             |
 | `session.messages` | `{sessionId}`                     | `{messages}`                        |
 | `session.setModel` | `{sessionId, provider, model}`    | `{}` (idle only)                    |
+| `session.setEffort` | `{sessionId, effort}`             | `{}` (idle only; empty clears)      |
 | `session.close`    | `{sessionId}`                     | `{}` — JSONL file is kept           |
 
 `session.prompt` returns immediately. The run then streams as server→client
@@ -365,6 +371,20 @@ notifications:
   vocabulary the TUI renders.
 - `session.done` — `{sessionId, error?}` after the run finishes; `error` is
   set when the run failed before producing a terminal `agent_end`.
+
+Reasoning effort accepts `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
+When omitted, the reasoning control is omitted from the provider request so the
+provider's default is preserved. OpenRouter receives its unified
+`reasoning.effort` object; DeepSeek receives `reasoning_effort` plus its thinking
+toggle and maps `medium` to `high`; other compatible endpoints receive
+`reasoning_effort`. Reasoning content is replayed for DeepSeek and OpenRouter
+tool continuations. Explicit level support remains model-dependent.
+
+Custom providers can override automatic provider detection in `config.json`
+with `"reasoningDialect": "openai"`, `"openrouter"`, or `"deepseek"`. Omit it
+or use `"auto"` to detect known provider names and endpoint hostnames. Sending
+all dialects together is intentionally avoided because strict compatible APIs
+may reject fields they do not recognize.
 
 Error codes: standard JSON-RPC (`-32700` parse, `-32600` invalid request,
 `-32601` method not found, `-32602` invalid params) plus application codes

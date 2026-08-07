@@ -637,6 +637,7 @@ func (m *wizardModel) openEditor(name string) {
 		m.newField(true, "API key", "Optional for local endpoints such as Ollama.", provider.APIKey),
 		m.newField(false, "Base URL", "OpenAI-compatible endpoint URL.", provider.BaseURL),
 		m.newField(false, "Model", "Model id. Saving makes this provider the default.", model),
+		m.newField(false, "Reasoning dialect", "Optional: auto, openai, openrouter, or deepseek.", provider.ReasoningDialect),
 	}
 	_ = m.fields[0].input.Focus()
 	m.resizeInputs()
@@ -658,12 +659,17 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 	apiKey := strings.TrimSpace(m.fields[1].input.Value())
 	baseURL := strings.TrimSpace(m.fields[2].input.Value())
 	model := strings.TrimSpace(m.fields[3].input.Value())
+	reasoningDialect := strings.TrimSpace(m.fields[4].input.Value())
 	if name == "" || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\n") {
 		m.err = "Name must be non-empty and cannot contain spaces or '/'."
 		return m, nil
 	}
 	if baseURL == "" || model == "" {
 		m.err = "Base URL and model are required."
+		return m, nil
+	}
+	if _, err := llm.ParseReasoningDialect(reasoningDialect); err != nil {
+		m.err = err.Error()
 		return m, nil
 	}
 	if m.cfg.Providers == nil {
@@ -676,7 +682,7 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 		}
 		delete(m.cfg.Providers, m.editing)
 	}
-	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model}
+	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model, ReasoningDialect: reasoningDialect}
 	m.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(m.cfg); err != nil {
 		m.err = "Failed to write config: " + err.Error()

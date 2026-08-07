@@ -54,6 +54,20 @@ func TestRunAuthRejectsArguments(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidEffort(t *testing.T) {
+	err := run([]string{"-p", "hello", "--effort", "extreme"})
+	if err == nil || !strings.Contains(err.Error(), "invalid effort") {
+		t.Fatalf("invalid effort error = %v", err)
+	}
+}
+
+func TestRunServeRejectsInvalidEffort(t *testing.T) {
+	err := runServe([]string{"--effort", "extreme"})
+	if err == nil || !strings.Contains(err.Error(), "invalid effort") {
+		t.Fatalf("invalid serve effort error = %v", err)
+	}
+}
+
 func TestCollapseHomePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)

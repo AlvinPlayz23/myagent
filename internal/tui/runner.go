@@ -150,6 +150,10 @@ func (r *runner) setModel(provider llm.Provider, model llm.Model) {
 	r.cfg.Model = model
 }
 
+func (r *runner) setEffort(effort llm.Effort) {
+	r.cfg.Effort = effort
+}
+
 // discardEvents makes buffered events from earlier operations invisible.
 func (r *runner) discardEvents() {
 	r.generation++

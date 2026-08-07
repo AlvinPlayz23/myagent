@@ -59,10 +59,11 @@ const (
 // currently supported; it covers OpenAI, Ollama, LM Studio, vLLM, and similar
 // chat-completions endpoints.
 type ProviderConfig struct {
-	Type    string `json:"type"`
-	APIKey  string `json:"apiKey,omitempty"`
-	BaseURL string `json:"baseUrl"`
-	Model   string `json:"model,omitempty"`
+	Type             string `json:"type"`
+	APIKey           string `json:"apiKey,omitempty"`
+	BaseURL          string `json:"baseUrl"`
+	Model            string `json:"model,omitempty"`
+	ReasoningDialect string `json:"reasoningDialect,omitempty"`
 }
 
 // Config is the persisted configuration. DefaultModel must use
@@ -167,6 +168,11 @@ func (c *Config) ResolveWithAuth(authStore *auth.Store, providerName, modelID, b
 	}
 	if modelID == "" {
 		modelID = defaultModel
+		if providerName != defaultProvider {
+			if selected, exists := c.Providers[providerName]; exists && selected.Model != "" {
+				modelID = selected.Model
+			}
+		}
 		if v := os.Getenv(EnvModel); v != "" {
 			modelID = v
 		}
@@ -202,10 +208,15 @@ func (c *Config) ResolveWithAuth(authStore *auth.Store, providerName, modelID, b
 		providerCfg.APIKey = v
 	}
 	base := llm.NewOpenAIProvider(providerCfg.APIKey)
+	reasoningDialect, err := llm.ParseReasoningDialect(providerCfg.ReasoningDialect)
+	if err != nil {
+		return nil, llm.Model{}, fmt.Errorf("provider %q: %w", providerName, err)
+	}
 	return llm.NewRetryProvider(base, c.retryPolicy()), llm.Model{
-		ID:       modelID,
-		Provider: providerName,
-		BaseURL:  providerCfg.BaseURL,
+		ID:               modelID,
+		Provider:         providerName,
+		BaseURL:          providerCfg.BaseURL,
+		ReasoningDialect: reasoningDialect,
 	}, nil
 }
 

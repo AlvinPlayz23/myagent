@@ -62,3 +62,27 @@ func TestProviderServiceSetsDefaultForConfiguredBuiltin(t *testing.T) {
 		t.Fatalf("default = %q", list.DefaultModel)
 	}
 }
+
+func TestProviderServiceDerivesProviderOriginAndRejectsFakeBuiltin(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	dir, _ := config.Dir()
+	store, err := auth.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := modelcatalog.New(dir)
+	service := newProviderService(&config.Config{Providers: map[string]config.ProviderConfig{}}, store, catalog)
+	if _, err := service.Save(ws.ProviderInput{Name: "fake", BaseURL: "https://fake.example/v1", Model: "model", APIKey: "secret", Builtin: true}); err == nil {
+		t.Fatal("fake builtin should be rejected")
+	}
+	if _, err := service.Save(ws.ProviderInput{Name: "local", BaseURL: "http://localhost:8000/v1", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := service.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Providers) != 1 || list.Providers[0].Origin != "custom" {
+		t.Fatalf("providers = %#v", list.Providers)
+	}
+}

@@ -1,10 +1,201 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+func TestBuildRequestBodyReasoningEffort(t *testing.T) {
+	for _, effort := range []Effort{"", EffortNone, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
+		body, err := buildRequestBody(Model{ID: "test"}, Request{Effort: effort})
+		if err != nil {
+			t.Fatalf("buildRequestBody(%q): %v", effort, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		value, present := got["reasoning_effort"]
+		if effort == "" {
+			if present {
+				t.Errorf("unset effort serialized as %#v", value)
+			}
+			continue
+		}
+		if value != string(effort) {
+			t.Errorf("reasoning_effort = %#v, want %q", value, effort)
+		}
+	}
+}
+
+func TestBuildRequestBodyCanonicalOffUsesProviderDisableValue(t *testing.T) {
+	for _, model := range []Model{{ID: "gpt"}, {ID: "gpt", Provider: "openrouter"}} {
+		body, err := buildRequestBody(model, Request{Effort: EffortOff})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if model.Provider == "openrouter" {
+			reasoning := got["reasoning"].(map[string]any)
+			if reasoning["effort"] != "none" {
+				t.Fatalf("openrouter off = %#v", reasoning)
+			}
+		} else if got["reasoning_effort"] != "none" {
+			t.Fatalf("openai off = %#v", got)
+		}
+	}
+}
+
+func TestBuildRequestBodyOpenRouterReasoning(t *testing.T) {
+	body, err := buildRequestBody(Model{ID: "openai/gpt-5", Provider: "openrouter"}, Request{Effort: EffortXHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["reasoning_effort"]; present {
+		t.Fatalf("OpenRouter request includes reasoning_effort: %s", body)
+	}
+	reasoning, ok := got["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "xhigh" {
+		t.Fatalf("OpenRouter reasoning = %#v, want xhigh", got["reasoning"])
+	}
+}
+
+func TestBuildRequestBodyDetectsOpenRouterByURL(t *testing.T) {
+	body, err := buildRequestBody(Model{ID: "model", Provider: "custom", BaseURL: "https://openrouter.ai/api/v1"}, Request{Effort: EffortLow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["reasoning"]; !ok {
+		t.Fatalf("OpenRouter URL did not produce nested reasoning: %s", body)
+	}
+}
+
+func TestBuildRequestBodyReasoningDialectOverridesDetection(t *testing.T) {
+	body, err := buildRequestBody(Model{
+		ID:               "model",
+		Provider:         "custom",
+		BaseURL:          "https://gateway.internal/v1",
+		ReasoningDialect: ReasoningDialectOpenRouter,
+	}, Request{Effort: EffortHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["reasoning"]; !ok {
+		t.Fatalf("explicit OpenRouter dialect did not produce nested reasoning: %s", body)
+	}
+
+	body, err = buildRequestBody(Model{
+		ID:               "model",
+		Provider:         "openrouter",
+		BaseURL:          "https://openrouter.ai/api/v1",
+		ReasoningDialect: ReasoningDialectOpenAI,
+	}, Request{Effort: EffortHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("explicit OpenAI dialect did not override detection: %s", body)
+	}
+}
+
+func TestBuildRequestBodyDeepSeekReasoning(t *testing.T) {
+	tests := []struct {
+		effort       Effort
+		wantEffort   string
+		wantThinking string
+	}{
+		{effort: EffortLow, wantEffort: "low", wantThinking: "enabled"},
+		{effort: EffortMedium, wantEffort: "high", wantThinking: "enabled"},
+		{effort: EffortMax, wantEffort: "max", wantThinking: "enabled"},
+		{effort: EffortNone, wantThinking: "disabled"},
+	}
+	for _, tt := range tests {
+		body, err := buildRequestBody(Model{ID: "deepseek-v4-pro", BaseURL: "https://api.deepseek.com"}, Request{Effort: tt.effort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		thinking, ok := got["thinking"].(map[string]any)
+		if !ok || thinking["type"] != tt.wantThinking {
+			t.Errorf("effort %q thinking = %#v, want %q", tt.effort, got["thinking"], tt.wantThinking)
+		}
+		if tt.wantEffort == "" {
+			if _, present := got["reasoning_effort"]; present {
+				t.Errorf("effort none serialized reasoning_effort: %s", body)
+			}
+		} else if got["reasoning_effort"] != tt.wantEffort {
+			t.Errorf("effort %q reasoning_effort = %#v, want %q", tt.effort, got["reasoning_effort"], tt.wantEffort)
+		}
+		if _, present := got["reasoning"]; present {
+			t.Errorf("DeepSeek request includes OpenRouter reasoning: %s", body)
+		}
+	}
+}
+
+func TestBuildRequestBodyReplaysReasoningForToolContinuations(t *testing.T) {
+	messages := []types.Message{{
+		Role: types.RoleAssistant,
+		Content: []types.ContentBlock{
+			{Type: types.ContentThinking, Thinking: "inspect the repository"},
+			{Type: types.ContentToolCall, ID: "call-1", Name: "read", Arguments: map[string]any{"path": "README.md"}},
+		},
+	}}
+
+	for _, model := range []Model{
+		{ID: "deepseek-v4-pro", Provider: "deepseek"},
+		{ID: "deepseek/deepseek-r1", Provider: "openrouter"},
+	} {
+		body, err := buildRequestBody(model, Request{Messages: messages, Effort: EffortHigh})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Messages []chatMessage `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Messages) != 1 || got.Messages[0].ReasoningContent != "inspect the repository" {
+			t.Errorf("provider %q reasoning replay = %#v", model.Provider, got.Messages)
+		}
+	}
+
+	body, err := buildRequestBody(Model{ID: "gpt-5", Provider: "openai"}, Request{Messages: messages, Effort: EffortHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Valid(body) && string(body) != "" {
+		var got map[string]any
+		_ = json.Unmarshal(body, &got)
+		serialized := got["messages"].([]any)[0].(map[string]any)
+		if _, present := serialized["reasoning_content"]; present {
+			t.Fatalf("generic provider received reasoning_content: %s", body)
+		}
+	}
+}
 
 func TestConvertMessagesKeepsTextOnlyUserContentAsString(t *testing.T) {
 	got := convertMessages("", []types.Message{{

@@ -300,6 +300,65 @@ func TestEndToEndPromptFlow(t *testing.T) {
 	}
 }
 
+func TestSessionEffortRPC(t *testing.T) {
+	provider := &fakeProvider{reply: "ok"}
+	url, _ := testServer(t, provider)
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string     `json:"sessionId"`
+		Effort    llm.Effort `json:"effort"`
+	}
+	c.result(c.call("session.create", map[string]any{"effort": "xhigh"}), &created)
+	if created.Effort != llm.EffortXHigh {
+		t.Fatalf("created effort = %q, want xhigh", created.Effort)
+	}
+
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "first"}), &struct{}{})
+	c.waitNotif("session.done")
+	provider.mu.Lock()
+	firstEffort := provider.requests[len(provider.requests)-1].Effort
+	provider.mu.Unlock()
+	if firstEffort != llm.EffortXHigh {
+		t.Errorf("first request effort = %q, want xhigh", firstEffort)
+	}
+
+	var updated struct {
+		Effort llm.Effort `json:"effort"`
+	}
+	c.result(c.call("session.setEffort", map[string]any{"sessionId": created.SessionID, "effort": "low"}), &updated)
+	if updated.Effort != llm.EffortLow {
+		t.Fatalf("updated effort = %q, want low", updated.Effort)
+	}
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "second"}), &struct{}{})
+	c.waitNotif("session.done")
+	provider.mu.Lock()
+	secondEffort := provider.requests[len(provider.requests)-1].Effort
+	provider.mu.Unlock()
+	if secondEffort != llm.EffortLow {
+		t.Errorf("second request effort = %q, want low", secondEffort)
+	}
+
+	c.result(c.call("session.setEffort", map[string]any{"sessionId": created.SessionID, "effort": ""}), &updated)
+	if updated.Effort != "" {
+		t.Fatalf("cleared response effort = %q, want empty", updated.Effort)
+	}
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "third"}), &struct{}{})
+	c.waitNotif("session.done")
+	provider.mu.Lock()
+	clearedEffort := provider.requests[len(provider.requests)-1].Effort
+	provider.mu.Unlock()
+	if clearedEffort != "" {
+		t.Errorf("cleared request effort = %q, want unspecified", clearedEffort)
+	}
+
+	resp := c.call("session.setEffort", map[string]any{"sessionId": created.SessionID, "effort": "extreme"})
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidParams {
+		t.Fatalf("invalid effort response = %#v, want invalid params", resp.Error)
+	}
+}
+
 func TestMultimodalPromptPersistsAndReachesProvider(t *testing.T) {
 	provider := &fakeProvider{reply: "I see it"}
 	url, _ := testServer(t, provider)

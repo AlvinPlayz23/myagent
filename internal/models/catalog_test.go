@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 )
 
 func TestNormalizeIncludesOnlyCompatibleToolModels(t *testing.T) {
@@ -100,5 +102,27 @@ func TestSetCustomModelsUpdatesExistingCacheFile(t *testing.T) {
 	}
 	if got, want := reloaded.Models(map[string]struct{}{"local": {}}), []Model{{Provider: "local", ProviderName: "Local", ID: "new-model-id"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("custom models = %#v, want %#v", got, want)
+	}
+}
+
+func TestCatalogEnrichUsesOnlyBuiltinCapabilities(t *testing.T) {
+	c := &Catalog{data: cache{
+		Models: []Model{
+			{Provider: "openrouter", ID: "reasoner", Reasoning: true},
+			{Provider: "openrouter", ID: "plain"},
+		},
+		Custom: []Model{{Provider: "local", ID: "unknown"}},
+	}}
+	reasoner := c.Enrich(llm.Model{Provider: "openrouter", ID: "reasoner"})
+	if !reasoner.ReasoningKnown || !reasoner.Reasoning || len(reasoner.SupportedEfforts) != 7 {
+		t.Fatalf("reasoning model = %#v", reasoner)
+	}
+	plain := c.Enrich(llm.Model{Provider: "openrouter", ID: "plain"})
+	if !plain.ReasoningKnown || plain.Reasoning || !reflect.DeepEqual(plain.SupportedEfforts, []llm.Effort{llm.EffortOff}) {
+		t.Fatalf("plain model = %#v", plain)
+	}
+	custom := c.Enrich(llm.Model{Provider: "local", ID: "unknown"})
+	if custom.ReasoningKnown {
+		t.Fatalf("custom capability should remain unknown: %#v", custom)
 	}
 }

@@ -31,6 +31,8 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/rename", want: "usage: /rename <title>"},
 		{input: "/model", kind: commandModel},
 		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
+		{input: "/effort", kind: commandEffort},
+		{input: "/effort xhigh", kind: commandEffort, arg: "xhigh"},
 		{input: "/providers", kind: commandProviders},
 		{input: "/customize", kind: commandCustomize},
 		{input: "/init", kind: commandInit},
@@ -52,6 +54,67 @@ func TestParseSlashCommand(t *testing.T) {
 				t.Fatalf("command = %#v, want kind %d arg %q", got, tt.kind, tt.arg)
 			}
 		})
+	}
+}
+
+func TestEffortCommandOpensOnCurrentValueAndAppliesSelection(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+
+	m.runCommand("/effort")
+	if !m.effort.active || m.effort.selected().effort != llm.EffortHigh {
+		t.Fatalf("effort picker = active %v selected %q, want high", m.effort.active, m.effort.selected().effort)
+	}
+	m.effort.move(1)
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.effort.active || r.cfg.Effort != llm.EffortXHigh {
+		t.Fatalf("applied effort = active %v value %q, want xhigh", m.effort.active, r.cfg.Effort)
+	}
+	if !strings.Contains(m.statusMsg, "xhigh") {
+		t.Fatalf("status = %q, want xhigh", m.statusMsg)
+	}
+}
+
+func TestEffortCommandDirectSetAndDefault(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+
+	m.runCommand("/effort max")
+	if r.cfg.Effort != llm.EffortMax || m.effort.active {
+		t.Fatalf("direct effort = %q active %v, want max and closed", r.cfg.Effort, m.effort.active)
+	}
+	m.runCommand("/effort default")
+	if r.cfg.Effort != "" {
+		t.Fatalf("default effort = %q, want unspecified", r.cfg.Effort)
+	}
+	if !strings.Contains(m.statusMsg, "provider default") {
+		t.Fatalf("status = %q, want provider default", m.statusMsg)
+	}
+}
+
+func TestEffortCommandInvalidCancelAndBusy(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{Effort: llm.EffortMedium}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+
+	m.runCommand("/effort extreme")
+	if r.cfg.Effort != llm.EffortMedium || !strings.Contains(m.statusMsg, "invalid effort") {
+		t.Fatalf("invalid effort changed value/status: %q %q", r.cfg.Effort, m.statusMsg)
+	}
+	m.runCommand("/effort")
+	m.effort.move(1)
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if m.effort.active || r.cfg.Effort != llm.EffortMedium {
+		t.Fatalf("cancel = active %v effort %q", m.effort.active, r.cfg.Effort)
+	}
+	m.working = true
+	m.runCommand("/effort high")
+	if r.cfg.Effort != llm.EffortMedium || !strings.Contains(m.statusMsg, "Cancel the current run") {
+		t.Fatalf("busy effort/status = %q %q", r.cfg.Effort, m.statusMsg)
 	}
 }
 

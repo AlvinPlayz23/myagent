@@ -25,6 +25,8 @@ type Options struct {
 	DefaultCwd string
 	// CompactionSettings for all sessions; zero value disables auto-compaction.
 	CompactionSettings compaction.Settings
+	// DefaultEffort is used for sessions created without an explicit effort.
+	DefaultEffort llm.Effort
 }
 
 // Manager owns the set of live server sessions. All methods are safe for
@@ -48,6 +50,7 @@ type CreateParams struct {
 	Cwd      string
 	Provider string
 	Model    string
+	Effort   llm.Effort
 }
 
 // Create starts a fresh persisted session owned by connID.
@@ -64,7 +67,16 @@ func (m *Manager) Create(connID string, p CreateParams) (*ServerSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	ss := m.wrap(sess, provider, model, cwd)
+	effort := p.Effort
+	if effort == "" {
+		effort = m.opts.DefaultEffort
+	}
+	effort, err = llm.NormalizeEffort(model, effort)
+	if err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
+	ss := m.wrap(sess, provider, model, cwd, effort)
 	if err := ss.claim(connID); err != nil { // cannot fail on a fresh session
 		ss.close()
 		return nil, err
@@ -98,11 +110,16 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 		_ = sess.Close()
 		return nil, rerr
 	}
+	effort, rerr := llm.NormalizeEffort(model, m.opts.DefaultEffort)
+	if rerr != nil {
+		_ = sess.Close()
+		return nil, rerr
+	}
 	cwd := sess.Cwd()
 	if cwd == "" {
 		cwd = m.opts.DefaultCwd
 	}
-	ss := m.wrap(sess, provider, model, cwd)
+	ss := m.wrap(sess, provider, model, cwd, effort)
 
 	m.mu.Lock()
 	// Another connection may have opened the same session concurrently; keep
@@ -125,7 +142,7 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 }
 
 // wrap builds the ServerSession over an open session file.
-func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string) *ServerSession {
+func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort) *ServerSession {
 	registry := tools.DefaultRegistry(cwd)
 	cfg := agent.Config{
 		Provider:           provider,
@@ -133,8 +150,22 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		Registry:           registry,
 		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
 		CompactionSettings: m.opts.CompactionSettings,
+		Effort:             effort,
 	}
 	return newServerSession(m.ctx, sess, cfg, model.Provider+"/"+model.ID, cwd)
+}
+
+// SetEffort applies a reasoning effort to subsequent runs on an owned session.
+func (m *Manager) SetEffort(connID, sessionID string, effort llm.Effort) error {
+	ss, err := m.Get(connID, sessionID)
+	if err != nil {
+		return err
+	}
+	effort, err = llm.NormalizeEffort(ss.Model(), effort)
+	if err != nil {
+		return err
+	}
+	return ss.SetEffort(effort)
 }
 
 // Get returns the live session with the given id if connID may act on it.

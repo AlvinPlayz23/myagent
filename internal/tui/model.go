@@ -173,6 +173,47 @@ type exportPicker struct {
 	sel    int
 }
 
+type effortChoice struct {
+	effort      llm.Effort
+	label       string
+	description string
+}
+
+var effortChoices = []effortChoice{
+	{label: "Default", description: "use the provider default"},
+	{effort: llm.EffortOff, label: "Off", description: "disable reasoning"},
+	{effort: llm.EffortMinimal, label: "Minimal", description: "minimal reasoning"},
+	{effort: llm.EffortLow, label: "Low", description: "fast, lightweight reasoning"},
+	{effort: llm.EffortMedium, label: "Medium", description: "balanced reasoning"},
+	{effort: llm.EffortHigh, label: "High", description: "deeper reasoning"},
+	{effort: llm.EffortXHigh, label: "XHigh", description: "extended reasoning"},
+	{effort: llm.EffortMax, label: "Max", description: "maximum reasoning"},
+}
+
+type effortPicker struct {
+	active bool
+	sel    int
+}
+
+func (p *effortPicker) open(current llm.Effort) {
+	p.active = true
+	p.sel = 0
+	for i, choice := range effortChoices {
+		if choice.effort == current {
+			p.sel = i
+			break
+		}
+	}
+}
+
+func (p *effortPicker) close() { p.active = false }
+
+func (p *effortPicker) move(delta int) {
+	p.sel = (p.sel + delta + len(effortChoices)) % len(effortChoices)
+}
+
+func (p *effortPicker) selected() effortChoice { return effortChoices[p.sel] }
+
 func (p *exportPicker) open()          { p.active, p.sel = true, 0 }
 func (p *exportPicker) close()         { p.active = false }
 func (p *exportPicker) move(delta int) { p.sel = (p.sel + delta + 2) % 2 }
@@ -200,6 +241,7 @@ type model struct {
 	files           filePicker
 	sessions        sessionPicker
 	models          modelPicker
+	effort          effortPicker
 	providers       providerPicker
 	customize       customizePicker
 	exportPick      exportPicker
@@ -521,6 +563,9 @@ func (m *model) panelHeight() int {
 	if m.models.active {
 		desired = m.models.height()
 	}
+	if m.effort.active {
+		desired = len(effortChoices) + 1
+	}
 	if m.providers.active || m.keyFor.ID != "" {
 		desired = min(10, max(2, len(m.providers.items)+1))
 	}
@@ -640,6 +685,21 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.models.filter()
 				m.updateLayout()
 			}
+		}
+		return m, nil
+	}
+	if m.effort.active {
+		switch ks {
+		case "up":
+			m.effort.move(-1)
+		case "down":
+			m.effort.move(1)
+		case "enter":
+			return m.applyEffort(m.effort.selected().effort)
+		case "esc":
+			m.effort.close()
+			m.statusMsg = "Effort selection cancelled."
+			m.updateLayout()
 		}
 		return m, nil
 	}
@@ -1108,6 +1168,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		return m.startRun("/init", userMessage(initPrompt))
 	case commandModel:
 		return m.openModelPicker(cmd.arg)
+	case commandEffort:
+		return m.openEffortPicker(cmd.arg)
 	case commandProviders:
 		return m.openProviderPicker()
 	case commandCustomize:
@@ -1305,6 +1367,42 @@ func (m *model) applyModel(item modelcatalog.Model) (tea.Model, tea.Cmd) {
 	m.modelID = item.Ref()
 	m.models.close()
 	m.statusMsg = "Model set to " + item.Ref() + "."
+	m.updateLayout()
+	return m, nil
+}
+
+func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "default") {
+		return m.applyEffort("")
+	}
+	if value != "" {
+		effort, err := llm.ParseEffort(value)
+		if err != nil {
+			m.statusMsg = err.Error()
+			return m, nil
+		}
+		return m.applyEffort(effort)
+	}
+	m.effort.open(m.runner.cfg.Effort)
+	m.statusMsg = "Choose reasoning effort."
+	m.updateLayout()
+	return m, nil
+}
+
+func (m *model) applyEffort(effort llm.Effort) (tea.Model, tea.Cmd) {
+	effort, err := llm.NormalizeEffort(m.runner.cfg.Model, effort)
+	if err != nil {
+		m.statusMsg = err.Error()
+		return m, nil
+	}
+	m.runner.setEffort(effort)
+	m.effort.close()
+	if effort == "" {
+		m.statusMsg = "Reasoning effort reset to provider default."
+	} else {
+		m.statusMsg = "Reasoning effort set to " + string(effort) + "."
+	}
 	m.updateLayout()
 	return m, nil
 }
@@ -1811,6 +1909,9 @@ func (m *model) renderPanel() string {
 	if m.models.active {
 		return m.renderModelPicker()
 	}
+	if m.effort.active {
+		return m.renderEffortPicker()
+	}
 	if m.customize.active {
 		return m.renderCustomizePicker()
 	}
@@ -1899,6 +2000,24 @@ func (m *model) renderCustomizePicker() string {
 			current = "  (current)"
 		}
 		line := fmt.Sprintf("%s%-10s %s%s", marker, choice.label, choice.description, current)
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderEffortPicker() string {
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Reasoning effort — ↑/↓ select, enter apply, esc cancel")}
+	current := m.runner.cfg.Effort
+	for i, choice := range effortChoices {
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.effort.sel {
+			marker, style = "> ", m.th.cmdPickerSel
+		}
+		selected := ""
+		if choice.effort == current {
+			selected = "  (current)"
+		}
+		line := fmt.Sprintf("%s%-9s %s%s", marker, choice.label, choice.description, selected)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
 	}
 	return strings.Join(lines, "\n")

@@ -13,6 +13,7 @@ const (
 	commandNew
 	commandCompact
 	commandModel
+	commandEffort
 	commandProviders
 	commandCustomize
 	commandResume
@@ -37,6 +38,7 @@ type commandItem struct {
 var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
+	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort", kind: commandEffort, requiresArg: true},
 	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
 	{name: "/customize", usage: "/customize", description: "Choose the empty-session startup style", kind: commandCustomize},
 	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
@@ -154,7 +156,8 @@ func parseSlashCommand(text string) (slashCommand, error) {
 		if item.name != name {
 			continue
 		}
-		if (item.requiresArg && arg == "" && item.kind != commandModel) || (!item.requiresArg && arg != "" && item.kind != commandModel) {
+		optionalArg := item.kind == commandModel || item.kind == commandEffort
+		if (item.requiresArg && arg == "" && !optionalArg) || (!item.requiresArg && arg != "" && !optionalArg) {
 			return slashCommand{}, fmt.Errorf("usage: %s", item.usage)
 		}
 		return slashCommand{kind: item.kind, arg: arg}, nil

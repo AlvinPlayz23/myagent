@@ -33,6 +33,7 @@ func runServe(argv []string) error {
 		providerFlag string
 		modelFlag    string
 		baseURLFlag  string
+		effortFlag   string
 	)
 	fs.StringVar(&host, "host", "127.0.0.1", "listen address")
 	fs.IntVar(&port, "port", 8765, "listen port")
@@ -40,7 +41,12 @@ func runServe(argv []string) error {
 	fs.StringVar(&providerFlag, "provider", "", "default provider for new sessions")
 	fs.StringVar(&modelFlag, "model", "", "default model id for new sessions")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
+	fs.StringVar(&effortFlag, "effort", "", "default reasoning effort: off, minimal, low, medium, high, xhigh, or max")
 	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	effort, err := llm.ParseEffort(effortFlag)
+	if err != nil {
 		return err
 	}
 
@@ -113,6 +119,7 @@ func runServe(argv []string) error {
 		},
 		DefaultCwd:         cwd,
 		CompactionSettings: compaction.DefaultSettings,
+		DefaultEffort:      effort,
 	})
 	defer manager.Shutdown()
 
