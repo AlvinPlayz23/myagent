@@ -1364,6 +1364,11 @@ func (m *model) applyModel(item modelcatalog.Model) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runner.setModel(provider, selected)
+	if effort, err := llm.NormalizeEffort(selected, m.runner.cfg.Effort); err == nil {
+		m.runner.setEffort(effort)
+	} else {
+		m.runner.setEffort(llm.EffortOff)
+	}
 	m.modelID = item.Ref()
 	m.models.close()
 	m.statusMsg = "Model set to " + item.Ref() + "."

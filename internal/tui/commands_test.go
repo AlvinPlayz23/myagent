@@ -118,6 +118,58 @@ func TestEffortCommandInvalidCancelAndBusy(t *testing.T) {
 	}
 }
 
+func TestModelSwitchNormalizesEffortForNonReasoningModel(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
+
+	nonReasoning := llm.Model{
+		Provider:         "openrouter",
+		ID:               "plain",
+		ReasoningKnown:   true,
+		Reasoning:        false,
+		SupportedEfforts: []llm.Effort{llm.EffortOff},
+	}
+	m.availableModels = func() []modelcatalog.Model {
+		return []modelcatalog.Model{{Provider: "openrouter", ID: "plain"}}
+	}
+	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return r.cfg.Provider, nonReasoning, nil
+	}
+	m.openModelPicker("openrouter/plain")
+
+	_, ok := m.models.selected()
+	if ok {
+		t.Fatal("model picker remained open after exact match")
+	}
+	if m.modelID != "openrouter/plain" {
+		t.Fatalf("model id = %q, want openrouter/plain", m.modelID)
+	}
+	if r.cfg.Effort != llm.EffortOff {
+		t.Fatalf("effort after model switch = %q, want off", r.cfg.Effort)
+	}
+}
+
+func TestModelSwitchKeepsEffortForPermissiveModel(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
+
+	m.availableModels = func() []modelcatalog.Model {
+		return []modelcatalog.Model{{Provider: "local", ID: "unknown-model"}}
+	}
+	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
+	}
+	m.openModelPicker("local/unknown-model")
+	if r.cfg.Model.ID != "unknown-model" {
+		t.Fatalf("model id = %q, want unknown-model", r.cfg.Model.ID)
+	}
+	if r.cfg.Effort != llm.EffortHigh {
+		t.Fatalf("effort after permissive switch = %q, want high", r.cfg.Effort)
+	}
+}
+
 func TestInitCommandStartsRunWithInitPrompt(t *testing.T) {
 	q := newMsgQueue()
 	r := newRunner(agent.Config{}, q, nil)
