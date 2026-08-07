@@ -94,6 +94,20 @@ func (s *ServerSession) ModelID() string {
 	return s.modelID
 }
 
+// Model returns the current resolved model metadata.
+func (s *ServerSession) Model() llm.Model {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Model
+}
+
+// Effort returns the reasoning effort currently configured for the session.
+func (s *ServerSession) Effort() llm.Effort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Effort
+}
+
 // Events returns the session's event stream. The channel is never closed;
 // consumers should also select on a shutdown signal of their own.
 func (s *ServerSession) Events() <-chan Event { return s.events }
@@ -295,7 +309,24 @@ func (s *ServerSession) SetModel(provider llm.Provider, model llm.Model) error {
 	}
 	s.cfg.Provider = provider
 	s.cfg.Model = model
+	if effort, err := llm.NormalizeEffort(model, s.cfg.Effort); err == nil {
+		s.cfg.Effort = effort
+	} else {
+		s.cfg.Effort = llm.EffortOff
+	}
 	s.modelID = model.Provider + "/" + model.ID
+	return nil
+}
+
+// SetEffort changes the reasoning effort used for subsequent runs. The empty
+// value clears the override and restores provider-default behavior.
+func (s *ServerSession) SetEffort(effort llm.Effort) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return ErrBusy
+	}
+	s.cfg.Effort = effort
 	return nil
 }
 

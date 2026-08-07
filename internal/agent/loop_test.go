@@ -107,6 +107,24 @@ func TestLoopProcessesFollowUpsOnePerAssistantTurn(t *testing.T) {
 	}
 }
 
+func TestLoopPassesEffortToProviderRequests(t *testing.T) {
+	q := NewQueue()
+	q.EnqueueFollowUp(types.Message{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("again")}})
+	provider := &fakeCompactionProvider{regularText: "response"}
+	loop := New(Config{Provider: provider, Model: llm.Model{ID: "test"}, Queue: q, Effort: llm.EffortXHigh}, nil, func(context.Context, types.AgentEvent) error {
+		return nil
+	})
+
+	if _, err := loop.Run(context.Background(), []types.Message{{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("initial")}}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < provider.numRequests(); i++ {
+		if got := provider.request(i).Effort; got != llm.EffortXHigh {
+			t.Errorf("request %d effort = %q, want xhigh", i, got)
+		}
+	}
+}
+
 func lastUserText(messages []types.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == types.RoleUser && len(messages[i].Content) > 0 {

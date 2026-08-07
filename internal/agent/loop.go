@@ -35,6 +35,7 @@ type Config struct {
 	SystemPrompt       string
 	Temperature        *float64
 	MaxTokens          *int
+	Effort             llm.Effort
 	Queue              MessageQueue // optional
 	CompactionSettings compaction.Settings
 }
@@ -199,6 +200,7 @@ func (l *Loop) streamAssistant(ctx context.Context) (types.Message, error) {
 		Tools:        l.providerTools(),
 		Temperature:  l.cfg.Temperature,
 		MaxTokens:    l.cfg.MaxTokens,
+		Effort:       l.cfg.Effort,
 	}
 
 	events, err := l.cfg.Provider.Stream(ctx, l.cfg.Model, req)

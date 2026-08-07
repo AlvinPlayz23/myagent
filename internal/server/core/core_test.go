@@ -62,6 +62,12 @@ func (p *scriptedProvider) numRequests() int {
 	return len(p.requests)
 }
 
+func (p *scriptedProvider) request(i int) llm.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.requests[i]
+}
+
 // newTestManager builds a Manager over a temp MYAGENT_DIR with the given
 // provider.
 func newTestManager(t *testing.T, provider llm.Provider) (*Manager, context.CancelFunc) {
@@ -394,6 +400,90 @@ func TestSetModelBusyGuard(t *testing.T) {
 	}
 	if got := ss.ModelID(); got != "test/other-model" {
 		t.Errorf("ModelID = %q, want test/other-model", got)
+	}
+}
+
+func TestSessionEffortDefaultOverrideAndUpdate(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			return provider, llm.Model{ID: "test-model", Provider: "test"}, nil
+		},
+		DefaultCwd:    t.TempDir(),
+		DefaultEffort: llm.EffortMedium,
+	})
+	t.Cleanup(func() { cancel(); manager.Shutdown() })
+
+	defaultSession, err := manager.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultSession.Effort(); got != llm.EffortMedium {
+		t.Fatalf("default effort = %q, want medium", got)
+	}
+	overridden, err := manager.Create("conn2", CreateParams{Effort: llm.EffortMax})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := overridden.Effort(); got != llm.EffortMax {
+		t.Fatalf("override effort = %q, want max", got)
+	}
+	if err := manager.SetEffort("conn2", overridden.ID(), llm.EffortLow); err != nil {
+		t.Fatal(err)
+	}
+	if err := overridden.Prompt("hi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drainUntilDone(t, overridden); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.request(provider.numRequests() - 1).Effort; got != llm.EffortLow {
+		t.Errorf("request effort = %q, want low", got)
+	}
+}
+
+func TestCreateRejectsInvalidEffortBeforePersistingSession(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			return nil, llm.Model{ID: "plain", Provider: "test", ReasoningKnown: true}, nil
+		},
+		DefaultCwd: t.TempDir(),
+	})
+	t.Cleanup(func() { cancel(); manager.Shutdown() })
+
+	if _, err := manager.Create("conn1", CreateParams{Effort: llm.EffortHigh}); err == nil {
+		t.Fatal("Create accepted reasoning effort for a known non-reasoning model")
+	}
+	infos, err := session.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("persisted sessions after rejected create = %d, want 0", len(infos))
+	}
+}
+
+func TestSetEffortBusyGuard(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok", block: make(chan struct{})}
+	m, _ := newTestManager(t, provider)
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.Prompt("hi"); err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, ss)
+	if err := m.SetEffort("conn1", ss.ID(), llm.EffortHigh); !errors.Is(err, ErrBusy) {
+		t.Errorf("SetEffort while running = %v, want ErrBusy", err)
+	}
+	close(provider.block)
+	if _, err := drainUntilDone(t, ss); err != nil {
+		t.Fatal(err)
 	}
 }
 

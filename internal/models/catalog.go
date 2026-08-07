@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 )
 
 const (
@@ -44,6 +46,60 @@ type Provider struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	BaseURL string `json:"baseUrl,omitempty"`
+}
+
+// FindModel returns exact provider/model metadata, including custom models.
+func (c *Catalog) FindModel(provider, id string) (Model, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, model := range append(append([]Model(nil), c.data.Models...), c.data.Custom...) {
+		if model.Provider == provider && model.ID == id {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
+// FindBuiltinModel returns metadata sourced from models.dev, excluding
+// discovered custom IDs whose capabilities are unknown.
+func (c *Catalog) FindBuiltinModel(provider, id string) (Model, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, model := range c.data.Models {
+		if model.Provider == provider && model.ID == id {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
+// Enrich copies trusted catalog capabilities onto a resolved request model.
+func (c *Catalog) Enrich(model llm.Model) llm.Model {
+	entry, ok := c.FindBuiltinModel(model.Provider, model.ID)
+	if !ok {
+		return model
+	}
+	model.ReasoningKnown = true
+	model.Reasoning = entry.Reasoning
+	if entry.Reasoning {
+		model.SupportedEfforts = []llm.Effort{llm.EffortOff, llm.EffortMinimal, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
+	} else {
+		model.SupportedEfforts = []llm.Effort{llm.EffortOff}
+	}
+	return model
+}
+
+// IsBuiltinProvider reports whether a provider is present in the downloaded
+// catalog. Presets are used as an offline fallback for first-run operation.
+func (c *Catalog) IsBuiltinProvider(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, provider := range c.data.Providers {
+		if provider.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 type cache struct {

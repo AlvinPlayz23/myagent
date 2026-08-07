@@ -33,13 +33,24 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 // --- request body shapes ---
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	MaxTokens     *int           `json:"max_completion_tokens,omitempty"`
+	Model           string           `json:"model"`
+	Messages        []chatMessage    `json:"messages"`
+	Stream          bool             `json:"stream"`
+	StreamOptions   *streamOptions   `json:"stream_options,omitempty"`
+	Tools           []chatTool       `json:"tools,omitempty"`
+	Temperature     *float64         `json:"temperature,omitempty"`
+	MaxTokens       *int             `json:"max_completion_tokens,omitempty"`
+	ReasoningEffort Effort           `json:"reasoning_effort,omitempty"`
+	Reasoning       *reasoningConfig `json:"reasoning,omitempty"`
+	Thinking        *thinkingConfig  `json:"thinking,omitempty"`
+}
+
+type reasoningConfig struct {
+	Effort Effort `json:"effort,omitempty"`
+}
+
+type thinkingConfig struct {
+	Type string `json:"type"`
 }
 
 type streamOptions struct {
@@ -58,11 +69,12 @@ type chatToolFunc struct {
 }
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    any            `json:"content,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	Name       string         `json:"name,omitempty"`
+	Role             string         `json:"role"`
+	Content          any            `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	Name             string         `json:"name,omitempty"`
 }
 
 type chatContentPart struct {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 )
 
 func useTempDir(t *testing.T) {
@@ -143,6 +144,27 @@ func TestResolveAllowsSlashInModelID(t *testing.T) {
 	}
 }
 
+func TestResolveReasoningDialect(t *testing.T) {
+	useTempDir(t)
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"gateway": {Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1", ReasoningDialect: "openrouter"},
+		},
+		DefaultModel: "gateway/model",
+	}
+	_, model, err := cfg.Resolve("", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.ReasoningDialect != llm.ReasoningDialectOpenRouter {
+		t.Fatalf("ReasoningDialect = %q, want openrouter", model.ReasoningDialect)
+	}
+	cfg.Providers["gateway"] = ProviderConfig{Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1", ReasoningDialect: "all"}
+	if _, _, err := cfg.Resolve("", "", ""); err == nil || !strings.Contains(err.Error(), "invalid reasoning dialect") {
+		t.Fatalf("invalid dialect error = %v", err)
+	}
+}
+
 func TestResolveRejectsInvalidConfiguration(t *testing.T) {
 	useTempDir(t)
 	for _, cfg := range []*Config{
@@ -167,5 +189,23 @@ func TestResolveWithBuiltinAuth(t *testing.T) {
 	}
 	if provider == nil || model.Provider != "openrouter" || model.ID != "openai/gpt-4.1" {
 		t.Fatalf("resolved model = %#v", model)
+	}
+}
+
+func TestResolveUsesSelectedProvidersPreferredModel(t *testing.T) {
+	useTempDir(t)
+	cfg := &Config{
+		DefaultModel: "openai/gpt-default",
+		Providers: map[string]ProviderConfig{
+			"openai": {Type: DefaultProviderType, APIKey: "key", BaseURL: DefaultBaseURL},
+			"local":  {Type: DefaultProviderType, BaseURL: "http://localhost:8000/v1", Model: "local-model"},
+		},
+	}
+	_, model, err := cfg.Resolve("local", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.ID != "local-model" {
+		t.Fatalf("model = %q, want local-model", model.ID)
 	}
 }

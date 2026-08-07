@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/images"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -48,16 +49,21 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			Cwd      string `json:"cwd"`
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
+			Effort   string `json:"effort"`
 		}
 		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
 			return nil, rpcErr
 		}
-		ss, err := c.manager.Create(c.id, core.CreateParams{Cwd: p.Cwd, Provider: p.Provider, Model: p.Model})
+		effort, err := llm.ParseEffort(p.Effort)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		ss, err := c.manager.Create(c.id, core.CreateParams{Cwd: p.Cwd, Provider: p.Provider, Model: p.Model, Effort: effort})
 		if err != nil {
 			return nil, coreError(err)
 		}
 		c.startEventPump(ss)
-		return map[string]any{"sessionId": ss.ID(), "model": ss.ModelID(), "cwd": ss.Cwd()}, nil
+		return sessionResult(ss, false), nil
 
 	case "session.resume":
 		var p sessionRef
@@ -72,12 +78,7 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			return nil, coreError(err)
 		}
 		c.startEventPump(ss)
-		return map[string]any{
-			"sessionId": ss.ID(),
-			"model":     ss.ModelID(),
-			"cwd":       ss.Cwd(),
-			"messages":  messagesOrEmpty(ss.Messages()),
-		}, nil
+		return sessionResult(ss, true), nil
 
 	case "session.list":
 		infos, err := c.manager.List()
@@ -160,7 +161,35 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		if err := c.manager.SetModel(c.id, p.SessionID, p.Provider, p.Model); err != nil {
 			return nil, coreError(err)
 		}
-		return map[string]any{}, nil
+		ss, err := c.manager.Get(c.id, p.SessionID)
+		if err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{"effort": ss.Effort()}, nil
+
+	case "session.setEffort":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			Effort    string `json:"effort"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		if p.SessionID == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		}
+		effort, err := llm.ParseEffort(p.Effort)
+		if err != nil {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
+		}
+		if err := c.manager.SetEffort(c.id, p.SessionID, effort); err != nil {
+			return nil, coreError(err)
+		}
+		ss, err := c.manager.Get(c.id, p.SessionID)
+		if err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{"effort": ss.Effort()}, nil
 
 	case "session.rename":
 		var p sessionRename
@@ -335,6 +364,21 @@ func messagesOrEmpty(msgs []types.Message) []types.Message {
 		return []types.Message{}
 	}
 	return msgs
+}
+
+func sessionResult(ss *core.ServerSession, includeMessages bool) map[string]any {
+	result := map[string]any{
+		"sessionId": ss.ID(),
+		"model":     ss.ModelID(),
+		"cwd":       ss.Cwd(),
+	}
+	if effort := ss.Effort(); effort != "" {
+		result["effort"] = effort
+	}
+	if includeMessages {
+		result["messages"] = messagesOrEmpty(ss.Messages())
+	}
+	return result
 }
 
 // sessionInfoJSON maps session.Info to a camelCase wire shape.

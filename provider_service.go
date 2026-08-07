@@ -30,7 +30,46 @@ func newProviderService(cfg *config.Config, authStore *auth.Store, catalog *mode
 func (s *providerService) Resolve(provider, model, baseURL string) (llm.Provider, llm.Model, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.ResolveWithAuth(s.auth, provider, model, baseURL)
+	p, m, err := s.cfg.ResolveWithAuth(s.auth, provider, model, baseURL)
+	if err != nil {
+		return nil, llm.Model{}, err
+	}
+	if s.catalog != nil {
+		m = s.catalog.Enrich(m)
+	}
+	m.ProviderOrigin = s.providerOrigin(m.Provider)
+	return p, m, nil
+}
+
+func (s *providerService) providerOrigin(name string) string {
+	if s.catalog == nil {
+		return s.configuredOrigin(name)
+	}
+	_, configured := s.cfg.Providers[name]
+	_, preset := config.Preset(name)
+	if configured && (s.catalog.IsBuiltinProvider(name) || preset) {
+		return "builtin_override"
+	}
+	if configured {
+		return "custom"
+	}
+	if s.catalog.IsBuiltinProvider(name) {
+		return "builtin"
+	}
+	if _, ok := config.Preset(name); ok {
+		return "builtin"
+	}
+	return "custom"
+}
+
+func (s *providerService) configuredOrigin(name string) string {
+	if _, configured := s.cfg.Providers[name]; configured {
+		return "custom"
+	}
+	if _, ok := config.Preset(name); ok {
+		return "builtin"
+	}
+	return "custom"
 }
 
 func (s *providerService) List() (ws.ProviderList, error) {
@@ -74,14 +113,16 @@ func (s *providerService) listLocked() ws.ProviderList {
 	entries := make([]ws.ProviderRecord, 0, len(s.cfg.Providers)+len(s.auth.Providers))
 	seen := map[string]bool{}
 	for name, p := range s.cfg.Providers {
-		entries = append(entries, ws.ProviderRecord{Name: name, Models: sortedModels(models[name]), Source: "config", BaseURL: p.BaseURL, HasAPIKey: p.APIKey != ""})
+		ids := sortedModels(models[name])
+		entries = append(entries, ws.ProviderRecord{Name: name, Models: ids, ModelDetails: s.modelDetails(name, ids), Source: "config", Origin: s.providerOrigin(name), BaseURL: p.BaseURL, ReasoningDialect: p.ReasoningDialect, HasAPIKey: p.APIKey != ""})
 		seen[name] = true
 	}
 	for name, credential := range s.auth.Providers {
 		if seen[name] {
 			continue
 		}
-		entries = append(entries, ws.ProviderRecord{Name: name, Models: sortedModels(models[name]), Source: "auth", BaseURL: credential.BaseURL, HasAPIKey: credential.APIKey != ""})
+		ids := sortedModels(models[name])
+		entries = append(entries, ws.ProviderRecord{Name: name, Models: ids, ModelDetails: s.modelDetails(name, ids), Source: "auth", Origin: s.providerOrigin(name), BaseURL: credential.BaseURL, HasAPIKey: credential.APIKey != ""})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 
@@ -92,6 +133,25 @@ func (s *providerService) listLocked() ws.ProviderList {
 		}
 	}
 	return ws.ProviderList{Providers: entries, Available: available, DefaultModel: s.cfg.DefaultModel}
+}
+
+func (s *providerService) modelDetails(provider string, ids []string) []ws.ModelRecord {
+	details := make([]ws.ModelRecord, 0, len(ids))
+	for _, id := range ids {
+		record := ws.ModelRecord{ID: id}
+		if s.catalog != nil {
+			if model, ok := s.catalog.FindBuiltinModel(provider, id); ok {
+				record.ReasoningKnown, record.Reasoning = true, model.Reasoning
+				if model.Reasoning {
+					record.SupportedEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+				} else {
+					record.SupportedEfforts = []string{"off"}
+				}
+			}
+		}
+		details = append(details, record)
+	}
+	return details
 }
 
 func sortedModels(set map[string]struct{}) []string {
@@ -116,6 +176,9 @@ func validateProviderInput(p ws.ProviderInput) error {
 	if strings.TrimSpace(p.Model) == "" {
 		return fmt.Errorf("model is required")
 	}
+	if _, err := llm.ParseReasoningDialect(p.ReasoningDialect); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -127,6 +190,12 @@ func (s *providerService) Save(in ws.ProviderInput) (ws.ProviderList, error) {
 	}
 	name, model := strings.TrimSpace(in.Name), strings.TrimSpace(in.Model)
 	if in.Builtin {
+		known := s.catalog != nil && s.catalog.IsBuiltinProvider(name)
+		if !known {
+			if _, ok := config.Preset(name); !ok {
+				return ws.ProviderList{}, fmt.Errorf("provider %q is not a known built-in provider", name)
+			}
+		}
 		baseURL := strings.TrimSpace(in.BaseURL)
 		if baseURL == "" {
 			if preset, ok := config.Preset(name); ok {
@@ -163,7 +232,11 @@ func (s *providerService) Save(in ws.ProviderInput) (ws.ProviderList, error) {
 		if key == "" {
 			key = existing.APIKey
 		}
-		s.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model}
+		dialect := strings.TrimSpace(in.ReasoningDialect)
+		if dialect == "" {
+			dialect = existing.ReasoningDialect
+		}
+		s.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model, ReasoningDialect: dialect}
 	}
 	s.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(s.cfg); err != nil {
