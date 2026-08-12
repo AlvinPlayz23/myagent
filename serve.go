@@ -41,7 +41,7 @@ func runServe(argv []string) error {
 	fs.StringVar(&providerFlag, "provider", "", "default provider for new sessions")
 	fs.StringVar(&modelFlag, "model", "", "default model id for new sessions")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
-	fs.StringVar(&effortFlag, "effort", "", "default reasoning effort: low, medium, high, xhigh, or max")
+	fs.StringVar(&effortFlag, "effort", "", "default reasoning effort: "+llm.EffortList())
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}

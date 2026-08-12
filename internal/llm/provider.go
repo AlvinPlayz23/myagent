@@ -25,16 +25,58 @@ const (
 	EffortMax    Effort = "max"
 )
 
+// effortLevels is the single source of truth for the registered levels, in
+// ascending order. Parsing, clamping, model capabilities and user-facing help
+// all derive from it, so adding or retiring a level is a one-line change here.
+var effortLevels = []Effort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+
+// EffortLevels returns the registered efforts in ascending order. The result is
+// a copy, so callers may retain or reorder it without affecting package state.
+func EffortLevels() []Effort {
+	return append([]Effort(nil), effortLevels...)
+}
+
+// SupportedEffortsFor reports the efforts a model accepts given whether it is
+// known to reason: every registered level, or none at all. Catalog enrichment
+// and the provider transport share this so their capability views cannot drift.
+func SupportedEffortsFor(reasoning bool) []Effort {
+	if !reasoning {
+		return nil
+	}
+	return EffortLevels()
+}
+
+// EffortStrings renders efforts as wire values for transport payloads. A nil
+// input stays nil so `omitempty` fields drop out of the encoded result.
+func EffortStrings(efforts []Effort) []string {
+	if efforts == nil {
+		return nil
+	}
+	out := make([]string, len(efforts))
+	for i, effort := range efforts {
+		out[i] = string(effort)
+	}
+	return out
+}
+
+// EffortList renders the registered levels for help text and error messages.
+func EffortList() string {
+	return strings.Join(EffortStrings(effortLevels), ", ")
+}
+
 // ParseEffort parses a user-supplied effort value. Empty input means the
 // setting is unspecified and should be omitted from provider requests.
 func ParseEffort(value string) (Effort, error) {
 	effort := Effort(strings.ToLower(strings.TrimSpace(value)))
-	switch effort {
-	case "", EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
+	if effort == "" {
 		return effort, nil
-	default:
-		return "", fmt.Errorf("invalid effort %q: must be one of low, medium, high, xhigh, max", value)
 	}
+	for _, level := range effortLevels {
+		if effort == level {
+			return effort, nil
+		}
+	}
+	return "", fmt.Errorf("invalid effort %q: must be one of %s", value, EffortList())
 }
 
 // NormalizeEffort applies known model capabilities. Unknown models remain
@@ -58,7 +100,7 @@ func NormalizeEffort(model Model, effort Effort) (Effort, error) {
 }
 
 func clampEffort(requested Effort, supported []Effort) Effort {
-	order := []Effort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+	order := effortLevels
 	index := func(value Effort) int {
 		for i, item := range order {
 			if item == value {

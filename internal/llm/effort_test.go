@@ -1,6 +1,48 @@
 package llm
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestEffortLevelsIsTheSingleSourceOfTruth(t *testing.T) {
+	levels := EffortLevels()
+	if len(levels) == 0 {
+		t.Fatal("no registered effort levels")
+	}
+	// Every registered level must parse, and clamping relies on ascending order.
+	for _, level := range levels {
+		if got, err := ParseEffort(string(level)); err != nil || got != level {
+			t.Errorf("ParseEffort(%q) = %q, %v", level, got, err)
+		}
+	}
+	if levels[0] != EffortLow || levels[len(levels)-1] != EffortMax {
+		t.Errorf("levels = %v, want ascending from low to max", levels)
+	}
+	// The returned slice is a copy: mutating it must not corrupt package state.
+	levels[0] = "tampered"
+	if EffortLevels()[0] != EffortLow {
+		t.Error("EffortLevels() leaked its backing array to callers")
+	}
+	if want := "low, medium, high, xhigh, max"; EffortList() != want {
+		t.Errorf("EffortList() = %q, want %q", EffortList(), want)
+	}
+}
+
+func TestSupportedEffortsForTracksRegisteredLevels(t *testing.T) {
+	if got := SupportedEffortsFor(false); got != nil {
+		t.Errorf("non-reasoning supported efforts = %v, want nil", got)
+	}
+	if got, want := SupportedEffortsFor(true), EffortLevels(); !reflect.DeepEqual(got, want) {
+		t.Errorf("reasoning supported efforts = %v, want %v", got, want)
+	}
+	if got := EffortStrings(nil); got != nil {
+		t.Errorf("EffortStrings(nil) = %v, want nil so omitempty drops the field", got)
+	}
+	if got, want := EffortStrings(SupportedEffortsFor(true)), []string{"low", "medium", "high", "xhigh", "max"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("EffortStrings = %v, want %v", got, want)
+	}
+}
 
 func TestParseEffort(t *testing.T) {
 	tests := map[string]Effort{
