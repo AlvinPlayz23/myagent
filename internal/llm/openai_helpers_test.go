@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildRequestBodyReasoningEffort(t *testing.T) {
-	for _, effort := range []Effort{"", EffortNone, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
+	for _, effort := range []Effort{"", EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
 		body, err := buildRequestBody(Model{ID: "test"}, Request{Effort: effort})
 		if err != nil {
 			t.Fatalf("buildRequestBody(%q): %v", effort, err)
@@ -26,27 +26,6 @@ func TestBuildRequestBodyReasoningEffort(t *testing.T) {
 		}
 		if value != string(effort) {
 			t.Errorf("reasoning_effort = %#v, want %q", value, effort)
-		}
-	}
-}
-
-func TestBuildRequestBodyCanonicalOffUsesProviderDisableValue(t *testing.T) {
-	for _, model := range []Model{{ID: "gpt"}, {ID: "gpt", Provider: "openrouter"}} {
-		body, err := buildRequestBody(model, Request{Effort: EffortOff})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got map[string]any
-		if err := json.Unmarshal(body, &got); err != nil {
-			t.Fatal(err)
-		}
-		if model.Provider == "openrouter" {
-			reasoning := got["reasoning"].(map[string]any)
-			if reasoning["effort"] != "none" {
-				t.Fatalf("openrouter off = %#v", reasoning)
-			}
-		} else if got["reasoning_effort"] != "none" {
-			t.Fatalf("openai off = %#v", got)
 		}
 	}
 }
@@ -131,7 +110,6 @@ func TestBuildRequestBodyDeepSeekReasoning(t *testing.T) {
 		{effort: EffortLow, wantEffort: "low", wantThinking: "enabled"},
 		{effort: EffortMedium, wantEffort: "high", wantThinking: "enabled"},
 		{effort: EffortMax, wantEffort: "max", wantThinking: "enabled"},
-		{effort: EffortNone, wantThinking: "disabled"},
 	}
 	for _, tt := range tests {
 		body, err := buildRequestBody(Model{ID: "deepseek-v4-pro", BaseURL: "https://api.deepseek.com"}, Request{Effort: tt.effort})
@@ -146,11 +124,7 @@ func TestBuildRequestBodyDeepSeekReasoning(t *testing.T) {
 		if !ok || thinking["type"] != tt.wantThinking {
 			t.Errorf("effort %q thinking = %#v, want %q", tt.effort, got["thinking"], tt.wantThinking)
 		}
-		if tt.wantEffort == "" {
-			if _, present := got["reasoning_effort"]; present {
-				t.Errorf("effort none serialized reasoning_effort: %s", body)
-			}
-		} else if got["reasoning_effort"] != tt.wantEffort {
+		if got["reasoning_effort"] != tt.wantEffort {
 			t.Errorf("effort %q reasoning_effort = %#v, want %q", tt.effort, got["reasoning_effort"], tt.wantEffort)
 		}
 		if _, present := got["reasoning"]; present {

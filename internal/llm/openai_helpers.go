@@ -26,22 +26,14 @@ func buildRequestBody(model Model, req Request) ([]byte, error) {
 		MaxTokens:     req.MaxTokens,
 	}
 	if req.Effort != "" {
-		wireEffort := req.Effort
-		if wireEffort == EffortOff {
-			wireEffort = EffortNone
-		}
 		switch provider {
 		case reasoningProviderOpenRouter:
-			cr.Reasoning = &reasoningConfig{Effort: wireEffort}
+			cr.Reasoning = &reasoningConfig{Effort: req.Effort}
 		case reasoningProviderDeepSeek:
-			if req.Effort == EffortNone || req.Effort == EffortOff {
-				cr.Thinking = &thinkingConfig{Type: "disabled"}
-			} else {
-				cr.ReasoningEffort = deepSeekEffort(wireEffort)
-				cr.Thinking = &thinkingConfig{Type: "enabled"}
-			}
+			cr.ReasoningEffort = deepSeekEffort(req.Effort)
+			cr.Thinking = &thinkingConfig{Type: "enabled"}
 		default:
-			cr.ReasoningEffort = wireEffort
+			cr.ReasoningEffort = req.Effort
 		}
 	}
 	for _, t := range req.Tools {
@@ -60,9 +52,6 @@ func buildRequestBody(model Model, req Request) ([]byte, error) {
 func deepSeekEffort(effort Effort) Effort {
 	// DeepSeek's OpenAI-format reasoning_effort accepts low/high/xhigh/max;
 	// medium has no direct equivalent and is mapped to its default high tier.
-	if effort == EffortMinimal {
-		return EffortLow
-	}
 	if effort == EffortMedium {
 		return EffortHigh
 	}

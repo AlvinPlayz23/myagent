@@ -181,8 +181,6 @@ type effortChoice struct {
 
 var effortChoices = []effortChoice{
 	{label: "Default", description: "use the provider default"},
-	{effort: llm.EffortOff, label: "Off", description: "disable reasoning"},
-	{effort: llm.EffortMinimal, label: "Minimal", description: "minimal reasoning"},
 	{effort: llm.EffortLow, label: "Low", description: "fast, lightweight reasoning"},
 	{effort: llm.EffortMedium, label: "Medium", description: "balanced reasoning"},
 	{effort: llm.EffortHigh, label: "High", description: "deeper reasoning"},
@@ -1367,7 +1365,7 @@ func (m *model) applyModel(item modelcatalog.Model) (tea.Model, tea.Cmd) {
 	if effort, err := llm.NormalizeEffort(selected, m.runner.cfg.Effort); err == nil {
 		m.runner.setEffort(effort)
 	} else {
-		m.runner.setEffort(llm.EffortOff)
+		m.runner.setEffort("")
 	}
 	m.modelID = item.Ref()
 	m.models.close()

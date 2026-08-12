@@ -82,9 +82,9 @@ func (c *Catalog) Enrich(model llm.Model) llm.Model {
 	model.ReasoningKnown = true
 	model.Reasoning = entry.Reasoning
 	if entry.Reasoning {
-		model.SupportedEfforts = []llm.Effort{llm.EffortOff, llm.EffortMinimal, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
+		model.SupportedEfforts = []llm.Effort{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
 	} else {
-		model.SupportedEfforts = []llm.Effort{llm.EffortOff}
+		model.SupportedEfforts = nil
 	}
 	return model
 }

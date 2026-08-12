@@ -124,11 +124,10 @@ func TestModelSwitchNormalizesEffortForNonReasoningModel(t *testing.T) {
 	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
 
 	nonReasoning := llm.Model{
-		Provider:         "openrouter",
-		ID:               "plain",
-		ReasoningKnown:   true,
-		Reasoning:        false,
-		SupportedEfforts: []llm.Effort{llm.EffortOff},
+		Provider:       "openrouter",
+		ID:             "plain",
+		ReasoningKnown: true,
+		Reasoning:      false,
 	}
 	m.availableModels = func() []modelcatalog.Model {
 		return []modelcatalog.Model{{Provider: "openrouter", ID: "plain"}}
@@ -145,8 +144,8 @@ func TestModelSwitchNormalizesEffortForNonReasoningModel(t *testing.T) {
 	if m.modelID != "openrouter/plain" {
 		t.Fatalf("model id = %q, want openrouter/plain", m.modelID)
 	}
-	if r.cfg.Effort != llm.EffortOff {
-		t.Fatalf("effort after model switch = %q, want off", r.cfg.Effort)
+	if r.cfg.Effort != "" {
+		t.Fatalf("effort after model switch = %q, want unspecified", r.cfg.Effort)
 	}
 }
 

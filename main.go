@@ -87,7 +87,7 @@ func run(argv []string) error {
 	fs.StringVar(&providerFlag, "provider", "", "configured provider name (overrides default_model provider)")
 	fs.StringVar(&modelFlag, "model", "", "model id (overrides default_model and MYAGENT_MODEL)")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
-	fs.StringVar(&effortFlag, "effort", "", "reasoning effort: off, minimal, low, medium, high, xhigh, or max")
+	fs.StringVar(&effortFlag, "effort", "", "reasoning effort: low, medium, high, xhigh, or max")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}

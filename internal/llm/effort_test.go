@@ -4,15 +4,12 @@ import "testing"
 
 func TestParseEffort(t *testing.T) {
 	tests := map[string]Effort{
-		"":        "",
-		"none":    EffortNone,
-		"off":     EffortOff,
-		"minimal": EffortMinimal,
-		" LOW ":   EffortLow,
-		"Medium":  EffortMedium,
-		"high":    EffortHigh,
-		"XHIGH":   EffortXHigh,
-		"max":     EffortMax,
+		"":       "",
+		" LOW ":  EffortLow,
+		"Medium": EffortMedium,
+		"high":   EffortHigh,
+		"XHIGH":  EffortXHigh,
+		"max":    EffortMax,
 	}
 	for input, want := range tests {
 		got, err := ParseEffort(input)
@@ -26,8 +23,11 @@ func TestParseEffort(t *testing.T) {
 }
 
 func TestParseEffortRejectsInvalidValue(t *testing.T) {
-	if _, err := ParseEffort("extreme"); err == nil {
-		t.Fatal("ParseEffort(extreme) should fail")
+	// off, minimal and the legacy none alias are no longer registered levels.
+	for _, input := range []string{"extreme", "off", "minimal", "none"} {
+		if _, err := ParseEffort(input); err == nil {
+			t.Errorf("ParseEffort(%q) should fail", input)
+		}
 	}
 }
 
@@ -36,16 +36,15 @@ func TestNormalizeEffortUsesModelCapabilities(t *testing.T) {
 	if _, err := NormalizeEffort(nonReasoning, EffortHigh); err == nil {
 		t.Fatal("expected non-reasoning model to reject high effort")
 	}
-	if got, err := NormalizeEffort(nonReasoning, EffortNone); err != nil || got != EffortOff {
-		t.Fatalf("off normalization = %q, %v", got, err)
+	if got, err := NormalizeEffort(nonReasoning, ""); err != nil || got != "" {
+		t.Fatalf("unspecified effort on non-reasoning model = %q, %v", got, err)
 	}
-	reasoning := Model{ID: "reasoning", ReasoningKnown: true, Reasoning: true, SupportedEfforts: []Effort{EffortOff, EffortLow, EffortHigh}}
+	reasoning := Model{ID: "reasoning", ReasoningKnown: true, Reasoning: true, SupportedEfforts: []Effort{EffortLow, EffortHigh}}
 	if got, err := NormalizeEffort(reasoning, EffortMedium); err != nil || got != EffortHigh {
 		t.Fatalf("clamped effort = %q, %v", got, err)
 	}
-	withoutOff := Model{ID: "reasoning-without-off", ReasoningKnown: true, Reasoning: true, SupportedEfforts: []Effort{EffortLow, EffortHigh}}
-	if got, err := NormalizeEffort(withoutOff, EffortOff); err != nil || got != EffortOff {
-		t.Fatalf("explicit off normalization = %q, %v", got, err)
+	if got, err := NormalizeEffort(reasoning, EffortMax); err != nil || got != EffortHigh {
+		t.Fatalf("clamped-down effort = %q, %v", got, err)
 	}
 }
 

@@ -143,9 +143,9 @@ func (s *providerService) modelDetails(provider string, ids []string) []ws.Model
 			if model, ok := s.catalog.FindBuiltinModel(provider, id); ok {
 				record.ReasoningKnown, record.Reasoning = true, model.Reasoning
 				if model.Reasoning {
-					record.SupportedEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+					record.SupportedEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 				} else {
-					record.SupportedEfforts = []string{"off"}
+					record.SupportedEfforts = nil
 				}
 			}
 		}

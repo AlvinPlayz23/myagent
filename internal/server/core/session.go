@@ -312,7 +312,7 @@ func (s *ServerSession) SetModel(provider llm.Provider, model llm.Model) error {
 	if effort, err := llm.NormalizeEffort(model, s.cfg.Effort); err == nil {
 		s.cfg.Effort = effort
 	} else {
-		s.cfg.Effort = llm.EffortOff
+		s.cfg.Effort = ""
 	}
 	s.modelID = model.Provider + "/" + model.ID
 	return nil
