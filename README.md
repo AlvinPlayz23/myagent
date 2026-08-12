@@ -263,7 +263,7 @@ to run, or **Esc** to dismiss it.
 | `/model`             | Open the searchable model selector for configured providers |
 | `/model <provider/model-id>` | Select an exact model immediately |
 | `/effort`            | Open the reasoning-effort selector |
-| `/effort <level>`    | Set `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
+| `/effort <level>`    | Set `default`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `/providers`         | Add API keys for compatible catalog providers |
 | `/customize`         | Choose the default text or animated orb startup style |
 | `/compact`           | Force context compaction when a safe boundary exists    |
@@ -372,12 +372,13 @@ notifications:
 - `session.done` — `{sessionId, error?}` after the run finishes; `error` is
   set when the run failed before producing a terminal `agent_end`.
 
-The TUI accepts `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
-and `max`; `default` means the provider default. The API and CLI use the same
-levels except that an omitted value represents the provider default. Legacy
-`none` is accepted as an alias for `off`.
+The TUI accepts `default`, `low`, `medium`, `high`, `xhigh`, and `max`;
+`default` means the provider default. The API and CLI use the same levels
+except that an omitted value represents the provider default.
 When omitted, the reasoning control is omitted from the provider request so the
-provider's default is preserved. OpenRouter receives its unified
+provider's default is preserved. Selecting a model whose catalog entry reports
+no reasoning support clears the level back to the provider default.
+OpenRouter receives its unified
 `reasoning.effort` object; DeepSeek receives `reasoning_effort` plus its thinking
 toggle and maps `medium` to `high`; other compatible endpoints receive
 `reasoning_effort`. Reasoning content is replayed for DeepSeek and OpenRouter

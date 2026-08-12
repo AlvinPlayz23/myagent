@@ -9,8 +9,30 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
+	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+// The picker's labels and descriptions are written by hand, so it is the one
+// place the registered levels cannot be derived from llm.EffortLevels(). Guard
+// it so retiring or adding a level cannot silently skip the TUI.
+func TestEffortChoicesCoverRegisteredLevels(t *testing.T) {
+	if got, want := len(effortChoices), len(llm.EffortLevels())+1; got != want {
+		t.Fatalf("effort choices = %d, want %d (registered levels plus Default)", got, want)
+	}
+	if effortChoices[0].effort != "" {
+		t.Errorf("first choice = %q, want the provider default", effortChoices[0].effort)
+	}
+	for i, level := range llm.EffortLevels() {
+		choice := effortChoices[i+1]
+		if choice.effort != level {
+			t.Errorf("choice %d = %q, want %q (ascending registered order)", i+1, choice.effort, level)
+		}
+		if choice.label == "" || choice.description == "" {
+			t.Errorf("choice %q missing label or description", level)
+		}
+	}
+}
 
 func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
