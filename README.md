@@ -38,15 +38,27 @@ Everything below assumes you `cd`-ed into this repo.
 
 ---
 
-## Setup
+## Installation
+
+### Linux / macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/AlvinPlayz23/myagent/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/AlvinPlayz23/myagent/main/install.ps1 | iex
+```
+
+---
+
+## Setup (Manual)
 
 ```bash
-git clone <repo-url> myagent
+git clone https://github.com/AlvinPlayz23/myagent.git myagent
 cd myagent
 go mod download         # pull bubble/lipgloss/glamour deps
 ```
-
-There are no other install steps.
 
 ---
 
