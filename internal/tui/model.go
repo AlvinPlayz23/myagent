@@ -310,6 +310,7 @@ type effortChoice struct {
 
 var effortChoices = []effortChoice{
 	{label: "Default", description: "use the provider default"},
+	{effort: llm.EffortMinimal, label: "Minimal", description: "shortest reasoning pass"},
 	{effort: llm.EffortLow, label: "Low", description: "fast, lightweight reasoning"},
 	{effort: llm.EffortMedium, label: "Medium", description: "balanced reasoning"},
 	{effort: llm.EffortHigh, label: "High", description: "deeper reasoning"},

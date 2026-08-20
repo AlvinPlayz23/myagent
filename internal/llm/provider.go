@@ -18,17 +18,18 @@ import (
 type Effort string
 
 const (
-	EffortLow    Effort = "low"
-	EffortMedium Effort = "medium"
-	EffortHigh   Effort = "high"
-	EffortXHigh  Effort = "xhigh"
-	EffortMax    Effort = "max"
+	EffortMinimal Effort = "minimal"
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+	EffortXHigh   Effort = "xhigh"
+	EffortMax     Effort = "max"
 )
 
 // effortLevels is the single source of truth for the registered levels, in
 // ascending order. Parsing, clamping, model capabilities and user-facing help
 // all derive from it, so adding or retiring a level is a one-line change here.
-var effortLevels = []Effort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+var effortLevels = []Effort{EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 
 // EffortLevels returns the registered efforts in ascending order. The result is
 // a copy, so callers may retain or reorder it without affecting package state.

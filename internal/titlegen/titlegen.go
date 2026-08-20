@@ -26,11 +26,9 @@ func Generate(ctx context.Context, provider llm.Provider, model llm.Model, promp
 		return "", fmt.Errorf("title generation requires a prompt")
 	}
 	maxTokens := 32
-	temperature := 0.2
 	events, err := provider.Stream(ctx, model, llm.Request{
 		SystemPrompt: systemPrompt,
 		Messages:     []types.Message{{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock(prompt)}}},
-		Temperature:  &temperature,
 		MaxTokens:    &maxTokens,
 	})
 	if err != nil {

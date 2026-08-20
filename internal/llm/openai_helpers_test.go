@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildRequestBodyReasoningEffort(t *testing.T) {
-	for _, effort := range []Effort{"", EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
+	for _, effort := range []Effort{"", EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
 		body, err := buildRequestBody(Model{ID: "test"}, Request{Effort: effort})
 		if err != nil {
 			t.Fatalf("buildRequestBody(%q): %v", effort, err)
@@ -27,6 +27,41 @@ func TestBuildRequestBodyReasoningEffort(t *testing.T) {
 		if value != string(effort) {
 			t.Errorf("reasoning_effort = %#v, want %q", value, effort)
 		}
+	}
+}
+
+func TestBuildRequestBodyOmitsTemperatureForReasoning(t *testing.T) {
+	temperature := 0.2
+	for _, model := range []Model{
+		{ID: "custom-reasoning", ReasoningKnown: true, Reasoning: true},
+		{ID: "custom-unknown"},
+	} {
+		body, err := buildRequestBody(model, Request{Temperature: &temperature, Effort: EffortMinimal})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := got["temperature"]; present {
+			t.Errorf("reasoning request includes temperature: %s", body)
+		}
+	}
+}
+
+func TestBuildRequestBodyOmitsTemperatureForKnownReasoningWithoutEffort(t *testing.T) {
+	temperature := 0.2
+	body, err := buildRequestBody(Model{ID: "reasoning", ReasoningKnown: true, Reasoning: true}, Request{Temperature: &temperature})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["temperature"]; present {
+		t.Fatalf("known reasoning request includes temperature: %s", body)
 	}
 }
 
