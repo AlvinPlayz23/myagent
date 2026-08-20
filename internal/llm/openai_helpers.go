@@ -25,6 +25,11 @@ func buildRequestBody(model Model, req Request) ([]byte, error) {
 		Temperature:   req.Temperature,
 		MaxTokens:     req.MaxTokens,
 	}
+	// Reasoning models reject sampling controls such as temperature. Explicit
+	// effort also marks reasoning for unknown custom endpoints.
+	if req.Effort != "" || (model.ReasoningKnown && model.Reasoning) {
+		cr.Temperature = nil
+	}
 	if req.Effort != "" {
 		switch provider {
 		case reasoningProviderOpenRouter:

@@ -114,7 +114,7 @@ func TestCatalogEnrichUsesOnlyBuiltinCapabilities(t *testing.T) {
 		Custom: []Model{{Provider: "local", ID: "unknown"}},
 	}}
 	reasoner := c.Enrich(llm.Model{Provider: "openrouter", ID: "reasoner"})
-	if !reasoner.ReasoningKnown || !reasoner.Reasoning || len(reasoner.SupportedEfforts) != 5 {
+	if !reasoner.ReasoningKnown || !reasoner.Reasoning || len(reasoner.SupportedEfforts) != 6 {
 		t.Fatalf("reasoning model = %#v", reasoner)
 	}
 	plain := c.Enrich(llm.Model{Provider: "openrouter", ID: "plain"})
