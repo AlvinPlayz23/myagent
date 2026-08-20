@@ -73,6 +73,7 @@ type Config struct {
 	DefaultModel string                    `json:"default_model"`
 	Retry        *RetryConfig              `json:"retry,omitempty"`
 	WelcomeStyle string                    `json:"welcomeStyle,omitempty"`
+	PromptStyle  string                    `json:"promptStyle,omitempty"`
 }
 
 // RetryConfig tunes automatic retries of transient provider failures. Omitted

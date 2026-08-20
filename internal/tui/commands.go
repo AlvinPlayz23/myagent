@@ -40,7 +40,7 @@ var commandItems = []commandItem{
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
 	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort", kind: commandEffort, requiresArg: true},
 	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
-	{name: "/customize", usage: "/customize", description: "Choose the empty-session startup style", kind: commandCustomize},
+	{name: "/customize", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
 	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
 	{name: "/clear", usage: "/clear", description: "Clear the visible transcript", kind: commandClear},
 	{name: "/new", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},

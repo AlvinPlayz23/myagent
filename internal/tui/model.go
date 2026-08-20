@@ -132,29 +132,158 @@ var welcomeChoices = []welcomeChoice{
 	{style: welcomeFill, label: "Fill", description: "block letters filling with liquid"},
 }
 
+// promptStyle selects the composer chrome drawn around the textarea.
+type promptStyle string
+
+const (
+	promptDefault promptStyle = "default"
+	promptRuled   promptStyle = "ruled"
+)
+
+type promptChoice struct {
+	style       promptStyle
+	label       string
+	description string
+}
+
+var promptChoices = []promptChoice{
+	{style: promptDefault, label: "Default", description: "(default) tall box with a bar gutter"},
+	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
+}
+
+// defaultComposerHeight matches the bubbles textarea default so switching back
+// from a shorter style restores the original composer size.
+const defaultComposerHeight = 6
+
+// ruledPrompt is the marker drawn at the start of the ruled composer's line.
+const ruledPrompt = "› "
+
+const (
+	// ruledComposerRules counts the rules drawn above and below the textarea.
+	ruledComposerRules = 2
+	// The ruled composer opens one line tall and grows with the text, up to
+	// ruledComposerMaxRows, after which it scrolls internally.
+	ruledComposerMinRows = 1
+	ruledComposerMaxRows = 10
+	// ruledComposerReserve is the transcript rows kept free when the terminal is
+	// too short to give the composer its full growth range.
+	ruledComposerReserve = 4
+	// composerContentRows bounds the text the composer will accept. Setting it at
+	// all is what makes MaxHeight cap only the visible rows instead of blocking
+	// input, so it just has to exceed any realistic prompt.
+	composerContentRows = 1000
+)
+
+func normalizePromptStyle(style string) promptStyle {
+	for _, choice := range promptChoices {
+		if choice.style == promptStyle(style) {
+			return choice.style
+		}
+	}
+	return promptDefault
+}
+
+// customizeSection identifies which setting a /customize row belongs to.
+type customizeSection int
+
+const (
+	sectionStartup customizeSection = iota
+	sectionComposer
+)
+
+// customizeRow is one line of the /customize panel. Header rows title a group
+// and carry no value, so navigation skips over them.
+type customizeRow struct {
+	section     customizeSection
+	header      bool
+	label       string
+	description string
+	welcome     welcomeStyle
+	prompt      promptStyle
+}
+
+// customizeRows flattens the grouped settings into the display order used by
+// both the renderer and the picker's cursor.
+var customizeRows = buildCustomizeRows()
+
+func buildCustomizeRows() []customizeRow {
+	rows := []customizeRow{{section: sectionStartup, header: true, label: "1. Startup Style", description: "empty-session welcome"}}
+	for _, choice := range welcomeChoices {
+		rows = append(rows, customizeRow{
+			section:     sectionStartup,
+			label:       choice.label,
+			description: choice.description,
+			welcome:     choice.style,
+		})
+	}
+	rows = append(rows, customizeRow{section: sectionComposer, header: true, label: "2. Composer (Prompt Box)", description: "where you type"})
+	for _, choice := range promptChoices {
+		rows = append(rows, customizeRow{
+			section:     sectionComposer,
+			label:       choice.label,
+			description: choice.description,
+			prompt:      choice.style,
+		})
+	}
+	return rows
+}
+
 type customizePicker struct {
 	active bool
 	sel    int
 }
 
+// open positions the cursor on the row matching the active startup style so the
+// panel opens showing what is currently in effect.
 func (p *customizePicker) open(current welcomeStyle) {
 	p.active = true
-	p.sel = 0
-	for i, choice := range welcomeChoices {
-		if choice.style == current {
+	p.sel = firstSelectableRow()
+	for i, row := range customizeRows {
+		if !row.header && row.section == sectionStartup && row.welcome == current {
 			p.sel = i
 			break
 		}
 	}
 }
 
-func (p *customizePicker) close() { p.active = false }
-
-func (p *customizePicker) move(delta int) {
-	p.sel = (p.sel + delta + len(welcomeChoices)) % len(welcomeChoices)
+func firstSelectableRow() int {
+	for i, row := range customizeRows {
+		if !row.header {
+			return i
+		}
+	}
+	return 0
 }
 
-func (p *customizePicker) selected() welcomeChoice { return welcomeChoices[p.sel] }
+func (p *customizePicker) close() { p.active = false }
+
+// move advances the cursor by delta selectable rows, stepping over the group
+// headers in either direction.
+func (p *customizePicker) move(delta int) {
+	n := len(customizeRows)
+	if delta == 0 || n == 0 {
+		return
+	}
+	step := 1
+	if delta < 0 {
+		step, delta = -1, -delta
+	}
+	for ; delta > 0; delta-- {
+		for i := 0; i < n; i++ {
+			p.sel = (p.sel + step + n) % n
+			if !customizeRows[p.sel].header {
+				break
+			}
+		}
+	}
+}
+
+func (p *customizePicker) selected() customizeRow {
+	if p.sel < 0 || p.sel >= len(customizeRows) {
+		return customizeRow{}
+	}
+	return customizeRows[p.sel]
+}
 
 func normalizeWelcomeStyle(style string) welcomeStyle {
 	for _, choice := range welcomeChoices {
@@ -269,6 +398,12 @@ type model struct {
 	historyIndex    int // -1 means the composer is not browsing prompt history.
 	welcomeStyle    welcomeStyle
 	welcomeFrame    int
+	promptStyle     promptStyle
+	// defaultPrompt is the textarea's stock gutter and defaultMaxHeight its stock
+	// row cap, both captured at construction so switching back from the ruled
+	// style restores them without hardcoding bubbles' defaults.
+	defaultPrompt    string
+	defaultMaxHeight int
 
 	modelID string
 	cwd     string
@@ -291,6 +426,7 @@ type model struct {
 	providerAPIKey     func(string) string
 	configureProvider  func(modelcatalog.Provider, string) error
 	saveWelcomeStyle   func(welcomeStyle) error
+	savePromptStyle    func(promptStyle) error
 	exportSession      func(export.Format, string, bool) (string, error)
 
 	// usage accumulates across the session for the footer.
@@ -302,6 +438,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 	ta := textarea.New()
 	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
 	ta.ShowLineNumbers = false
+	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()
 	key := textinput.New()
 	key.Placeholder = "Paste API key"
@@ -315,23 +452,26 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		createSession = newSession[0]
 	}
 	return &model{
-		ctx:            ctx,
-		runner:         r,
-		queue:          q,
-		th:             th,
-		md:             md,
-		transcript:     newTranscript(th, md),
-		input:          ta,
-		keyInput:       key,
-		exportName:     exportName,
-		picker:         newCommandPicker(),
-		clipboardWrite: clipboard.WriteAll,
-		clipboardRead:  readNativeClipboard,
-		historyIndex:   -1,
-		welcomeStyle:   welcomeDefault,
-		modelID:        modelID,
-		cwd:            cwd,
-		newSession:     createSession,
+		ctx:              ctx,
+		runner:           r,
+		queue:            q,
+		th:               th,
+		md:               md,
+		transcript:       newTranscript(th, md),
+		input:            ta,
+		keyInput:         key,
+		exportName:       exportName,
+		picker:           newCommandPicker(),
+		clipboardWrite:   clipboard.WriteAll,
+		clipboardRead:    readNativeClipboard,
+		historyIndex:     -1,
+		welcomeStyle:     welcomeDefault,
+		promptStyle:      promptDefault,
+		defaultPrompt:    ta.Prompt,
+		defaultMaxHeight: ta.MaxHeight,
+		modelID:          modelID,
+		cwd:              cwd,
+		newSession:       createSession,
 	}
 }
 
@@ -511,6 +651,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // onResize recomputes layout on a window-size change.
 func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	m.width, m.height = w, h
+	// The ruled composer's growth budget derives from the terminal height, and
+	// its wrap width from the terminal width, so refit it before sizing the
+	// viewport around it.
+	m.syncComposerStyle()
 	vpHeight := m.viewportHeight()
 	if !m.ready {
 		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
@@ -519,18 +663,34 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 		m.viewport.SetWidth(w)
 		m.viewport.SetHeight(vpHeight)
 	}
-	m.input.SetWidth(w)
 	m.transcript.invalidate()
 	m.refreshViewport()
 	return m, nil
 }
 
-// The fixed UI occupies nine rows: three for the textarea, two for the
-// footer, one status row, and three separating newlines. The command picker
-// borrows rows from the transcript while always leaving it at least one row.
+// chromeHeight is the status row plus the two footer rows. The composer's own
+// height varies with the prompt style, so it is added separately. The blocks in
+// View are joined by newlines rather than separated by blank rows, so the
+// separators cost no extra rows.
+const chromeHeight = 3
+
+// composerHeight reports the rows the composer occupies, including the rules the
+// ruled style draws above and below the textarea.
+func (m *model) composerHeight() int {
+	height := m.input.Height()
+	if m.promptStyle == promptRuled {
+		height += 2
+	}
+	return height
+}
+
+// fixedHeight is the part of the layout the transcript can never use. The
+// command picker borrows rows from the transcript while always leaving it at
+// least one row.
+func (m *model) fixedHeight() int { return chromeHeight + m.composerHeight() }
+
 func (m *model) viewportHeight() int {
-	const fixedHeight = 9
-	height := m.height - fixedHeight - m.panelHeight() - m.queuedFollowUpHeight() - m.attachmentHeight()
+	height := m.height - m.fixedHeight() - m.panelHeight() - m.queuedFollowUpHeight() - m.attachmentHeight()
 	return max(1, height)
 }
 
@@ -549,8 +709,7 @@ func (m *model) queuedFollowUpHeight() int {
 }
 
 func (m *model) panelHeight() int {
-	const fixedHeight = 9
-	available := m.height - fixedHeight - 1
+	available := m.height - m.fixedHeight() - 1
 	desired := m.picker.height()
 	if m.files.active {
 		desired = m.files.height()
@@ -570,7 +729,7 @@ func (m *model) panelHeight() int {
 	if m.exportPick.active || m.exportFormat != "" || m.exportOverwrite {
 		desired = 3
 	} else if m.customize.active {
-		desired = len(welcomeChoices) + 1
+		desired = len(customizeRows) + 1
 	}
 	return min(desired, max(0, available))
 }
@@ -708,7 +867,7 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "down":
 			m.customize.move(1)
 		case "enter":
-			return m.applyWelcomeStyle()
+			return m.applyCustomizeSelection()
 		case "esc":
 			m.customize.close()
 			m.statusMsg = "Customization cancelled."
@@ -1027,6 +1186,8 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(text, "/") {
 		m.input.Reset()
 		m.historyIndex = -1
+		// Resetting shrinks a grown composer, so the transcript reclaims its rows.
+		m.updateLayout()
 		return m.runCommand(text)
 	}
 	content, err := expandPromptContent(text, m.cwd)
@@ -1048,6 +1209,8 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.attachments.clear()
 	m.historyIndex = -1
+	// Resetting shrinks a grown composer, so the transcript reclaims its rows.
+	m.updateLayout()
 	um := userMessageContent(content)
 
 	if m.working {
@@ -1252,20 +1415,80 @@ func (m *model) writeExport(overwrite bool) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) applyWelcomeStyle() (tea.Model, tea.Cmd) {
-	choice := m.customize.selected()
+// applyCustomizeSelection saves whichever grouped setting the cursor sits on.
+func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
+	row := m.customize.selected()
+	if row.header {
+		return m, nil
+	}
+	if row.section == sectionComposer {
+		return m.applyPromptStyle(row)
+	}
+	return m.applyWelcomeStyle(row)
+}
+
+func (m *model) applyWelcomeStyle(row customizeRow) (tea.Model, tea.Cmd) {
 	if m.saveWelcomeStyle != nil {
-		if err := m.saveWelcomeStyle(choice.style); err != nil {
+		if err := m.saveWelcomeStyle(row.welcome); err != nil {
 			m.statusMsg = "Could not save customization: " + err.Error()
 			return m, nil
 		}
 	}
-	m.welcomeStyle = choice.style
+	m.welcomeStyle = row.welcome
 	m.welcomeFrame = 0
 	m.customize.close()
-	m.statusMsg = "Startup style set to " + choice.label + "."
+	m.statusMsg = "Startup style set to " + row.label + "."
 	m.updateLayout()
 	return m, nil
+}
+
+func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
+	if m.savePromptStyle != nil {
+		if err := m.savePromptStyle(row.prompt); err != nil {
+			m.statusMsg = "Could not save customization: " + err.Error()
+			return m, nil
+		}
+	}
+	m.promptStyle = row.prompt
+	m.syncComposerStyle()
+	m.customize.close()
+	m.statusMsg = "Composer style set to " + row.label + "."
+	m.updateLayout()
+	return m, nil
+}
+
+// syncComposerStyle reconfigures the textarea for the active prompt style. The
+// ruled style grows with its content between one row and the terminal's budget;
+// MaxContentHeight is what keeps MaxHeight a display cap rather than an input
+// limit. SetWidth must run last: it re-measures the gutter and, in doing so,
+// refits the height to the new bounds.
+func (m *model) syncComposerStyle() {
+	if m.promptStyle == promptRuled {
+		m.input.Prompt = ruledPrompt
+		m.input.DynamicHeight = true
+		m.input.MinHeight = ruledComposerMinRows
+		m.input.MaxHeight = m.ruledGrowthLimit()
+		m.input.MaxContentHeight = composerContentRows
+	} else {
+		m.input.Prompt = m.defaultPrompt
+		m.input.DynamicHeight = false
+		m.input.MinHeight = 0
+		m.input.MaxHeight = m.defaultMaxHeight
+		m.input.MaxContentHeight = 0
+		m.input.SetHeight(defaultComposerHeight)
+	}
+	m.input.SetWidth(max(1, m.width))
+}
+
+// ruledGrowthLimit is the tallest the ruled textarea may render on this
+// terminal, leaving room for its rules, the surrounding chrome, and a few
+// transcript rows.
+func (m *model) ruledGrowthLimit() int {
+	if m.height <= 0 {
+		return ruledComposerMaxRows
+	}
+	budget := m.height - chromeHeight - ruledComposerRules - ruledComposerReserve
+	return max(ruledComposerMinRows, min(ruledComposerMaxRows, budget))
 }
 
 func (m *model) openProviderPicker() (tea.Model, tea.Cmd) {
@@ -1837,7 +2060,7 @@ func (m *model) View() tea.View {
 		sb.WriteString(attachments)
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(m.input.View())
+	sb.WriteString(m.renderComposer())
 	sb.WriteByte('\n')
 	sb.WriteString(m.footer())
 
@@ -1850,6 +2073,15 @@ func (m *model) View() tea.View {
 	v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
 	v.KeyboardEnhancements.ReportAssociatedText = true
 	return v
+}
+
+// renderComposer draws the textarea with the chrome its prompt style calls for.
+func (m *model) renderComposer() string {
+	if m.promptStyle != promptRuled {
+		return m.input.View()
+	}
+	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
+	return rule + "\n" + m.input.View() + "\n" + rule
 }
 
 func (m *model) renderQueuedFollowUps() string {
@@ -1989,23 +2221,52 @@ func (m *model) renderFilePicker() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderCustomizePicker draws the settings grouped under numbered headers. The
+// window scrolls so the cursor stays visible on short terminals.
 func (m *model) renderCustomizePicker() string {
-	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Startup style — ↑/↓ select, enter save, esc cancel")}
-	for i, choice := range welcomeChoices {
-		marker := "  "
-		style := m.th.cmdPickerItem
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Customize — ↑/↓ select, enter save, esc cancel")}
+	count := min(height-1, len(customizeRows))
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start := max(0, m.customize.sel-count+1)
+	if maxStart := len(customizeRows) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		row := customizeRows[i]
+		if row.header {
+			line := fmt.Sprintf("%s  %s", row.label, m.th.muted.Render(row.description))
+			lines = append(lines, m.th.pickerGroup.MaxWidth(max(1, m.width)).Render(line))
+			continue
+		}
+		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.customize.sel {
-			marker = "> "
-			style = m.th.cmdPickerSel
+			marker, style = "> ", m.th.cmdPickerSel
 		}
 		current := ""
-		if choice.style == m.welcomeStyle {
+		if m.rowIsCurrent(row) {
 			current = "  (current)"
 		}
-		line := fmt.Sprintf("%s%-10s %s%s", marker, choice.label, choice.description, current)
+		line := fmt.Sprintf("  %s%-10s %s%s", marker, row.label, row.description, current)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rowIsCurrent reports whether a row holds the value its group is set to.
+func (m *model) rowIsCurrent(row customizeRow) bool {
+	if row.header {
+		return false
+	}
+	if row.section == sectionComposer {
+		return row.prompt == m.promptStyle
+	}
+	return row.welcome == m.welcomeStyle
 }
 
 func (m *model) renderEffortPicker() string {

@@ -66,6 +66,7 @@ type wizardModel struct {
 	discovering bool
 
 	builtinProviders []modelcatalog.Provider
+	builtinSearch    textinput.Model
 	builtinSelected  int
 	builtinKey       textinput.Model
 	builtinFor       modelcatalog.Provider
@@ -125,6 +126,9 @@ func newWizardModel() *wizardModel {
 	m.modelSearch = textinput.New()
 	m.modelSearch.Placeholder = "Filter models or type a model ID"
 	m.modelSearch.CharLimit = 0
+	m.builtinSearch = textinput.New()
+	m.builtinSearch.Placeholder = "Filter providers by name"
+	m.builtinSearch.CharLimit = 0
 	if err != nil {
 		m.err = "Could not read existing config: " + err.Error()
 		m.loadErr = true
@@ -169,6 +173,12 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	case tea.PasteMsg:
+		if m.screen == screenBuiltinList {
+			var cmd tea.Cmd
+			m.builtinSearch, cmd = m.builtinSearch.Update(msg)
+			m.clampBuiltinIndex()
+			return m, cmd
+		}
 		if m.screen == screenBuiltinKey {
 			var cmd tea.Cmd
 			m.builtinKey, cmd = m.builtinKey.Update(msg)
@@ -184,6 +194,12 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.modelSearch, cmd = m.modelSearch.Update(msg)
 		m.clampModelIndex()
+		return m, cmd
+	}
+	if m.screen == screenBuiltinList {
+		var cmd tea.Cmd
+		m.builtinSearch, cmd = m.builtinSearch.Update(msg)
+		m.clampBuiltinIndex()
 		return m, cmd
 	}
 	if m.screen != screenEditor || m.done || m.quit || len(m.fields) == 0 {
@@ -252,42 +268,55 @@ func (m *wizardModel) openHomeSelection() (tea.Model, tea.Cmd) {
 		if len(m.providers) == 0 {
 			m.openEditor("")
 		}
-	} else {
-		m.openBuiltinProviders()
+		return m, nil
 	}
-	return m, nil
+	return m, m.openBuiltinProviders()
 }
 
-func (m *wizardModel) openBuiltinProviders() {
+func (m *wizardModel) openBuiltinProviders() tea.Cmd {
 	if m.catalog == nil {
 		m.err = "Model catalog is unavailable."
-		return
+		return nil
 	}
 	m.builtinProviders = m.catalog.Providers()
 	m.builtinSelected = 0
 	if len(m.builtinProviders) == 0 {
 		m.err = "No compatible providers are available in the catalog yet."
-		return
+		return nil
 	}
+	m.builtinSearch.SetValue("")
 	m.screen, m.err = screenBuiltinList, ""
+	return m.builtinSearch.Focus()
 }
 
 func (m *wizardModel) onBuiltinListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	providers := m.filteredBuiltinProviders()
 	switch k.Keystroke() {
-	case "up", "k":
+	case "ctrl+c":
+		m.result, m.quit = m.cfg, true
+		return m, tea.Quit
+	case "up":
 		if m.builtinSelected > 0 {
 			m.builtinSelected--
 		}
-	case "down", "j":
-		if m.builtinSelected < len(m.builtinProviders)-1 {
+		return m, nil
+	case "down":
+		if m.builtinSelected < len(providers)-1 {
 			m.builtinSelected++
 		}
+		return m, nil
 	case "pgup":
 		m.builtinSelected = max(0, m.builtinSelected-10)
+		return m, nil
 	case "pgdown":
-		m.builtinSelected = min(len(m.builtinProviders)-1, m.builtinSelected+10)
+		m.builtinSelected = min(max(0, len(providers)-1), m.builtinSelected+10)
+		return m, nil
 	case "enter":
-		m.builtinFor = m.builtinProviders[m.builtinSelected]
+		if len(providers) == 0 {
+			m.err = "No providers match the search."
+			return m, nil
+		}
+		m.builtinFor = providers[m.builtinSelected]
 		if _, custom := m.cfg.Providers[m.builtinFor.ID]; custom {
 			m.err = fmt.Sprintf("%s is managed as a custom provider. Delete or rename it under Custom providers to use the built-in configuration.", m.builtinFor.Name)
 			return m, nil
@@ -295,19 +324,51 @@ func (m *wizardModel) onBuiltinListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		credentials, _ := m.auth.Get(m.builtinFor.ID)
 		m.builtinKey.SetValue(credentials.APIKey)
 		m.builtinKey.Placeholder = "API key for " + m.builtinFor.Name
+		m.builtinSearch.Blur()
 		m.screen, m.err = screenBuiltinKey, ""
 		return m, m.builtinKey.Focus()
-	case "esc", "q":
+	case "esc":
+		m.builtinSearch.Blur()
 		m.screen, m.err = screenHome, ""
+		return m, nil
 	}
-	return m, nil
+	var cmd tea.Cmd
+	m.builtinSearch, cmd = m.builtinSearch.Update(k)
+	m.clampBuiltinIndex()
+	return m, cmd
+}
+
+// filteredBuiltinProviders narrows the catalog list to the search query,
+// matching either the display name or the provider ID.
+func (m *wizardModel) filteredBuiltinProviders() []modelcatalog.Provider {
+	query := strings.ToLower(strings.TrimSpace(m.builtinSearch.Value()))
+	if query == "" {
+		return m.builtinProviders
+	}
+	out := make([]modelcatalog.Provider, 0, len(m.builtinProviders))
+	for _, provider := range m.builtinProviders {
+		if strings.Contains(strings.ToLower(provider.Name), query) || strings.Contains(strings.ToLower(provider.ID), query) {
+			out = append(out, provider)
+		}
+	}
+	return out
+}
+
+func (m *wizardModel) clampBuiltinIndex() {
+	providers := m.filteredBuiltinProviders()
+	if len(providers) == 0 {
+		m.builtinSelected = 0
+	} else if m.builtinSelected >= len(providers) {
+		m.builtinSelected = len(providers) - 1
+	}
 }
 
 func (m *wizardModel) onBuiltinKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.Keystroke() {
 	case "esc":
+		m.builtinKey.Blur()
 		m.screen, m.err = screenBuiltinList, ""
-		return m, nil
+		return m, m.builtinSearch.Focus()
 	case "enter":
 		key := strings.TrimSpace(m.builtinKey.Value())
 		if key == "" {
@@ -337,6 +398,8 @@ func (m *wizardModel) onBuiltinKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.screen, m.err = screenBuiltinList, ""
 			m.result = m.cfg
+			m.builtinKey.Blur()
+			return m, m.builtinSearch.Focus()
 		}
 	}
 	var cmd tea.Cmd
@@ -389,6 +452,7 @@ func (m *wizardModel) onBuiltinModelKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.screen = screenHome
 	case "esc":
 		m.screen = screenBuiltinList
+		return m, m.builtinSearch.Focus()
 	}
 	return m, nil
 }
@@ -786,6 +850,7 @@ func (m *wizardModel) resizeInputs() {
 		f.input.SetWidth(w)
 	}
 	m.modelSearch.SetWidth(w)
+	m.builtinSearch.SetWidth(w)
 	m.builtinKey.SetWidth(w)
 }
 
@@ -841,16 +906,26 @@ func (m *wizardModel) renderHome(sb *strings.Builder) {
 }
 
 func (m *wizardModel) renderBuiltinList(sb *strings.Builder) {
-	sb.WriteString(mutedStyle.Render("Configure a built-in provider API key. [x] means a saved key exists."))
+	sb.WriteString(mutedStyle.Render("Search built-in providers, then configure an API key. [x] means a saved key exists."))
 	sb.WriteString("\n\n")
-	visible := max(3, min(12, m.height-8))
+	sb.WriteString(labelStyle.Render("Search  "))
+	sb.WriteString(m.builtinSearch.View())
+	sb.WriteString("\n\n")
+	providers := m.filteredBuiltinProviders()
+	if len(providers) == 0 {
+		sb.WriteString(mutedStyle.Render("  No providers match the search."))
+		sb.WriteString("\n\n")
+		sb.WriteString(mutedStyle.Render(fmt.Sprintf("Type to search | Esc back  0/%d", len(m.builtinProviders))))
+		return
+	}
+	visible := max(3, min(12, m.height-11))
 	start := max(0, m.builtinSelected-visible/2)
-	end := min(len(m.builtinProviders), start+visible)
+	end := min(len(providers), start+visible)
 	if end-start < visible {
 		start = max(0, end-visible)
 	}
 	for i := start; i < end; i++ {
-		provider := m.builtinProviders[i]
+		provider := providers[i]
 		marker := "  "
 		if i == m.builtinSelected {
 			marker = accentStyle.Render(">")
@@ -864,7 +939,7 @@ func (m *wizardModel) renderBuiltinList(sb *strings.Builder) {
 		sb.WriteString(fmt.Sprintf("%s %s %s\n", marker, mark, provider.Name))
 	}
 	sb.WriteString("\n")
-	sb.WriteString(mutedStyle.Render(fmt.Sprintf("Up/Down select | PgUp/PgDn jump | Enter configure/edit | Esc back  %d/%d", m.builtinSelected+1, len(m.builtinProviders))))
+	sb.WriteString(mutedStyle.Render(fmt.Sprintf("Type to search | Up/Down select | PgUp/PgDn jump | Enter configure/edit | Esc back  %d/%d", m.builtinSelected+1, len(providers))))
 }
 
 func (m *wizardModel) renderBuiltinKey(sb *strings.Builder) {

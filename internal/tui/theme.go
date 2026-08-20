@@ -31,6 +31,8 @@ type theme struct {
 	selection       lipgloss.Style
 	cmdPickerSel    lipgloss.Style
 	cmdPickerItem   lipgloss.Style
+	pickerGroup     lipgloss.Style
+	composerRule    lipgloss.Style
 	orbDim          lipgloss.Style
 	orbMedium       lipgloss.Style
 	orbBright       lipgloss.Style
@@ -58,9 +60,13 @@ func newTheme() *theme {
 		selection:     lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("25")),
 		cmdPickerSel:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
 		cmdPickerItem: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		orbDim:        lipgloss.NewStyle().Foreground(lipgloss.Color("24")),
-		orbMedium:     lipgloss.NewStyle().Foreground(lipgloss.Color("31")),
-		orbBright:     lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
+		// Group headers are bold but stay neutral so the blue selection still
+		// reads as the cursor rather than competing with them.
+		pickerGroup:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")),
+		composerRule: lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		orbDim:       lipgloss.NewStyle().Foreground(lipgloss.Color("24")),
+		orbMedium:    lipgloss.NewStyle().Foreground(lipgloss.Color("31")),
+		orbBright:    lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 	}
 }
 
