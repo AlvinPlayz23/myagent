@@ -221,6 +221,8 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 	acc := newAccumulator(output, out)
 	hasFinishReason := false
 	started := false
+	sawDone := false
+	hasAssistantOutput := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -231,6 +233,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -262,12 +265,15 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 
 		d := choice.Delta
 		if d.Content != "" {
+			hasAssistantOutput = true
 			acc.appendText(d.Content)
 		}
 		if r := firstNonEmpty(d.ReasoningContent, d.Reasoning); r != "" {
+			hasAssistantOutput = true
 			acc.appendThinking(r)
 		}
 		for _, tc := range d.ToolCalls {
+			hasAssistantOutput = true
 			acc.applyToolCall(tc)
 		}
 	}
@@ -296,8 +302,19 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		return
 	}
 	if !hasFinishReason {
-		emitError(fmt.Errorf("Stream ended without finish_reason"), !started)
-		return
+		// Compatible gateways may terminate a valid Chat Completions stream after
+		// the visible delta, with or without [DONE], without repeating a final
+		// choices[0].finish_reason chunk. Infer the normal stop reason only after
+		// a clean EOF and actual assistant output.
+		if !hasAssistantOutput || (!sawDone && !started) {
+			emitError(fmt.Errorf("Stream ended without finish_reason"), !started)
+			return
+		}
+		if len(output.ToolCalls()) > 0 {
+			output.StopReason = types.StopToolUse
+		} else {
+			output.StopReason = types.StopStop
+		}
 	}
 
 	out <- StreamEvent{Type: "done", Message: output}
