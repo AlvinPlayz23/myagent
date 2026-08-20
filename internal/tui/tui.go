@@ -63,7 +63,18 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 			return nil
 		}
+		m.promptStyle = normalizePromptStyle(persistedConfig.PromptStyle)
+		m.savePromptStyle = func(style promptStyle) error {
+			previous := persistedConfig.PromptStyle
+			persistedConfig.PromptStyle = string(style)
+			if err := config.Save(persistedConfig); err != nil {
+				persistedConfig.PromptStyle = previous
+				return err
+			}
+			return nil
+		}
 	}
+	m.syncComposerStyle()
 	m.setTerminalTitle = terminal.SetTitle
 	m.updateTerminalTitle()
 	defer terminal.SetTitle("myagent")

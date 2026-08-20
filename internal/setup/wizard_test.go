@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -78,6 +79,147 @@ func TestAuthHomeNavigatesWithArrows(t *testing.T) {
 	view := m.View().Content
 	if !strings.Contains(view, "> 2  Built-in provider keys") {
 		t.Fatalf("home view does not highlight built-in option:\n%s", view)
+	}
+}
+
+func builtinCatalog() []modelcatalog.Provider {
+	return []modelcatalog.Provider{
+		{ID: "chutes", Name: "Chutes", BaseURL: "https://llm.chutes.ai/v1"},
+		{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"},
+		{ID: "zenmux", Name: "ZenMux", BaseURL: "https://zenmux.ai/api/v1"},
+	}
+}
+
+// seedCatalog writes a catalog cache so the manager opens the built-in provider
+// list from the same path the real flow uses, including search focus.
+func seedCatalog(t *testing.T, providers []modelcatalog.Provider) {
+	t.Helper()
+	dir, err := config.Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	models := make([]modelcatalog.Model, 0, len(providers))
+	for _, provider := range providers {
+		models = append(models, modelcatalog.Model{Provider: provider.ID, ProviderName: provider.Name, ID: "flagship"})
+	}
+	data, err := json.Marshal(map[string]any{"providers": providers, "models": models})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+// openBuiltinList opens the built-in provider list the way the home screen does.
+func openBuiltinList(t *testing.T, providers []modelcatalog.Provider) *wizardModel {
+	t.Helper()
+	seedCatalog(t, providers)
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	m.homeSelected = 1
+	if _, _ = m.openHomeSelection(); m.screen != screenBuiltinList {
+		t.Fatalf("screen = %d, want built-in list: %s", m.screen, m.err)
+	}
+	return m
+}
+
+func typeSearch(t *testing.T, m *wizardModel, query string) {
+	t.Helper()
+	for _, r := range query {
+		_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Text: string(r), Code: r}))
+	}
+}
+
+func TestBuiltinListSearchFiltersAndSelectsMatch(t *testing.T) {
+	setTempDir(t)
+	m := openBuiltinList(t, builtinCatalog())
+	m.builtinSelected = 2
+
+	typeSearch(t, m, "zen")
+	if got := m.filteredBuiltinProviders(); len(got) != 1 || got[0].ID != "zenmux" {
+		t.Fatalf("filtered providers = %v, want only zenmux", got)
+	}
+	if m.builtinSelected != 0 {
+		t.Fatalf("selection = %d, want clamped to 0 for the shorter list", m.builtinSelected)
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "ZenMux") || strings.Contains(view, "OpenRouter") {
+		t.Fatalf("view does not reflect the search:\n%s", view)
+	}
+
+	_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.screen != screenBuiltinKey || m.builtinFor.ID != "zenmux" {
+		t.Fatalf("enter selected screen=%d provider=%q, want the searched provider", m.screen, m.builtinFor.ID)
+	}
+}
+
+func TestBuiltinListSearchMatchesProviderID(t *testing.T) {
+	setTempDir(t)
+	m := openBuiltinList(t, []modelcatalog.Provider{
+		{ID: "openrouter", Name: "Some Router", BaseURL: "https://openrouter.ai/api/v1"},
+		{ID: "zenmux", Name: "ZenMux", BaseURL: "https://zenmux.ai/api/v1"},
+	})
+
+	typeSearch(t, m, "OPENROUTER")
+	if got := m.filteredBuiltinProviders(); len(got) != 1 || got[0].ID != "openrouter" {
+		t.Fatalf("filtered providers = %v, want case-insensitive ID match", got)
+	}
+}
+
+func TestBuiltinListSearchWithoutMatchesRefusesEnter(t *testing.T) {
+	setTempDir(t)
+	m := openBuiltinList(t, builtinCatalog())
+
+	typeSearch(t, m, "nomatch")
+	_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.screen != screenBuiltinList || m.err == "" {
+		t.Fatalf("enter with no matches: screen=%d err=%q", m.screen, m.err)
+	}
+	if !strings.Contains(m.View().Content, "No providers match the search.") {
+		t.Fatalf("empty search results are not shown:\n%s", m.View().Content)
+	}
+}
+
+func TestBuiltinListEscReturnsHomeAndReopeningClearsSearch(t *testing.T) {
+	setTempDir(t)
+	m := openBuiltinList(t, builtinCatalog())
+
+	typeSearch(t, m, "zen")
+	_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if m.screen != screenHome {
+		t.Fatalf("screen = %d, want home", m.screen)
+	}
+	if _, _ = m.openHomeSelection(); m.screen != screenBuiltinList {
+		t.Fatalf("screen = %d, want built-in list: %s", m.screen, m.err)
+	}
+	if got := m.builtinSearch.Value(); got != "" {
+		t.Fatalf("search value = %q, want cleared on reopen", got)
+	}
+	if len(m.filteredBuiltinProviders()) != len(m.builtinProviders) {
+		t.Fatal("reopening the built-in list should show every provider")
+	}
+}
+
+func TestBuiltinListSearchSurvivesKeyScreenRoundTrip(t *testing.T) {
+	setTempDir(t)
+	m := openBuiltinList(t, builtinCatalog())
+
+	typeSearch(t, m, "zen")
+	_, _ = m.onBuiltinListKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.screen != screenBuiltinKey {
+		t.Fatalf("screen = %d, want built-in key", m.screen)
+	}
+	_, _ = m.onBuiltinKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if m.screen != screenBuiltinList || m.builtinSearch.Value() != "zen" {
+		t.Fatalf("returning from the key screen: screen=%d search=%q", m.screen, m.builtinSearch.Value())
+	}
+	typeSearch(t, m, "x")
+	if got := m.builtinSearch.Value(); got != "zenx" {
+		t.Fatalf("search value = %q, want typing to resume after the round trip", got)
 	}
 }
 

@@ -224,11 +224,11 @@ func TestCustomizeCommandSelectsAndSavesOrb(t *testing.T) {
 	}
 
 	m.runCommand("/customize")
-	if !m.customize.active || m.customize.selected().style != welcomeDefault {
+	if !m.customize.active || m.customize.selected().welcome != welcomeDefault {
 		t.Fatal("customize picker did not open on the current default style")
 	}
 	m.customize.move(1)
-	m.applyWelcomeStyle()
+	m.applyCustomizeSelection()
 
 	if m.customize.active || m.welcomeStyle != welcomeOrb || saved != welcomeOrb {
 		t.Fatalf("orb selection = active %v style %q saved %q", m.customize.active, m.welcomeStyle, saved)

@@ -59,7 +59,10 @@ Run `myagent auth` to choose between two provider-management modes:
 - **Custom providers** opens the existing OpenAI-compatible endpoint manager,
   with add, edit, delete, default selection, and authenticated model discovery.
 - **Built-in provider keys** configures catalog-backed compatible providers and
-  then prompts for a default model when setup has no valid default yet.
+  then prompts for a default model when setup has no valid default yet. The
+  provider list is searchable: type to filter by provider name or ID, Up/Down
+  and PgUp/PgDn move the selection, Enter configures the highlighted provider,
+  and Esc returns to the menu.
 
 Each custom provider stores its endpoint, API key, and preferred model; API keys
 may be left blank for local servers such as Ollama. Models discovered from a
