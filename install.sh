@@ -77,12 +77,21 @@ execute() {
     log_info "checksum verified"
   fi
   log_info "extracting ${TARBALL}"
+  # diagnostic: show what we downloaded
+  log_debug "archive file type: $(file "${TMPDIR}/${TARBALL}" 2>&1 | head -n 1)"
+  log_debug "archive head magic: $(head -c 4 "${TMPDIR}/${TARBALL}" 2>&1 | od -An -tx1)"
+  uname -m 1>&2 2>&1 | head -n 1 | xargs -I{} log_debug "uname -m: {}" 2>&1 || true
   # untar needs to cd into tmpdir
   (cd "$TMPDIR" && untar "${TARBALL}")
-  # find the binary inside the archive (top-level myagent or myagent.exe)
-  BIN_SRC=$(find "$TMPDIR" -maxdepth 3 -name "${BINARY}*" -type f | head -n 1)
+  log_debug "tmpdir contents after extract:"
+  ls -lhR "$TMPDIR" 1>&2 2>&1 | head -n 40 || true
+  # find the binary - exact name only, exclude archive itself (bug: myagent* matched myagent_v*.tar.gz -> gzip installed as binary -> exec format error)
+  BIN_SRC=$(find "$TMPDIR" -maxdepth 3 -type f -name "${BINARY}" ! -name "*.tar.gz" ! -name "*.tgz" ! -name "*.zip" | head -n 1)
+  if [ -z "$BIN_SRC" ] && [ "$OS" = "windows" ]; then
+    BIN_SRC=$(find "$TMPDIR" -maxdepth 3 -type f -name "${BINARY}.exe" | head -n 1)
+  fi
   if [ -z "$BIN_SRC" ]; then
-    # fallback: archive may have extracted with no subdir
+    # fallback: top-level
     BIN_SRC="${TMPDIR}/${BINARY}"
     if [ "$OS" = "windows" ]; then
       BIN_SRC="${BIN_SRC}.exe"
@@ -90,11 +99,28 @@ execute() {
   fi
   if [ ! -f "$BIN_SRC" ]; then
     log_crit "binary not found in archive (looked for ${BINARY})"
+    log_crit "archive contents: $(tar -tzf "${TMPDIR}/${TARBALL}" 2>&1 | head -n 20)"
+    ls -R "$TMPDIR" 1>&2 || true
     exit 1
+  fi
+  # sanity: refuse to install gzip/zip as binary (detect corrupted extract)
+  if is_command file; then
+    ftype=$(file "$BIN_SRC" 2>&1)
+    log_debug "BIN_SRC file type: $ftype"
+    case "$ftype" in
+      *"gzip compressed"*|*"Zip archive"*) log_crit "extracted file is still an archive, not an ELF/Mach-O binary: $ftype"; exit 1 ;;
+    esac
+  else
+    if head -c 4 "$BIN_SRC" 2>&1 | od -An -tx1 | grep -q "1f 8b"; then
+      log_crit "extracted file has gzip magic 1f 8b, not ELF 7f 45 4c 46 - extraction failed"
+      exit 1
+    fi
   fi
   test ! -d "${BINDIR}" && install -d "${BINDIR}"
   install "${BIN_SRC}" "${BINDIR}/${BINARY}"
   chmod +x "${BINDIR}/${BINARY}"
+  log_debug "installed file type: $(file "${BINDIR}/${BINARY}" 2>&1 | head -n 1)"
+  log_debug "installed head magic: $(head -c 4 "${BINDIR}/${BINARY}" 2>&1 | od -An -tx1)"
   log_info "installed ${BINDIR}/${BINARY}"
   case ":$PATH:" in
     *":${BINDIR}:"*) ;;
