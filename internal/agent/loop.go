@@ -327,8 +327,9 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 
 // runTool validates and executes a single tool call, converting a returned
 // error into an error ToolResult. Ported from pi prepareToolCall +
-// executePreparedToolCall.
-func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (*types.ToolResult, bool) {
+// executePreparedToolCall. A panicking tool is recovered and reported as an
+// error result: model-controlled arguments must never crash the process.
+func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (result *types.ToolResult, isError bool) {
 	tool := l.cfg.Registry.Get(tc.Name)
 	if tool == nil {
 		return types.TextResult(fmt.Sprintf("Tool %s not found", tc.Name), nil), true
@@ -336,6 +337,12 @@ func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (*types.ToolR
 	if ctx.Err() != nil {
 		return types.TextResult("Operation aborted", nil), true
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			result = types.TextResult(fmt.Sprintf("Tool %s panicked: %v", tc.Name, r), nil)
+			isError = true
+		}
+	}()
 	result, err := tool.Execute(ctx, tc.ID, tc.Arguments)
 	if err != nil {
 		return types.TextResult(err.Error(), nil), true

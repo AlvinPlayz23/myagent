@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"math"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
@@ -20,7 +22,7 @@ type Tool interface {
 
 // Registry is an ordered, name-indexed set of tools.
 type Registry struct {
-	order []string
+	order  []string
 	byName map[string]Tool
 }
 
@@ -71,4 +73,33 @@ func argInt(args map[string]any, key string) (int, bool) {
 		return n, true
 	}
 	return 0, false
+}
+
+// maxLineArg bounds offset/limit-style numeric arguments: larger than any real
+// file, yet small enough that float64 holds it exactly and int arithmetic on
+// it cannot overflow.
+const maxLineArg = 1 << 30
+
+// argLineInt returns args[key] as a whole number in [min, maxLineArg]. Unlike
+// argInt it rejects non-finite values (JSON "1e999" decodes to +Inf, and
+// out-of-range float64→int conversion wraps), fractional values, and
+// out-of-range magnitudes, so the result is always safe in slice arithmetic.
+func argLineInt(args map[string]any, key string, min int) (int, bool, error) {
+	v, ok := args[key]
+	if !ok {
+		return 0, false, nil
+	}
+	invalid := fmt.Errorf("%s must be a whole number between %d and %d", key, min, maxLineArg)
+	f, isFloat := v.(float64)
+	if !isFloat {
+		n, isInt := v.(int)
+		if !isInt || n < min || n > maxLineArg {
+			return 0, true, invalid
+		}
+		return n, true, nil
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || f < float64(min) || f > maxLineArg {
+		return 0, true, invalid
+	}
+	return int(f), true, nil
 }

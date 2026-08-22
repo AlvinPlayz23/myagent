@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,23 @@ import (
 	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
+)
+
+// Execution bounds.
+const (
+	// bashWaitDelay caps how long Wait blocks on output pipes still held by
+	// orphaned descendants after the shell dies; past it the pipes are
+	// force-closed, so a timeout or abort always returns instead of hanging.
+	bashWaitDelay = 5 * time.Second
+	// bashMaxBufferedBytes caps in-memory output: once exceeded, older bytes
+	// are discarded (and counted) so only the recent tail is retained.
+	bashMaxBufferedBytes = 256 << 10
+	// bashTrimSlack amortizes buffer compaction: trimming happens only once
+	// the buffer overshoots the cap by this much.
+	bashTrimSlack = 64 << 10
+	// maxTimeoutSecs bounds the model-supplied timeout so a bogus value
+	// cannot overflow the context-deadline arithmetic.
+	maxTimeoutSecs = 24 * 60 * 60
 )
 
 // BashTool executes a shell command in the working directory. Ported from pi
@@ -58,29 +77,51 @@ func (t *BashTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	timedOut := false
 	var timeoutSecs float64
 	if secs, ok := args["timeout"]; ok {
-		if f, ok := secs.(float64); ok && f > 0 {
-			timeoutSecs = f
-			runCtx, cancel = context.WithTimeout(ctx, time.Duration(f*float64(time.Second)))
-			defer cancel()
+		f, isNum := secs.(float64)
+		if !isNum || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f > maxTimeoutSecs {
+			return nil, fmt.Errorf("bash: timeout must be a positive number of seconds up to %d", maxTimeoutSecs)
 		}
+		timeoutSecs = f
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(f*float64(time.Second)))
+		defer cancel()
 	}
 
 	shell, shellArgs := shellConfig()
 	cmd := exec.CommandContext(runCtx, shell, append(shellArgs, command)...)
 	cmd.Dir = t.Cwd
+	cmd.WaitDelay = bashWaitDelay
 
-	// Combine stdout and stderr into a single ordered stream, guarded by a mutex.
-	var mu sync.Mutex
-	var buf strings.Builder
-	writer := &lockedWriter{mu: &mu, sb: &buf}
-	cmd.Stdout = writer
-	cmd.Stderr = writer
+	// Combine stdout and stderr into a single ordered stream with bounded memory.
+	output := newBoundedTail(bashMaxBufferedBytes, bashTrimSlack)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
-	err := cmd.Run()
+	// Contain the whole child tree: a process group on Unix, a Job Object on
+	// Windows. On cancellation cmd.Cancel tears down the tree, not just the
+	// shell; WaitDelay guarantees Wait returns even when orphaned
+	// grandchildren keep the output pipes open.
+	prepareProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("bash: start %s: %w", shell, err)
+	}
+	pg, err := attachProcessGroup(cmd)
+	if err != nil {
+		// Tree containment unavailable (e.g. nested-job restrictions on
+		// Windows): degrade to killing just the shell rather than failing.
+		pg = &processGroup{kill: func() { _ = cmd.Process.Kill() }, release: func() {}}
+	}
+	cmd.Cancel = func() error { pg.kill(); return nil }
 
-	mu.Lock()
-	combined := buf.String()
-	mu.Unlock()
+	waitErr := cmd.Wait()
+	pg.release()
+
+	// ErrWaitDelay means the process ended but orphaned descendants held the
+	// pipes until WaitDelay force-closed them; the command itself completed.
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		waitErr = nil
+	}
+
+	combined, droppedBytes := output.snapshot()
 
 	// Distinguish timeout vs. abort vs. exit code.
 	if runCtx.Err() == context.DeadlineExceeded {
@@ -90,23 +131,31 @@ func (t *BashTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	// Truncate (tail) and persist full output when truncated.
 	tr := TruncateTail(combined, 0, 0)
 	text := tr.Content
+	if droppedBytes > 0 {
+		text = fmt.Sprintf("[... first %s of output discarded]\n", FormatSize(int(droppedBytes))) + text
+	}
 	var details map[string]any
 	var fullPath string
 	if tr.Truncated {
 		fullPath = writeFullOutput(combined)
-		details = map[string]any{"truncation": tr, "fullOutputPath": fullPath}
+		details = map[string]any{"truncation": tr}
+		suffix := " (full output could not be saved)"
+		if fullPath != "" {
+			details["fullOutputPath"] = fullPath
+			suffix = " Full output: " + fullPath
+		}
 		startLine := tr.TotalLines - tr.OutputLines + 1
 		endLine := tr.TotalLines
 		switch {
 		case tr.LastLinePartial:
-			text += fmt.Sprintf("\n\n[Showing last %s of line %d. Full output: %s]",
-				FormatSize(tr.OutputBytes), endLine, fullPath)
+			text += fmt.Sprintf("\n\n[Showing last %s of line %d.%s]",
+				FormatSize(tr.OutputBytes), startLine, suffix)
 		case tr.TruncatedBy == "lines":
-			text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Full output: %s]",
-				startLine, endLine, tr.TotalLines, fullPath)
+			text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d.%s]",
+				startLine, endLine, tr.TotalLines, suffix)
 		default:
-			text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d (%s limit). Full output: %s]",
-				startLine, endLine, tr.TotalLines, FormatSize(DefaultMaxBytes), fullPath)
+			text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d (%s limit).%s]",
+				startLine, endLine, tr.TotalLines, FormatSize(DefaultMaxBytes), suffix)
 		}
 	}
 
@@ -124,11 +173,11 @@ func (t *BashTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	if timedOut {
 		return nil, fmt.Errorf("%s", appendStatus(text, fmt.Sprintf("Command timed out after %g seconds", timeoutSecs)))
 	}
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("%s", appendStatus(text, fmt.Sprintf("Command exited with code %d", exitErr.ExitCode())))
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("%s", appendStatus(text, exitMessage(exitErr)))
 		}
-		return nil, fmt.Errorf("%s", appendStatus(text, err.Error()))
+		return nil, fmt.Errorf("%s", appendStatus(text, waitErr.Error()))
 	}
 
 	if text == "" {
@@ -137,16 +186,41 @@ func (t *BashTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	return types.TextResult(text, details), nil
 }
 
-// lockedWriter serializes concurrent stdout/stderr writes.
-type lockedWriter struct {
-	mu *sync.Mutex
-	sb *strings.Builder
+// boundedTail accumulates combined command output while retaining at most
+// roughly max bytes (plus one trim slack window) of the most recent output;
+// older bytes are counted and discarded so a chatty or runaway command cannot
+// grow memory without bound.
+type boundedTail struct {
+	mu      sync.Mutex
+	buf     []byte
+	max     int
+	slack   int
+	written int64
+	dropped int64
 }
 
-func (w *lockedWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.sb.Write(p)
+func newBoundedTail(max, slack int) *boundedTail {
+	return &boundedTail{buf: make([]byte, 0, 4096), max: max, slack: slack}
+}
+
+func (b *boundedTail) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.written += int64(len(p))
+	b.buf = append(b.buf, p...)
+	if excess := len(b.buf) - b.max; excess > b.slack {
+		b.dropped += int64(excess)
+		copy(b.buf, b.buf[excess:])
+		b.buf = b.buf[:len(b.buf)-excess]
+	}
+	return len(p), nil
+}
+
+// snapshot returns the retained tail and the number of discarded head bytes.
+func (b *boundedTail) snapshot() (string, int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf), b.dropped
 }
 
 // shellConfig returns the shell and its command-string flag for the current OS.
@@ -244,15 +318,21 @@ func fileExists(path string) bool {
 }
 
 // writeFullOutput persists the complete command output to a temp file and
-// returns the path, or "" on failure.
+// returns the path, or "" on failure (cleaning up any partial file).
 func writeFullOutput(content string) string {
 	f, err := os.CreateTemp("", "myagent-bash-*.txt")
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	name := f.Name()
 	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
 		return ""
 	}
-	return f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return ""
+	}
+	return name
 }

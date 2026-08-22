@@ -51,8 +51,14 @@ func (t *ReadTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	if !ok || path == "" {
 		return nil, fmt.Errorf("read: missing required 'path' argument")
 	}
-	offset, hasOffset := argInt(args, "offset")
-	limit, hasLimit := argInt(args, "limit")
+	offset, hasOffset, err := argLineInt(args, "offset", 1)
+	if err != nil {
+		return nil, err
+	}
+	limit, hasLimit, err := argLineInt(args, "limit", 1)
+	if err != nil {
+		return nil, err
+	}
 
 	abs := resolveToCwd(path, t.Cwd)
 	data, err := os.ReadFile(abs)
@@ -84,9 +90,11 @@ func (t *ReadTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	var selected string
 	userLimited := -1
 	if hasLimit {
-		end := startLine + limit
-		if end > len(allLines) {
-			end = len(allLines)
+		// Clamp before slicing: limit is validated to [1, maxLineArg], but the
+		// subtraction form below also keeps the arithmetic overflow-free.
+		end := len(allLines)
+		if limit < len(allLines)-startLine {
+			end = startLine + limit
 		}
 		selected = strings.Join(allLines[startLine:end], "\n")
 		userLimited = end - startLine
