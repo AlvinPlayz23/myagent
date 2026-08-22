@@ -84,6 +84,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	m.availableModels = func() []modelcatalog.Model {
 		return availableModelCandidates(catalog, persistedConfig, authStore)
 	}
+	m.discoverModels = func(ctx context.Context, provider string) ([]string, error) {
+		return discoverProviderModels(ctx, catalog, persistedConfig, authStore, provider)
+	}
 	m.availableProviders = func() []modelcatalog.Provider {
 		if catalog == nil {
 			return nil
@@ -234,6 +237,39 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	_, err := p.Run()
 	return sess, err
+}
+
+// discoverProviderModels queries the provider's own /v1/models endpoint so
+// the picker can offer models that ship before the catalog knows about them.
+// Results are memoized briefly and persisted as custom entries; failures are
+// non-fatal because the catalog list remains usable on its own.
+func discoverProviderModels(ctx context.Context, catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store, provider string) ([]string, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil, fmt.Errorf("no active provider")
+	}
+	if catalog != nil {
+		if ids, ok := catalog.CachedDiscovery(provider, time.Now()); ok {
+			return ids, nil
+		}
+	}
+	baseURL, apiKey, err := config.ResolveProviderEndpoint(cfg, authStore, provider)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ids, err := llm.ListOpenAIModels(ctx, nil, apiKey, baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if catalog != nil {
+		catalog.RememberDiscovery(provider, ids, time.Now())
+		// Best-effort persistence: discovered IDs should survive restarts,
+		// but a cache write failure must not fail the discovery itself.
+		_ = catalog.SetCustomModels(provider, provider, ids)
+	}
+	return ids, nil
 }
 
 func availableModelCandidates(catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store) []modelcatalog.Model {

@@ -61,6 +61,25 @@ func (p *modelPicker) open(items []modelcatalog.Model, query string) {
 	p.filter()
 }
 
+// replace swaps in refreshed items while preserving the query and, when it
+// still exists, the current selection. Duplicate refs restore the last
+// occurrence so repeated refreshes keep pointing at the same entry.
+func (p *modelPicker) replace(items []modelcatalog.Model) {
+	selectedRef := ""
+	if item, ok := p.selected(); ok {
+		selectedRef = item.Ref()
+	}
+	p.items = append(p.items[:0], items...)
+	p.sel = 0
+	p.filter()
+	for index := len(p.matched) - 1; index >= 0; index-- {
+		if p.items[p.matched[index]].Ref() == selectedRef {
+			p.sel = index
+			break
+		}
+	}
+}
+
 func (p *modelPicker) close() {
 	p.active = false
 	p.matched = p.matched[:0]

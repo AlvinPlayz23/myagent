@@ -23,6 +23,11 @@ const (
 	apiURL       = "https://models.dev/api.json"
 	cacheFile    = "models.json"
 	maxBodyBytes = 8 << 20
+
+	// discoveryTTL bounds how long a provider's live /v1/models result is
+	// reused without hitting the network again, keeping repeated picker
+	// opens cheap and degradation graceful offline.
+	discoveryTTL = 10 * time.Minute
 )
 
 var catalogWriteMu sync.Mutex
@@ -110,6 +115,17 @@ type Catalog struct {
 	path string
 	data cache
 	mu   sync.Mutex
+
+	// discovered caches per-provider live /v1/models results in memory.
+	// It is deliberately not persisted: discovered IDs survive restarts
+	// through data.Custom instead, so this only needs to stay fresh enough
+	// to avoid hammering providers on repeated UI opens.
+	discovered map[string]discoveryEntry
+}
+
+type discoveryEntry struct {
+	ids []string
+	at  time.Time
 }
 
 func New(dir string) *Catalog { return &Catalog{path: filepath.Join(dir, cacheFile)} }
@@ -146,6 +162,30 @@ func (c *Catalog) Models(providers map[string]struct{}) []Model {
 		}
 	}
 	return out
+}
+
+// CachedDiscovery returns IDs from a recent live /v1/models lookup for the
+// provider, if one is still fresh. The returned slice is a copy.
+func (c *Catalog) CachedDiscovery(provider string, now time.Time) ([]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.discovered[provider]
+	if !ok || now.Sub(entry.at) >= discoveryTTL {
+		return nil, false
+	}
+	return append([]string(nil), entry.ids...), true
+}
+
+// RememberDiscovery stores a successful live /v1/models result for reuse
+// within the discovery TTL.
+func (c *Catalog) RememberDiscovery(provider string, ids []string, now time.Time) {
+	ids = append([]string(nil), ids...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.discovered == nil {
+		c.discovered = map[string]discoveryEntry{}
+	}
+	c.discovered[provider] = discoveryEntry{ids: ids, at: now}
 }
 
 // SetCustomModels stores model IDs discovered from a user-configured endpoint.

@@ -33,11 +33,15 @@ type commandItem struct {
 	description string
 	kind        commandKind
 	requiresArg bool
+	// hidden keeps an entry out of /help while still parsing and
+	// appearing in the command picker suggestions.
+	hidden bool
 }
 
 var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
+	{name: "/models", usage: "/models [provider/model-id]", description: "Alias of /model; live-discovered models included", kind: commandModel, requiresArg: true, hidden: true},
 	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort", kind: commandEffort, requiresArg: true},
 	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
 	{name: "/customize", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
@@ -204,6 +208,9 @@ func buildHelpText() string {
 	var b strings.Builder
 	b.WriteString("Commands:\n")
 	for _, item := range commandItems {
+		if item.hidden {
+			continue
+		}
 		fmt.Fprintf(&b, "  %-21s %s\n", item.usage, item.description)
 	}
 	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v paste, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand tools, ctrl+c quit")

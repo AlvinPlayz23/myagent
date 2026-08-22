@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/auth"
 	"github.com/AlvinPlayz23/myagent/internal/config"
@@ -293,22 +294,29 @@ func (s *providerService) Discover(ctx context.Context, name, apiKey string) ([]
 	if name == "" {
 		return nil, fmt.Errorf("provider name is required")
 	}
-	var baseURL string
-	if p, ok := s.cfg.Providers[name]; ok {
-		baseURL, apiKey = p.BaseURL, firstNonEmpty(apiKey, p.APIKey)
-	} else if credential, ok := s.auth.Get(name); ok {
-		baseURL, apiKey = credential.BaseURL, firstNonEmpty(apiKey, credential.APIKey)
-	} else {
-		return nil, fmt.Errorf("provider %q is not configured", name)
+
+	// Serve a recent live lookup from memory so repeated desktop menu
+	// refreshes stay cheap and keep working while offline.
+	if s.catalog != nil {
+		if cached, ok := s.catalog.CachedDiscovery(name, time.Now()); ok {
+			return cached, nil
+		}
 	}
+	baseURL, storedKey, err := config.ResolveProviderEndpoint(s.cfg, s.auth, name)
+	if err != nil {
+		return nil, err
+	}
+	// An explicitly supplied key argument wins over whatever is stored.
+	apiKey = firstNonEmpty(apiKey, storedKey)
 	ids, err := llm.ListOpenAIModels(ctx, nil, apiKey, baseURL)
 	if err != nil {
 		return nil, err
 	}
 	if s.catalog != nil {
-		if err := s.catalog.SetCustomModels(name, name, ids); err != nil {
-			return nil, err
-		}
+		s.catalog.RememberDiscovery(name, ids, time.Now())
+		// Best-effort persistence: discovery must succeed even when the
+		// catalog cache cannot be written right now.
+		_ = s.catalog.SetCustomModels(name, name, ids)
 	}
 	return ids, nil
 }

@@ -352,6 +352,15 @@ func (p *exportPicker) format() export.Format {
 	return export.Markdown
 }
 
+// modelsDiscoveredMsg carries the outcome of a background /v1/models lookup
+// for the picker's active provider. models is informational: the picker
+// refreshes itself from the catalog, which persists successful discoveries.
+type modelsDiscoveredMsg struct {
+	provider string
+	models   []string
+	err      error
+}
+
 // model is the bubbletea root model for the interactive TUI.
 type model struct {
 	ctx    context.Context
@@ -422,6 +431,12 @@ type model struct {
 	availableModels    func() []modelcatalog.Model
 	selectModel        func(string, string) (llm.Provider, llm.Model, error)
 	availableProviders func() []modelcatalog.Provider
+	// discoverModels live-queries the active provider's own /v1/models
+	// endpoint. It returns an error when the provider is unreachable; the
+	// catalog-backed list stays usable either way. The context lets an
+	// in-flight lookup die with the session.
+	discoverModels     func(context.Context, string) ([]string, error)
+	discovering        string // provider currently being live-discovered, "" = idle
 	providerConfigured func(string) bool
 	providerIsCustom   func(string) bool
 	providerAPIKey     func(string) string
@@ -580,6 +595,49 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		return m.onMouseRelease(msg)
 
+	case modelsDiscoveredMsg:
+		if m.discovering == msg.provider {
+			m.discovering = ""
+		}
+		if msg.err != nil {
+			// The catalog list stays usable, but if the picker is sitting on an
+			// empty list the spinner just vanished — explain why instead.
+			if m.models.active && len(m.models.matched) == 0 {
+				m.statusMsg = fmt.Sprintf("Model discovery failed: %v", msg.err)
+				return m, clearStatusCmd(m.statusMsg)
+			}
+			return m, nil
+		}
+		if len(msg.models) == 0 || m.availableModels == nil {
+			return m, nil
+		}
+		// Diff the picker's stale items against a freshly built candidate
+		// list, so the count describes models actually entering view rather
+		// than a guess measured against an already-outdated snapshot.
+		before := make(map[string]struct{}, len(m.models.items))
+		for _, item := range m.models.items {
+			before[item.Ref()] = struct{}{}
+		}
+		items := m.availableModels()
+		added := 0
+		for _, item := range items {
+			if _, ok := before[item.Ref()]; !ok {
+				added++
+			}
+		}
+		if m.models.active {
+			m.models.replace(items)
+			m.updateLayout()
+		}
+		if added > 0 {
+			plural := "s"
+			if added == 1 {
+				plural = ""
+			}
+			m.statusMsg = fmt.Sprintf("Discovered %d new model%s from %s.", added, plural, msg.provider)
+		}
+		return m, nil
+
 	case agentEventMsg:
 		if msg.generation != m.runner.generation {
 			return m, m.runner.waitForEvent()
@@ -623,7 +681,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		refresh := false
-		if m.working {
+		if m.working || m.discovering != "" {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			refresh = true
 		}
@@ -720,6 +778,9 @@ func (m *model) panelHeight() int {
 	}
 	if m.models.active {
 		desired = m.models.height()
+		if m.discovering != "" {
+			desired++ // room for the live-discovery indicator line
+		}
 	}
 	if m.effort.active {
 		desired = len(effortChoices) + 1
@@ -1556,6 +1617,17 @@ func (m *model) openModelPicker(query string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	items := m.availableModels()
+	if len(items) == 0 && m.discoverModels != nil {
+		// Nothing in the catalog for the configured providers (offline first
+		// run, or an endpoint models.dev does not know). Open the picker
+		// anyway and populate it from the provider's live /v1/models listing.
+		if cmd := m.discoverActiveProviderModels(); cmd != nil {
+			m.models.open(items, query)
+			m.statusMsg = "Catalog unavailable; discovering models from the provider…"
+			m.updateLayout()
+			return m, cmd
+		}
+	}
 	if len(items) == 0 {
 		m.statusMsg = "No catalog models are available for configured providers."
 		return m, nil
@@ -1565,10 +1637,32 @@ func (m *model) openModelPicker(query string) (tea.Model, tea.Cmd) {
 			return m.applyModel(item)
 		}
 	}
+	cmd := m.discoverActiveProviderModels()
 	m.models.open(items, query)
 	m.statusMsg = "Search models, use up/down, enter selects, esc cancels."
 	m.updateLayout()
-	return m, nil
+	return m, cmd
+}
+
+// discoverActiveProviderModels live-refreshes the picker with the active
+// provider's own /v1/models listing in the background. The catalog-backed
+// list opens the picker immediately; discovered IDs merge in when the
+// lookup returns. Failures are silent because the catalog remains usable.
+func (m *model) discoverActiveProviderModels() tea.Cmd {
+	if m.discoverModels == nil {
+		return nil
+	}
+	provider, _, ok := strings.Cut(strings.TrimSpace(m.modelID), "/")
+	provider = strings.TrimSpace(provider)
+	if !ok || provider == "" || m.discovering == provider {
+		return nil
+	}
+	m.discovering = provider
+	target := provider
+	return func() tea.Msg {
+		ids, err := m.discoverModels(m.ctx, target)
+		return modelsDiscoveredMsg{provider: target, models: ids, err: err}
+	}
 }
 
 func (m *model) selectPickedModel() (tea.Model, tea.Cmd) {
@@ -2370,9 +2464,19 @@ func (m *model) renderModelPicker() string {
 	if height == 0 {
 		return ""
 	}
+	// While a background /v1/models lookup runs, reserve a line for its
+	// animated indicator so the picker explains itself instead of looking
+	// silently incomplete.
+	extra := 0
+	if m.discovering != "" {
+		extra = 1
+	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Model: " + m.models.query)}
-	count := min(height-1, len(m.models.matched))
+	count := max(0, min(height-1-extra, len(m.models.matched)))
 	if count == 0 {
+		if extra > 0 {
+			return strings.Join(append(lines, m.discoveryLine()), "\n")
+		}
 		return strings.Join(append(lines, m.th.muted.Render("  No matching configured-provider models.")), "\n")
 	}
 	start := max(0, m.models.sel-count+1)
@@ -2391,7 +2495,17 @@ func (m *model) renderModelPicker() string {
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Ref()+limit))
 	}
+	if extra > 0 {
+		lines = append(lines, m.discoveryLine())
+	}
 	return strings.Join(lines, "\n")
+}
+
+// discoveryLine renders the animated in-picker indicator for a running
+// /v1/models lookup.
+func (m *model) discoveryLine() string {
+	frame := m.th.spinner.Render(spinnerFrames[m.spinnerFrame])
+	return m.th.muted.Render(fmt.Sprintf("%s Checking %s for models…", frame, m.discovering))
 }
 
 func (m *model) renderProviderPicker() string {
