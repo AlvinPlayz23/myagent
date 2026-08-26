@@ -117,6 +117,34 @@ func TestThinkingRenderStates(t *testing.T) {
 	}
 }
 
+func TestEndAssistantFinalizesThinkingOnMidReasoningAbort(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginAssistant()
+	tr.appendAssistantDelta("let me think")
+	tr.endAssistant()
+	tr.beginAssistant() // next turn opens; message_start arrives
+	tr.beginThinking()
+	tr.appendThinkingDelta("half-finished reasoning")
+
+	// Response ends mid-reasoning (esc abort, provider error): no
+	// thinking_end and no text delta ever arrive.
+	tr.endAssistant()
+
+	if len(tr.blocks) != 2 {
+		t.Fatalf("block count = %d, want 2", len(tr.blocks))
+	}
+	if !tr.blocks[1].done {
+		t.Fatal("thinking block left unfinished after endAssistant")
+	}
+	out := tr.render(80)
+	if strings.Contains(out, "Thinking\u2026") {
+		t.Fatalf("transcript still shows streaming header after end:\n%s", out)
+	}
+	if !strings.Contains(out, "\u273b Thought") || !strings.Contains(out, "half-finished reasoning") {
+		t.Fatalf("completed thinking content missing:\n%s", out)
+	}
+}
+
 func TestSeedTranscriptPreservesThinkingOrder(t *testing.T) {
 	history := []types.Message{
 		userMessage("prompt"),

@@ -176,10 +176,17 @@ func (t *transcript) endThinking() {
 }
 
 // endAssistant finalizes the current assistant block. If it never received any
-// text (a tool-only turn), it is removed to avoid an empty gap.
+// text (a tool-only turn), it is removed to avoid an empty gap. An active
+// thinking block is finalized too: a response can end mid-reasoning (abort,
+// provider error) without a thinking_end event or any text delta, and leaving
+// the block unfinished would render "✻ Thinking…" forever.
 func (t *transcript) endAssistant() {
 	if t.streamingIdx >= 0 && t.streamingIdx < len(t.blocks) {
 		b := t.blocks[t.streamingIdx]
+		if b.kind == blockThinking {
+			t.endThinking()
+			return
+		}
 		if b.kind == blockAssistant && strings.TrimSpace(b.text) == "" {
 			t.blocks = append(t.blocks[:t.streamingIdx], t.blocks[t.streamingIdx+1:]...)
 		}
