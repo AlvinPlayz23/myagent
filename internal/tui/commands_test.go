@@ -36,6 +36,10 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/providers", kind: commandProviders},
 		{input: "/customize", kind: commandCustomize},
 		{input: "/init", kind: commandInit},
+		{input: "/thinking", kind: commandThinking},
+		{input: "/thinking on", kind: commandThinking, arg: "on"},
+		{input: "/thinking off", kind: commandThinking, arg: "off"},
+		{input: "/thinking banana", kind: commandThinking, arg: "banana"}, // rejected later by applyShowThinking
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -396,6 +400,53 @@ func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
 	}
 	if m.picker.active {
 		t.Fatal("picker remained open after accepting a command")
+	}
+}
+
+func TestThinkingCommandTogglesTranscriptVisibility(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "test-model", "")
+
+	// Default is shown; /thinking off hides it.
+	if !m.transcript.showThinking {
+		t.Fatal("thinking should default to shown")
+	}
+	m.input.SetValue("/thinking off")
+	m.submit(submitFollowUp)
+	if m.transcript.showThinking {
+		t.Fatal("/thinking off did not hide thinking")
+	}
+
+	// Bare /thinking toggles back on.
+	m.input.SetValue("/thinking")
+	m.submit(submitFollowUp)
+	if !m.transcript.showThinking {
+		t.Fatal("bare /thinking did not re-show thinking")
+	}
+
+	// The toggle is retroactive: blocks captured while hidden appear.
+	tr := m.transcript
+	tr.beginThinking()
+	tr.appendThinkingDelta("captured while hidden")
+	tr.endThinking()
+	tr.setShowThinking(false)
+	out := tr.render(80)
+	if strings.Contains(out, "captured while hidden") {
+		t.Fatal("thinking leaked while hidden")
+	}
+	m.input.SetValue("/thinking")
+	m.submit(submitFollowUp)
+	out = tr.render(80)
+	if !strings.Contains(out, "captured while hidden") {
+		t.Fatalf("thinking not revealed after toggle:\n%s", out)
+	}
+
+	// An invalid argument is rejected without changing state.
+	m.input.SetValue("/thinking banana")
+	m.submit(submitFollowUp)
+	if !m.transcript.showThinking || m.statusMsg != "usage: /thinking [on|off]" {
+		t.Fatalf("bad arg: show=%v statusMsg=%q", m.transcript.showThinking, m.statusMsg)
 	}
 }
 

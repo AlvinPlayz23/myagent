@@ -326,11 +326,39 @@ func seedTranscript(t *transcript, history []types.Message) {
 			}
 			t.addUser(textOf(msg))
 		case types.RoleAssistant:
-			if txt := textOf(msg); txt != "" {
+			// Walk content blocks so thinking and text interleave in their
+			// original order rather than collapsing into one text block.
+			var pending strings.Builder
+			flushText := func() {
+				if pending.Len() == 0 {
+					return
+				}
 				t.beginAssistant()
-				t.appendAssistantDelta(txt)
+				t.appendAssistantDelta(pending.String())
 				t.endAssistant()
+				pending.Reset()
 			}
+			for _, c := range msg.Content {
+				switch c.Type {
+				case types.ContentThinking:
+					flushText()
+					if strings.TrimSpace(c.Thinking) == "" {
+						continue
+					}
+					t.beginThinking()
+					t.appendThinkingDelta(c.Thinking)
+					t.endThinking()
+				case types.ContentText:
+					if c.Text == "" {
+						continue
+					}
+					if pending.Len() > 0 {
+						pending.WriteByte('\n')
+					}
+					pending.WriteString(c.Text)
+				}
+			}
+			flushText()
 			for _, tc := range msg.ToolCalls() {
 				t.startTool(tc.ID, tc.Name, tc.Arguments)
 			}

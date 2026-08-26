@@ -20,6 +20,7 @@ const (
 	commandRename
 	commandExport
 	commandInit
+	commandThinking
 )
 
 type slashCommand struct {
@@ -52,6 +53,7 @@ var commandItems = []commandItem{
 	{name: "/rename", usage: "/rename <title>", description: "Rename the current session", kind: commandRename, requiresArg: true},
 	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
 	{name: "/init", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
+	{name: "/thinking", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
 }
 
 const commandPickerMaxVisible = 5
@@ -160,7 +162,7 @@ func parseSlashCommand(text string) (slashCommand, error) {
 		if item.name != name {
 			continue
 		}
-		optionalArg := item.kind == commandModel || item.kind == commandEffort
+		optionalArg := item.kind == commandModel || item.kind == commandEffort || item.kind == commandThinking
 		if (item.requiresArg && arg == "" && !optionalArg) || (!item.requiresArg && arg != "" && !optionalArg) {
 			return slashCommand{}, fmt.Errorf("usage: %s", item.usage)
 		}
