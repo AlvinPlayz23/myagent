@@ -18,6 +18,7 @@ const (
 	blockTool
 	blockError
 	blockNotice
+	blockThinking
 )
 
 // block is a single renderable unit in the transcript. Assistant blocks grow
@@ -39,6 +40,9 @@ type block struct {
 	toolErr    bool
 	toolDone   bool
 
+	// thinking fields
+	done bool // streaming finished (thinking blocks)
+
 	// cache
 	cacheWidth  int
 	cacheExpand bool
@@ -53,13 +57,18 @@ type transcript struct {
 	blocks   []*block
 	expanded bool // global collapse/expand for tool blocks (pi's ctrl+o)
 
+	// showThinking controls whether thinking blocks are rendered at all.
+	// Thinking is still accumulated while hidden, so toggling it on reveals
+	// everything captured so far.
+	showThinking bool
+
 	// streamingIdx points at the assistant block currently being streamed, or
 	// -1 when none.
 	streamingIdx int
 }
 
 func newTranscript(th *theme, md *mdRenderer) *transcript {
-	return &transcript{th: th, md: md, streamingIdx: -1}
+	return &transcript{th: th, md: md, streamingIdx: -1, showThinking: true}
 }
 
 // invalidate clears cached renders (e.g. on width change or expand toggle).
@@ -75,11 +84,24 @@ func (t *transcript) clear() {
 	t.streamingIdx = -1
 }
 
-// toggleExpand flips the global tool expand state and invalidates tool caches.
+// setShowThinking flips thinking visibility and invalidates caches so the next
+// render reflects the new state.
+func (t *transcript) setShowThinking(show bool) {
+	if t.showThinking == show {
+		return
+	}
+	t.showThinking = show
+	for _, b := range t.blocks {
+		b.cacheValid = false
+	}
+}
+
+// toggleExpand flips the global tool expand state and invalidates tool and
+// thinking caches.
 func (t *transcript) toggleExpand() {
 	t.expanded = !t.expanded
 	for _, b := range t.blocks {
-		if b.kind == blockTool {
+		if b.kind == blockTool || b.kind == blockThinking {
 			b.cacheValid = false
 		}
 	}
@@ -97,13 +119,60 @@ func (t *transcript) beginAssistant() {
 }
 
 // appendAssistantDelta appends streamed text to the active assistant block.
+// A still-open thinking block is closed first: providers do not emit
+// thinking_end at the reasoning-to-answer transition (the accumulator only
+// sends thinking_end during its finalize pass), so the text delta itself is
+// the signal that thinking finished.
 func (t *transcript) appendAssistantDelta(delta string) {
-	if t.streamingIdx < 0 || t.streamingIdx >= len(t.blocks) {
+	if t.streamingIdx < 0 || t.streamingIdx >= len(t.blocks) || t.blocks[t.streamingIdx].kind != blockAssistant {
+		t.endThinking()
 		t.beginAssistant()
 	}
 	b := t.blocks[t.streamingIdx]
 	b.text += delta
 	b.cacheValid = false
+}
+
+// beginThinking starts a new (empty) streaming thinking block. An empty
+// assistant block opened by message_start is removed first so it doesn't
+// linger above the thinking block when reasoning precedes the reply text.
+func (t *transcript) beginThinking() {
+	if t.streamingIdx >= 0 && t.streamingIdx == len(t.blocks)-1 {
+		if b := t.blocks[t.streamingIdx]; b.kind == blockAssistant && strings.TrimSpace(b.text) == "" {
+			t.blocks = t.blocks[:t.streamingIdx]
+		}
+	}
+	t.blocks = append(t.blocks, &block{kind: blockThinking})
+	t.streamingIdx = len(t.blocks) - 1
+}
+
+// appendThinkingDelta appends streamed reasoning to the active thinking block.
+// The block is created on demand so deltas arriving without a start event
+// still render.
+func (t *transcript) appendThinkingDelta(delta string) {
+	if t.streamingIdx < 0 || t.streamingIdx >= len(t.blocks) || t.blocks[t.streamingIdx].kind != blockThinking {
+		t.beginThinking()
+	}
+	b := t.blocks[t.streamingIdx]
+	b.text += delta
+	b.cacheValid = false
+}
+
+// endThinking finalizes the current thinking block, removing it if it never
+// received text (mirrors endAssistant). A completed block collapses to its
+// "✻ Thought" header until expanded.
+func (t *transcript) endThinking() {
+	if t.streamingIdx >= 0 && t.streamingIdx < len(t.blocks) {
+		b := t.blocks[t.streamingIdx]
+		if b.kind == blockThinking {
+			b.done = true
+			b.cacheValid = false
+			if strings.TrimSpace(b.text) == "" {
+				t.blocks = append(t.blocks[:t.streamingIdx], t.blocks[t.streamingIdx+1:]...)
+			}
+		}
+	}
+	t.streamingIdx = -1
 }
 
 // endAssistant finalizes the current assistant block. If it never received any
@@ -161,11 +230,15 @@ func (t *transcript) findTool(callID string) *block {
 }
 
 // render produces the full transcript content string wrapped at width. Blocks
-// are separated by a blank line (pi's Spacer(1)).
+// are separated by a blank line (pi's Spacer(1)). Thinking blocks are omitted
+// entirely when thinking is hidden, so no stray separators remain.
 func (t *transcript) render(width int) string {
 	var sb strings.Builder
-	for i, b := range t.blocks {
-		if i > 0 {
+	for _, b := range t.blocks {
+		if b.kind == blockThinking && !t.showThinking {
+			continue
+		}
+		if sb.Len() > 0 {
 			sb.WriteByte('\n')
 		}
 		sb.WriteString(t.renderBlock(b, width))
@@ -195,6 +268,8 @@ func (t *transcript) renderBlock(b *block, width int) string {
 		out = t.th.muted.Render(b.text)
 	case blockTool:
 		out = t.renderTool(b, width)
+	case blockThinking:
+		out = t.renderThinking(b, width)
 	}
 	b.cached = out
 	b.cacheWidth = width
@@ -242,6 +317,46 @@ func (t *transcript) renderTool(b *block, width int) string {
 		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
 		sb.WriteByte('\n')
 		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines)))
+	} else {
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render(body))
+		if t.expanded && len(lines) > previewLines {
+			sb.WriteByte('\n')
+			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+		}
+	}
+	return sb.String()
+}
+
+// renderThinking renders a collapsible thinking block: an accent header that
+// reads "Thinking…" while streaming and "Thought" once complete, plus a muted
+// body preview governed by the global ctrl+o expand toggle.
+func (t *transcript) renderThinking(b *block, width int) string {
+	header := "✻ Thought"
+	headerStyle := t.th.toolSuccess
+	if !b.done {
+		header = "✻ Thinking…"
+		headerStyle = t.th.accent
+	}
+
+	body := strings.TrimRight(b.text, "\n")
+	if body == "" {
+		return headerStyle.Render(header)
+	}
+
+	lines := strings.Split(body, "\n")
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render(header))
+	const previewLines = 6
+	if !t.expanded && len(lines) > previewLines {
+		shown := lines[len(lines)-previewLines:]
+		hidden := len(lines) - previewLines
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… %d earlier lines", hidden)))
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", hidden)))
 	} else {
 		sb.WriteByte('\n')
 		sb.WriteString(t.th.muted.Render(body))

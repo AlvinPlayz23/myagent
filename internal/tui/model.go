@@ -1357,7 +1357,7 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = err.Error()
 		return m, nil
 	}
-	if m.working {
+	if m.working && cmd.kind != commandThinking {
 		m.statusMsg = "Cancel the current run before using slash commands."
 		return m, nil
 	}
@@ -1389,6 +1389,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case commandInit:
 		return m.startRun("/init", userMessage(initPrompt))
+	case commandThinking:
+		return m.applyShowThinking(cmd.arg), nil
 	case commandModel:
 		return m.openModelPicker(cmd.arg)
 	case commandEffort:
@@ -1711,6 +1713,32 @@ func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applyShowThinking flips (no arg) or sets ("on"/"off") the transcript's
+// thinking visibility. It is a pure display toggle, so it is also allowed
+// while a run is streaming.
+func (m *model) applyShowThinking(arg string) tea.Model {
+	var show bool
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "":
+		show = !m.transcript.showThinking
+	case "on", "true", "yes", "1":
+		show = true
+	case "off", "false", "no", "0":
+		show = false
+	default:
+		m.statusMsg = "usage: /thinking [on|off]"
+		return m
+	}
+	m.transcript.setShowThinking(show)
+	if show {
+		m.statusMsg = "Thinking shown."
+	} else {
+		m.statusMsg = "Thinking hidden."
+	}
+	m.refreshViewport()
+	return m
+}
+
 func (m *model) applyEffort(effort llm.Effort) (tea.Model, tea.Cmd) {
 	effort, err := llm.NormalizeEffort(m.runner.cfg.Model, effort)
 	if err != nil {
@@ -1753,8 +1781,18 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 		}
 	case types.EventMessageUpdate:
 		ame := ev.AssistantMessageEvent
-		if ame != nil && ame.Type == "text_delta" && ame.Delta != "" {
+		if ame == nil || ame.Delta == "" {
+			break
+		}
+		switch ame.Type {
+		case "text_delta":
 			m.transcript.appendAssistantDelta(ame.Delta)
+		case "thinking_start":
+			m.transcript.beginThinking()
+		case "thinking_delta":
+			m.transcript.appendThinkingDelta(ame.Delta)
+		case "thinking_end":
+			m.transcript.endThinking()
 		}
 	case types.EventMessageEnd:
 		if ev.Message != nil {
