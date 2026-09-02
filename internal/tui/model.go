@@ -164,7 +164,7 @@ const (
 	// The ruled composer opens one line tall and grows with the text, up to
 	// ruledComposerMaxRows, after which it scrolls internally.
 	ruledComposerMinRows = 1
-	ruledComposerMaxRows = 10
+	ruledComposerRules = 2
 	// ruledComposerReserve is the transcript rows kept free when the terminal is
 	// too short to give the composer its full growth range.
 	ruledComposerReserve = 4
