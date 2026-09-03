@@ -1,0 +1,4 @@
+# Toolchain pin — `mise install` provisions the exact version.
+[tools]
+go = "1.27.1"
+node = "24"

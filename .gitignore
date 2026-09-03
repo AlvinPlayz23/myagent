@@ -43,3 +43,6 @@ paseo/
 test-ui/
 muse-session.md
 RENDRED_DESK.md
+
+# Local web preview harness (uncommitted test rig)
+tui-preview/

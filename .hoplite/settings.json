@@ -7,11 +7,11 @@
 	"scripts": {
 		"setup": {
 			"enabled": true,
-			"command": "command -v go >/dev/null 2>&1 || { curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o /tmp/go.tgz && tar -C /usr/local -xzf /tmp/go.tgz && ln -sf /usr/local/go/bin/go /usr/local/bin/go && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt; }"
+			"command": "command -v mise >/dev/null 2>&1 || { curl -fsSL https://mise.run | bash; export PATH=\"$HOME/.local/bin:$PATH\"; }; mise install && mise exec -- go version"
 		},
 		"run": {
 			"enabled": true,
-			"command": null
+			"command": "cd tui-preview && mise exec -- bash -c 'npm install --no-audit --no-fund && npm run dev'"
 		},
 		"archive": {
 			"enabled": true,
