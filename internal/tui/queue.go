@@ -1,7 +1,7 @@
-// Package tui implements the interactive terminal UI (bubbletea v2), porting
-// the observable UX of pi's interactive mode: a scrolling transcript of
-// user/assistant/tool blocks, a multi-line input editor, and a status/footer
-// bar, driven by the same AgentEvent stream as print mode.
+// Package tui implements the interactive terminal pager: a from-scratch
+// engine (internal/tui/engine) drives a full-screen transcript with an
+// accent-rail chrome, a bordered composer, and modal pickers, fed by the same
+// AgentEvent stream as print mode.
 package tui
 
 import (

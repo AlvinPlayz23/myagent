@@ -119,5 +119,27 @@ func (p *modelPicker) height() int {
 	if !p.active {
 		return 0
 	}
-	return min(8, len(p.matched)+1)
+	return min(maxModalRows, len(p.matched))
+}
+
+// setQuery updates the filter query from modal input.
+func (p *modelPicker) setQuery(query string) {
+	p.query = query
+	p.filter()
+}
+
+// mergeDiscovered folds live-discovered model IDs into the picker items.
+func (p *modelPicker) mergeDiscovered(ids []string) {
+	provider := ""
+	if len(p.items) > 0 {
+		provider = p.items[0].Provider
+	}
+	extra := make([]modelcatalog.Model, 0, len(ids))
+	for _, id := range ids {
+		extra = append(extra, modelcatalog.Model{Provider: provider, ID: id})
+	}
+	if len(extra) == 0 {
+		return
+	}
+	p.replace(append(append([]modelcatalog.Model{}, p.items...), extra...))
 }

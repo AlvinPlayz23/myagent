@@ -3,11 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
-
-	tea "charm.land/bubbletea/v2"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
@@ -19,42 +20,61 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/terminal"
 	"github.com/AlvinPlayz23/myagent/internal/titlegen"
+	"github.com/AlvinPlayz23/myagent/internal/tui/engine"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-// Run starts the interactive TUI. It drives the agent loop over the given
+// Run starts the interactive pager. It drives the agent loop over the given
 // config and prior history, persisting every produced message to sess as it
-// completes. It returns the active session when the user quits, which may be a
-// session created through /new.
+// completes. It returns the active session when the user quits, which may be
+// a session created through /new.
 func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
-	queue := newMsgQueue()
-	r := newRunner(cfg, queue, history)
-
-	th := newTheme()
-	md := newMDRenderer()
-	m := newModel(ctx, r, queue, th, md, modelID, cwd, func() error {
-		newSess, err := session.Create(cwd)
-		if err != nil {
-			return err
-		}
-		if sess != nil {
-			if err := sess.Close(); err != nil {
-				_ = newSess.Close()
-				return err
-			}
-		}
-		sess = newSess
-		r.reset()
-		return nil
-	})
-	m.sessionTitle = ""
-	if sess != nil {
-		m.sessionTitle = sess.Title()
+	term, err := engine.OpenTerminal()
+	if err != nil {
+		return nil, err
 	}
-	m.hasSessionTitle = m.sessionTitle != "" && m.sessionTitle != "new"
+	if err := term.Raw(); err != nil {
+		term.Restore()
+		return nil, err
+	}
+	term.Mouse = true
+	term.Enter()
+	defer term.Restore()
+
+	a := newApp(ctx, cfg, history, modelID, cwd)
+	a.term = term
+	a.input = engine.NewDecoder(term.Input()).Events()
+	a.r.bindApp(a)
+
+	resize := make(chan os.Signal, 1)
+	signal.Notify(resize, syscall.SIGWINCH)
+	a.resizeCh = resize
+	defer signal.Stop(resize)
+
+	if err := setupApp(a, persistedConfig, authStore, catalog, &sess, history, modelID); err != nil {
+		return sess, err
+	}
+
+	a.updateTerminalTitle()
+	defer terminal.SetTitle("myagent")
+
+	if err := a.loop(); err != nil {
+		return sess, err
+	}
+	return sess, nil
+}
+
+// setupApp injects every environment seam into the app, mirroring the
+// previous model's wiring one-to-one.
+func setupApp(a *app, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess **session.Session, history []types.Message, modelID string) error {
+	a.setTerminalTitle = terminal.SetTitle
+	if *sess != nil {
+		a.sessionTitle = (*sess).Title()
+	}
+	a.hasSessionTitle = a.sessionTitle != "" && a.sessionTitle != "new"
 	if persistedConfig != nil {
-		m.welcomeStyle = normalizeWelcomeStyle(persistedConfig.WelcomeStyle)
-		m.saveWelcomeStyle = func(style welcomeStyle) error {
+		a.welcomeSty = normalizeWelcomeStyle(persistedConfig.WelcomeStyle)
+		a.saveWelcomeStyle = func(style welcomeStyle) error {
 			previous := persistedConfig.WelcomeStyle
 			persistedConfig.WelcomeStyle = string(style)
 			if err := config.Save(persistedConfig); err != nil {
@@ -63,8 +83,8 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 			return nil
 		}
-		m.promptStyle = normalizePromptStyle(persistedConfig.PromptStyle)
-		m.savePromptStyle = func(style promptStyle) error {
+		a.promptSty = normalizePromptStyle(persistedConfig.PromptStyle)
+		a.savePromptStyle = func(style promptStyle) error {
 			previous := persistedConfig.PromptStyle
 			persistedConfig.PromptStyle = string(style)
 			if err := config.Save(persistedConfig); err != nil {
@@ -74,53 +94,43 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			return nil
 		}
 	}
-	m.syncComposerStyle()
-	m.setTerminalTitle = terminal.SetTitle
-	m.updateTerminalTitle()
-	defer terminal.SetTitle("myagent")
-	if agent.HasRepositoryGuidance(cwd) {
-		m.statusMsg = "Loaded AGENTS.md"
+	if agent.HasRepositoryGuidance(a.cwd) {
+		a.statusMsg = "Loaded AGENTS.md"
 	}
-	m.availableModels = func() []modelcatalog.Model {
+	a.availableModels = func() []modelcatalog.Model {
 		return availableModelCandidates(catalog, persistedConfig, authStore)
 	}
-	m.discoverModels = func(ctx context.Context, provider string) ([]string, error) {
+	a.discoverModels = func(ctx context.Context, provider string) ([]string, error) {
 		return discoverProviderModels(ctx, catalog, persistedConfig, authStore, provider)
 	}
-	m.availableProviders = func() []modelcatalog.Provider {
+	a.availableProviders = func() []modelcatalog.Provider {
 		if catalog == nil {
 			return nil
 		}
 		return catalog.Providers()
 	}
-	m.providerConfigured = func(name string) bool {
-		if persistedConfig == nil {
-			return false
-		}
-		if authStore == nil {
+	a.providerConfigured = func(name string) bool {
+		if persistedConfig == nil || authStore == nil {
 			return false
 		}
 		_, ok := authStore.Get(name)
 		return ok
 	}
-	m.providerIsCustom = func(name string) bool {
+	a.providerIsCustom = func(name string) bool {
 		if persistedConfig == nil {
 			return false
 		}
 		_, ok := persistedConfig.Providers[name]
 		return ok
 	}
-	m.providerAPIKey = func(name string) string {
-		if persistedConfig == nil {
-			return ""
-		}
-		if authStore == nil {
+	a.providerAPIKey = func(name string) string {
+		if persistedConfig == nil || authStore == nil {
 			return ""
 		}
 		credentials, _ := authStore.Get(name)
 		return credentials.APIKey
 	}
-	m.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
+	a.configureProvider = func(provider modelcatalog.Provider, apiKey string) error {
 		if persistedConfig == nil || authStore == nil {
 			return fmt.Errorf("configuration is unavailable")
 		}
@@ -142,7 +152,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		return authStore.Set(provider.ID, auth.Credentials{APIKey: apiKey, BaseURL: baseURL})
 	}
-	m.selectModel = func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+	a.selectModel = func(providerName, modelID string) (llm.Provider, llm.Model, error) {
 		if persistedConfig == nil {
 			return nil, llm.Model{}, fmt.Errorf("configuration is unavailable")
 		}
@@ -159,164 +169,99 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		return provider, model, nil
 	}
-	m.listSessions = func() ([]session.Info, error) {
+	a.listSessions = func() ([]session.Info, error) {
 		return session.List()
 	}
-	m.currentSessionID = func() string {
-		if sess == nil {
+	a.currentSessionID = func() string {
+		if *sess == nil {
 			return ""
 		}
-		return sess.ID()
+		return (*sess).ID()
 	}
-	m.resumeSession = func(id string) ([]types.Message, error) {
+	a.resumeSession = func(id string) ([]types.Message, error) {
 		resumed, err := session.ResumeByID(id)
 		if err != nil {
 			return nil, err
 		}
-		if sess != nil {
-			if err := sess.Close(); err != nil {
+		if *sess != nil {
+			if err := (*sess).Close(); err != nil {
 				_ = resumed.Close()
 				return nil, err
 			}
 		}
-		sess = resumed
+		*sess = resumed
 		history := resumed.Messages()
 		return history, nil
 	}
-	m.exportSession = func(format export.Format, name string, overwrite bool) (string, error) {
-		return export.Write(sess, format, name, overwrite)
+	a.exportSession = func(format export.Format, name string, overwrite bool) (string, error) {
+		return export.Write(*sess, format, name, overwrite)
 	}
-	m.renameSession = func(title string) error {
-		if sess == nil {
+	a.renameSession = func(title string) error {
+		if *sess == nil {
 			return fmt.Errorf("no active session")
 		}
-		return sess.SetTitle(title)
+		return (*sess).SetTitle(title)
+	}
+	a.newSession = func() error {
+		newSess, err := session.Create(a.cwd)
+		if err != nil {
+			return err
+		}
+		if *sess != nil {
+			if err := (*sess).Close(); err != nil {
+				_ = newSess.Close()
+				return err
+			}
+		}
+		*sess = newSess
+		a.r.reset()
+		return nil
 	}
 
-	r.generateTitle = func(parent context.Context, prompt string) (string, error) {
-		if sess == nil || sess.Title() != "new" {
+	a.r.generateTitle = func(parent context.Context, prompt string) (string, error) {
+		if *sess == nil || (*sess).Title() != "new" {
 			return "", nil
 		}
 		titleCtx, cancel := context.WithTimeout(parent, 4*time.Second)
 		defer cancel()
-		title, err := titlegen.Generate(titleCtx, r.cfg.Provider, r.cfg.Model, prompt)
+		title, err := titlegen.Generate(titleCtx, a.r.cfg.Provider, a.r.cfg.Model, prompt)
 		if err != nil {
 			return "", err
 		}
-		if err := sess.SetGeneratedTitle(title); err != nil {
+		if err := (*sess).SetGeneratedTitle(title); err != nil {
 			return "", err
 		}
 		return title, nil
 	}
 
-	// Seed the transcript with prior conversation so resumed sessions show
-	// their history.
-	seedTranscript(m.transcript, history)
+	a.clipboardRead = readNativeClipboard
 
 	// Persist produced messages and compactions by intercepting every event
-	// on the loop goroutine, before it reaches the UI. This keeps the session
-	// file in sync with the loop's in-memory history so that compaction's
-	// FirstKeptIndex maps correctly to session entry ids.
-	r.onEvent = func(ev types.AgentEvent) error {
-		if sess == nil {
+	// on the loop goroutine, before it reaches the UI.
+	a.r.onEvent = func(ev types.AgentEvent) error {
+		if *sess == nil {
 			return nil
 		}
 		switch ev.Type {
 		case types.EventMessageEnd:
 			if ev.Message != nil {
-				return sess.AppendMessage(*ev.Message)
+				return (*sess).AppendMessage(*ev.Message)
 			}
 		case types.EventCompactionEnd:
 			if ev.Compaction != nil && ev.Message != nil {
-				return sess.ApplyCompaction(*ev.Compaction, *ev.Message)
+				return (*sess).ApplyCompaction(*ev.Compaction, *ev.Message)
 			}
 		}
 		return nil
 	}
 
-	p := tea.NewProgram(m, tea.WithContext(ctx))
-	_, err := p.Run()
-	return sess, err
+	seedScrollback(a.sb, history)
+	a.gitBranch = readGitBranch(a.cwd)
+	return nil
 }
 
-// discoverProviderModels queries the provider's own /v1/models endpoint so
-// the picker can offer models that ship before the catalog knows about them.
-// Results are memoized briefly and persisted as custom entries; failures are
-// non-fatal because the catalog list remains usable on its own.
-func discoverProviderModels(ctx context.Context, catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store, provider string) ([]string, error) {
-	provider = strings.TrimSpace(provider)
-	if provider == "" {
-		return nil, fmt.Errorf("no active provider")
-	}
-	if catalog != nil {
-		if ids, ok := catalog.CachedDiscovery(provider, time.Now()); ok {
-			return ids, nil
-		}
-	}
-	baseURL, apiKey, err := config.ResolveProviderEndpoint(cfg, authStore, provider)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	ids, err := llm.ListOpenAIModels(ctx, nil, apiKey, baseURL)
-	if err != nil {
-		return nil, err
-	}
-	if catalog != nil {
-		catalog.RememberDiscovery(provider, ids, time.Now())
-		// Best-effort persistence: discovered IDs should survive restarts,
-		// but a cache write failure must not fail the discovery itself.
-		_ = catalog.SetCustomModels(provider, provider, ids)
-	}
-	return ids, nil
-}
-
-func availableModelCandidates(catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store) []modelcatalog.Model {
-	if catalog == nil || cfg == nil {
-		return nil
-	}
-	providers := make(map[string]struct{}, len(cfg.Providers))
-	for name := range cfg.Providers {
-		providers[name] = struct{}{}
-	}
-	if authStore != nil {
-		for name := range authStore.Providers {
-			providers[name] = struct{}{}
-		}
-	}
-
-	models := catalog.Models(providers)
-	seen := make(map[string]struct{}, len(models)+len(cfg.Providers))
-	for _, model := range models {
-		seen[model.Ref()] = struct{}{}
-	}
-	addCustom := func(provider, modelID string) {
-		modelID = strings.TrimSpace(modelID)
-		if modelID == "" {
-			return
-		}
-		model := modelcatalog.Model{Provider: provider, ProviderName: provider, ID: modelID}
-		if _, exists := seen[model.Ref()]; exists {
-			return
-		}
-		seen[model.Ref()] = struct{}{}
-		models = append(models, model)
-	}
-	for name, provider := range cfg.Providers {
-		addCustom(name, provider.Model)
-	}
-	if provider, modelID, ok := strings.Cut(strings.TrimSpace(cfg.DefaultModel), "/"); ok {
-		if _, custom := cfg.Providers[provider]; custom {
-			addCustom(provider, modelID)
-		}
-	}
-	sort.Slice(models, func(i, j int) bool { return models[i].Ref() < models[j].Ref() })
-	return models
-}
-
-// seedTranscript renders prior history into the transcript on resume.
-func seedTranscript(t *transcript, history []types.Message) {
+// seedScrollback renders prior history into the scrollback on resume.
+func seedScrollback(t *scrollback, history []types.Message) {
 	for _, msg := range history {
 		switch msg.Role {
 		case types.RoleUser:
@@ -368,6 +313,90 @@ func seedTranscript(t *transcript, history []types.Message) {
 	}
 }
 
+// discoverProviderModels queries the provider's own /v1/models endpoint so
+// the picker can offer models that ship before the catalog knows about them.
+// Results are memoized briefly and persisted as custom entries; failures are
+// non-fatal because the catalog list remains usable on its own.
+func discoverProviderModels(ctx context.Context, catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store, provider string) ([]string, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil, fmt.Errorf("no active provider")
+	}
+	if catalog != nil {
+		if ids, ok := catalog.CachedDiscovery(provider, time.Now()); ok {
+			return ids, nil
+		}
+	}
+	baseURL, apiKey, err := config.ResolveProviderEndpoint(cfg, authStore, provider)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ids, err := llm.ListOpenAIModels(ctx, nil, apiKey, baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if catalog != nil {
+		catalog.RememberDiscovery(provider, ids, time.Now())
+		// Best-effort persistence: discovered IDs should survive restarts,
+		// but a cache write failure must not fail the discovery itself.
+		_ = catalog.SetCustomModels(provider, provider, ids)
+	}
+	return ids, nil
+}
+
+// readGitBranch returns the checked-out branch name, or "" when the repo
+// state cannot be read cheaply.
+func readGitBranch(cwd string) string {
+	head := findGitHead(cwd)
+	if head == "" {
+		return ""
+	}
+	data, err := os.ReadFile(head)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+		return ref
+	}
+	return ""
+}
+
+// findGitHead walks up to the nearest .git/HEAD.
+func findGitHead(cwd string) string {
+	dir := cwd
+	for {
+		head := dir + "/.git/HEAD"
+		if _, err := os.Stat(head); err == nil {
+			return head
+		}
+		parent := parentDir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func parentDir(dir string) string {
+	for i := len(dir) - 1; i > 0; i-- {
+		if dir[i] == '/' || dir[i] == '\\' {
+			return dir[:i]
+		}
+	}
+	return dir
+}
+
+// setSessionTitle applies a generated title.
+func (a *app) setSessionTitle(title string) {
+	a.sessionTitle = title
+	a.hasSessionTitle = title != "" && title != "new"
+	a.updateTerminalTitle()
+}
+
+// textOf flattens a message's text blocks.
 func textOf(m types.Message) string {
 	var parts []string
 	for _, c := range m.Content {
@@ -383,4 +412,48 @@ func textOf(m types.Message) string {
 		out += "\n" + p
 	}
 	return out
+}
+
+// availableModelCandidates unions catalog models with custom provider models.
+func availableModelCandidates(catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store) []modelcatalog.Model {
+	if catalog == nil || cfg == nil {
+		return nil
+	}
+	providers := make(map[string]struct{}, len(cfg.Providers))
+	for name := range cfg.Providers {
+		providers[name] = struct{}{}
+	}
+	if authStore != nil {
+		for name := range authStore.Providers {
+			providers[name] = struct{}{}
+		}
+	}
+
+	models := catalog.Models(providers)
+	seen := make(map[string]struct{}, len(models)+len(cfg.Providers))
+	for _, model := range models {
+		seen[model.Ref()] = struct{}{}
+	}
+	addCustom := func(provider, modelID string) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			return
+		}
+		model := modelcatalog.Model{Provider: provider, ProviderName: provider, ID: modelID}
+		if _, exists := seen[model.Ref()]; exists {
+			return
+		}
+		seen[model.Ref()] = struct{}{}
+		models = append(models, model)
+	}
+	for name, provider := range cfg.Providers {
+		addCustom(name, provider.Model)
+	}
+	if provider, modelID, ok := strings.Cut(strings.TrimSpace(cfg.DefaultModel), "/"); ok {
+		if _, custom := cfg.Providers[provider]; custom {
+			addCustom(provider, modelID)
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Ref() < models[j].Ref() })
+	return models
 }

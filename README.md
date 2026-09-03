@@ -1,12 +1,12 @@
 # myagent
 
 A Go coding agent. Headless **print mode** for one-shot prompts, an
-interactive **TUI** built on [bubbletea v2][btea] for multi-turn work, and a
-**server mode** exposing multiple concurrent sessions over WebSocket
-JSON-RPC. Speaks the OpenAI streaming protocol against any compatible
-endpoint (OpenAI, Ollama, LM Studio, vLLM, etc.).
-
-[btea]: https://github.com/charmbracelet/bubbletea
+interactive full-screen **pager TUI** built on a from-scratch terminal engine
+(`internal/tui/engine`: cell-buffer diff renderer, raw input decoder, and the
+GrokNight theme) for multi-turn work, and a **server mode** exposing multiple
+concurrent sessions over WebSocket JSON-RPC. Speaks the OpenAI streaming
+protocol against any compatible endpoint (OpenAI, Ollama, LM Studio, vLLM,
+etc.).
 
 ---
 
@@ -251,17 +251,25 @@ go run . "Write a haiku about Go."   # same thing
 
 ### TUI keybindings
 
+The pager is full-screen with a scrollback transcript, a bordered composer,
+and a footer. Keys follow the same grammar as the Grok pager.
+
 | Key                  | Action                                                |
 | -------------------- | ----------------------------------------------------- |
 | **Enter**            | Send (queue a follow-up if a turn is currently running) |
+| **Shift+Enter / Ctrl+Enter** | Insert a newline |
+| **Ctrl+M**           | Toggle multiline mode (Enter inserts newlines)        |
 | **Alt+Enter**        | Steer the currently running turn                      |
-| **Esc**              | Abort the current turn                                |
-| **Ctrl+C**           | Quit                                                  |
+| **Esc**              | Abort the current turn; **Esc Esc** clears the prompt (800 ms) |
+| **Ctrl+C**           | Clear the prompt (with text); abort a running turn; quit when empty |
+| **Ctrl+P** or **?**  | Open the command palette                              |
+| **Tab**              | Focus the scrollback (arrows / PgUp / PgDn scroll; Tab returns) |
 | **Ctrl+O**           | Expand / collapse all tool blocks                     |
 | **Up / Down**        | Browse submitted prompts when the input is empty      |
-| **PgUp / PgDn**      | Scroll transcript                                     |
-| **Mouse drag**       | Select displayed transcript text; release to copy     |
-| **Tab**              | Focus the input area                                  |
+| **Ctrl+V**           | Attach a clipboard image (or paste text)              |
+| **Mouse wheel**      | Scroll the transcript                                 |
+| **`/`**              | Start a slash command                                 |
+| **`@`**              | Start a file mention                                  |
 
 ### TUI slash commands
 
@@ -286,6 +294,8 @@ to run, or **Esc** to dismiss it.
 | `/new`               | Start a fresh persisted conversation                    |
 | `/resume`            | Open the session selector and resume a previous conversation |
 | `/rename <title>`    | Rename the current session                              |
+| `/export`            | Export this session as Markdown or HTML                 |
+| `/thinking [on|off]` | Show or hide the model's thinking in the transcript     |
 
 `/model` searches tool-capable models from [models.dev](https://models.dev) for
 all configured compatible providers. The normalized catalog is cached at
@@ -496,7 +506,7 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 │   ├── setup/           # first-run setup + provider manager wizard
 │   ├── terminal/        # terminal capability helpers
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
-│   ├── tui/             # bubbletea v2 UI: transcript, input, footer
+│   ├── tui/             # pager TUI: engine (cell buffer, input), transcript, composer, modals
 │   └── types/           # Message / Content / ToolCall / Usage / Event
 ├── desktop/             # Electron desktop client (connects to `myagent serve`)
 ├── scripts/
@@ -571,21 +581,16 @@ endpoint can still require a non-empty API key field; use its documented value.
 prompt in an interactive terminal, complete setup, then rerun the command.
 
 **Fresh build fails with `glamour: ansi.Style … does not implement …`**
-A transitive dep version conflict between `glamour` and `bubbletea v2`.
-Upgrade `charmbracelet/x/cellbuf` + `x/ansi` to latest:
-
-```bash
-go get github.com/charmbracelet/x/cellbuf@latest github.com/charmbracelet/x/ansi@latest
-go mod tidy
-```
+The pager no longer uses glamour — this error means you are building an old
+checkout. Update to the current tree and run `go mod tidy`.
 
 **TUI exits immediately on Windows**
 You're likely under `cmd.exe` or PowerShell ISE, neither of which
 supports ConPTY. Use **Windows Terminal** or run under WSL.
 
-**CI logs show nothing for `go run . tui`**
-The TUI deliberately uses bubbletea's alt screen — output goes to the
-buffer and is restored on exit. For CI-friendly logs, capture the
+**CI logs show nothing for `go run .`**
+The pager deliberately renders to the terminal's alternate screen — output
+goes to the buffer and is restored on exit. For CI-friendly logs, capture the
 binary's stdout via `go run . -p "..."` instead.
 
 **On Windows, the `bash` tool errors with "wsl is not available" (or runs in the wrong environment)**

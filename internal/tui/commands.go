@@ -8,7 +8,8 @@ import (
 type commandKind int
 
 const (
-	commandHelp commandKind = iota
+	commandNone commandKind = iota
+	commandHelp
 	commandClear
 	commandNew
 	commandCompact
@@ -21,6 +22,7 @@ const (
 	commandExport
 	commandInit
 	commandThinking
+	commandQuit
 )
 
 type slashCommand struct {

@@ -6,14 +6,62 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/tui/engine"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+// stubProvider satisfies llm.Provider without touching the network.
+type stubProvider struct{}
+
+func (stubProvider) Stream(ctx context.Context, model llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
+	events := make(chan llm.StreamEvent, 1)
+	events <- llm.StreamEvent{
+		Type: "error",
+		Error: &types.Message{
+			Role:         types.RoleAssistant,
+			StopReason:   types.StopError,
+			ErrorMessage: "stub provider",
+		},
+	}
+	close(events)
+	return events, nil
+}
+
+// newTestApp builds an app wired the way Run does, without a terminal. Runs
+// execute synchronously against a stub provider so tests are deterministic.
+func newTestApp(t *testing.T, cfg agent.Config, history []types.Message) *app {
+	t.Helper()
+	if cfg.Provider == nil {
+		cfg.Provider = stubProvider{}
+	}
+	a := newApp(context.Background(), cfg, history, "model", "")
+	a.r.bindApp(a)
+	a.r.synchronous = true
+	a.onResize()
+	return a
+}
+
+// sbText renders the scrollback rows to plain text for assertions.
+func sbText(sb *scrollback, width int, expanded, showThinking bool) string {
+	th := currentTheme()
+	var b strings.Builder
+	for _, e := range sb.entries {
+		if e.kind == sbThinking && !showThinking {
+			continue
+		}
+		for _, row := range e.renderRows(width, expanded, showThinking, th) {
+			for _, sp := range row {
+				b.WriteString(sp.Text)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
 
 func TestParseSlashCommand(t *testing.T) {
 	tests := []struct {
@@ -62,70 +110,60 @@ func TestParseSlashCommand(t *testing.T) {
 }
 
 func TestEffortCommandOpensOnCurrentValueAndAppliesSelection(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	m.onResize(80, 24)
+	a := newTestApp(t, agent.Config{Effort: llm.EffortHigh}, nil)
 
-	m.runCommand("/effort")
-	if !m.effort.active || m.effort.selected().effort != llm.EffortHigh {
-		t.Fatalf("effort picker = active %v selected %q, want high", m.effort.active, m.effort.selected().effort)
+	a.runCommand("/effort")
+	if !a.effort.active || a.effort.items[a.effort.sel].effort != llm.EffortHigh {
+		t.Fatalf("effort picker = active %v selected %q, want high", a.effort.active, a.effort.items[a.effort.sel].effort)
 	}
-	m.effort.move(1)
-	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if m.effort.active || r.cfg.Effort != llm.EffortXHigh {
-		t.Fatalf("applied effort = active %v value %q, want xhigh", m.effort.active, r.cfg.Effort)
+	a.effort.move(1)
+	a.modalKey(engine.Key{Code: "enter"})
+	if a.effort.active || a.r.cfg.Effort != llm.EffortXHigh {
+		t.Fatalf("applied effort = active %v value %q, want xhigh", a.effort.active, a.r.cfg.Effort)
 	}
-	if !strings.Contains(m.statusMsg, "xhigh") {
-		t.Fatalf("status = %q, want xhigh", m.statusMsg)
+	if !strings.Contains(a.statusMsg, "xhigh") {
+		t.Fatalf("status = %q, want xhigh", a.statusMsg)
 	}
 }
 
 func TestEffortCommandDirectSetAndDefault(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	a := newTestApp(t, agent.Config{}, nil)
 
-	m.runCommand("/effort max")
-	if r.cfg.Effort != llm.EffortMax || m.effort.active {
-		t.Fatalf("direct effort = %q active %v, want max and closed", r.cfg.Effort, m.effort.active)
+	a.runCommand("/effort max")
+	if a.r.cfg.Effort != llm.EffortMax || a.effort.active {
+		t.Fatalf("direct effort = %q active %v, want max and closed", a.r.cfg.Effort, a.effort.active)
 	}
-	m.runCommand("/effort default")
-	if r.cfg.Effort != "" {
-		t.Fatalf("default effort = %q, want unspecified", r.cfg.Effort)
+	a.runCommand("/effort default")
+	if a.r.cfg.Effort != "" {
+		t.Fatalf("default effort = %q, want unspecified", a.r.cfg.Effort)
 	}
-	if !strings.Contains(m.statusMsg, "provider default") {
-		t.Fatalf("status = %q, want provider default", m.statusMsg)
+	if !strings.Contains(a.statusMsg, "provider default") {
+		t.Fatalf("status = %q, want provider default", a.statusMsg)
 	}
 }
 
 func TestEffortCommandInvalidCancelAndBusy(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{Effort: llm.EffortMedium}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	m.onResize(80, 24)
+	a := newTestApp(t, agent.Config{Effort: llm.EffortMedium}, nil)
 
-	m.runCommand("/effort extreme")
-	if r.cfg.Effort != llm.EffortMedium || !strings.Contains(m.statusMsg, "invalid effort") {
-		t.Fatalf("invalid effort changed value/status: %q %q", r.cfg.Effort, m.statusMsg)
+	a.runCommand("/effort extreme")
+	if a.r.cfg.Effort != llm.EffortMedium || !strings.Contains(a.statusMsg, "invalid effort") {
+		t.Fatalf("invalid effort changed value/status: %q %q", a.r.cfg.Effort, a.statusMsg)
 	}
-	m.runCommand("/effort")
-	m.effort.move(1)
-	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
-	if m.effort.active || r.cfg.Effort != llm.EffortMedium {
-		t.Fatalf("cancel = active %v effort %q", m.effort.active, r.cfg.Effort)
+	a.runCommand("/effort")
+	a.effort.move(1)
+	a.modalKey(engine.Key{Code: "esc"})
+	if a.effort.active || a.r.cfg.Effort != llm.EffortMedium {
+		t.Fatalf("cancel = active %v effort %q", a.effort.active, a.r.cfg.Effort)
 	}
-	m.working = true
-	m.runCommand("/effort high")
-	if r.cfg.Effort != llm.EffortMedium || !strings.Contains(m.statusMsg, "Cancel the current run") {
-		t.Fatalf("busy effort/status = %q %q", r.cfg.Effort, m.statusMsg)
+	a.working = true
+	a.runCommand("/effort high")
+	if a.r.cfg.Effort != llm.EffortMedium || !strings.Contains(a.statusMsg, "Cancel the current run") {
+		t.Fatalf("busy effort/status = %q %q", a.r.cfg.Effort, a.statusMsg)
 	}
 }
 
 func TestModelSwitchNormalizesEffortForNonReasoningModel(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
+	a := newTestApp(t, agent.Config{Effort: llm.EffortHigh}, nil)
 
 	nonReasoning := llm.Model{
 		Provider:       "openrouter",
@@ -133,126 +171,119 @@ func TestModelSwitchNormalizesEffortForNonReasoningModel(t *testing.T) {
 		ReasoningKnown: true,
 		Reasoning:      false,
 	}
-	m.availableModels = func() []modelcatalog.Model {
+	a.availableModels = func() []modelcatalog.Model {
 		return []modelcatalog.Model{{Provider: "openrouter", ID: "plain"}}
 	}
-	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
-		return r.cfg.Provider, nonReasoning, nil
+	a.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return a.r.cfg.Provider, nonReasoning, nil
 	}
-	m.openModelPicker("openrouter/plain")
+	a.openModelPicker("openrouter/plain")
 
-	_, ok := m.models.selected()
-	if ok {
+	if _, ok := a.models.selected(); ok {
 		t.Fatal("model picker remained open after exact match")
 	}
-	if m.modelID != "openrouter/plain" {
-		t.Fatalf("model id = %q, want openrouter/plain", m.modelID)
+	if a.modelID != "openrouter/plain" {
+		t.Fatalf("model id = %q, want openrouter/plain", a.modelID)
 	}
-	if r.cfg.Effort != "" {
-		t.Fatalf("effort after model switch = %q, want unspecified", r.cfg.Effort)
+	if a.r.cfg.Effort != "" {
+		t.Fatalf("effort after model switch = %q, want unspecified", a.r.cfg.Effort)
 	}
 }
 
 func TestModelSwitchKeepsEffortForPermissiveModel(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
+	a := newTestApp(t, agent.Config{Effort: llm.EffortHigh}, nil)
 
-	m.availableModels = func() []modelcatalog.Model {
+	a.availableModels = func() []modelcatalog.Model {
 		return []modelcatalog.Model{{Provider: "local", ID: "unknown-model"}}
 	}
-	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
-		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
+	a.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return a.r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
 	}
-	m.openModelPicker("local/unknown-model")
-	if r.cfg.Model.ID != "unknown-model" {
-		t.Fatalf("model id = %q, want unknown-model", r.cfg.Model.ID)
+	a.openModelPicker("local/unknown-model")
+	if a.r.cfg.Model.ID != "unknown-model" {
+		t.Fatalf("model id = %q, want unknown-model", a.r.cfg.Model.ID)
 	}
-	if r.cfg.Effort != llm.EffortHigh {
-		t.Fatalf("effort after permissive switch = %q, want high", r.cfg.Effort)
+	if a.r.cfg.Effort != llm.EffortHigh {
+		t.Fatalf("effort after permissive switch = %q, want high", a.r.cfg.Effort)
 	}
 }
 
 func TestInitCommandStartsRunWithInitPrompt(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	m.onResize(80, 24)
+	a := newTestApp(t, agent.Config{}, nil)
 
-	if _, cmd := m.runCommand("/init"); cmd == nil {
-		t.Fatal("/init did not start a run")
-	}
-	if !m.working {
-		t.Fatal("/init left the model idle")
-	}
-	// The model receives the full instruction, but the transcript shows the
+	a.runCommand("/init")
+	// The model receives the full instruction, but the scrollback shows the
 	// command the user actually typed.
-	if m.activePrompt == nil || !strings.Contains(m.activePrompt.Content[0].Text, "AGENTS.md") {
-		t.Fatalf("active prompt = %#v, want the init prompt", m.activePrompt)
+	if a.activePrompt == nil || !strings.Contains(a.activePrompt.Content[0].Text, "AGENTS.md") {
+		t.Fatalf("active prompt = %#v, want the init prompt", a.activePrompt)
 	}
-	rendered := m.transcript.render(80)
+	rendered := sbText(a.sb, 80, false, true)
 	if !strings.Contains(rendered, "/init") {
-		t.Fatalf("transcript does not echo the command: %q", rendered)
+		t.Fatalf("scrollback does not echo the command: %q", rendered)
 	}
 	if strings.Contains(rendered, "Analyse this repository") {
-		t.Fatalf("transcript leaked the full init prompt: %q", rendered)
+		t.Fatalf("scrollback leaked the full init prompt: %q", rendered)
 	}
 }
 
 func TestRenameCommandPersistsActiveSessionTitle(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	a := newTestApp(t, agent.Config{}, []types.Message{userMessage("prior")})
 	var renamed string
-	m.renameSession = func(title string) error { renamed = title; return nil }
+	a.renameSession = func(title string) error { renamed = title; return nil }
 
-	m.runCommand("/rename Better session title")
+	a.runCommand("/rename Better session title")
 	if renamed != "Better session title" {
 		t.Fatalf("renamed = %q", renamed)
 	}
-	if m.sessionTitle != "Better session title" || !m.hasSessionTitle {
-		t.Fatalf("title state = %q/%v", m.sessionTitle, m.hasSessionTitle)
+	if a.sessionTitle != "Better session title" || !a.hasSessionTitle {
+		t.Fatalf("title state = %q/%v", a.sessionTitle, a.hasSessionTitle)
 	}
-	if len(r.history) != 1 {
-		t.Fatalf("rename changed history length to %d", len(r.history))
+	if len(a.r.history) != 1 {
+		t.Fatalf("rename changed history length to %d", len(a.r.history))
 	}
 }
 
 func TestCustomizeCommandSelectsAndSavesOrb(t *testing.T) {
-	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
-	m.onResize(80, 24)
+	a := newTestApp(t, agent.Config{}, nil)
 	var saved welcomeStyle
-	m.saveWelcomeStyle = func(style welcomeStyle) error {
+	a.saveWelcomeStyle = func(style welcomeStyle) error {
 		saved = style
 		return nil
 	}
 
-	m.runCommand("/customize")
-	if !m.customize.active || m.customize.selected().welcome != welcomeDefault {
-		t.Fatal("customize picker did not open on the current default style")
+	a.runCommand("/customize")
+	if a.modalKind != modalCustomize || customizeRows[a.customizeSel].welcome != welcomeDefault {
+		t.Fatal("customize modal did not open on the current default style")
 	}
-	m.customize.move(1)
-	m.applyCustomizeSelection()
+	a.customizeMove(1)
+	a.applyCustomizeSelection()
 
-	if m.customize.active || m.welcomeStyle != welcomeOrb || saved != welcomeOrb {
-		t.Fatalf("orb selection = active %v style %q saved %q", m.customize.active, m.welcomeStyle, saved)
+	if a.modalKind != modalNone || a.welcomeSty != welcomeOrb || saved != welcomeOrb {
+		t.Fatalf("orb selection = modal %v style %q saved %q", a.modalKind, a.welcomeSty, saved)
 	}
-	if !strings.Contains(m.viewport.View(), "●") {
-		t.Fatalf("selected orb is not visible in empty-session viewport: %q", m.viewport.View())
+	logo := a.welcomeLogoRows(welcomeOrb, 0, a.th)
+	found := false
+	for _, row := range logo {
+		for _, sp := range row {
+			if strings.Contains(sp.Text, "●") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("selected orb is not visible in the welcome logo rows")
 	}
 }
 
 func TestProvidersCommandEditsConfiguredProviderAndSavesNewKey(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	a := newTestApp(t, agent.Config{}, nil)
 	providers := []modelcatalog.Provider{
 		{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"},
 		{ID: "zenmux", Name: "ZenMux", BaseURL: "https://zenmux.ai/api/v1"},
 	}
-	m.availableProviders = func() []modelcatalog.Provider { return providers }
-	m.providerConfigured = func(id string) bool { return id == "openrouter" }
-	m.providerAPIKey = func(id string) string {
+	a.availableProviders = func() []modelcatalog.Provider { return providers }
+	a.providerConfigured = func(id string) bool { return id == "openrouter" }
+	a.providerAPIKey = func(id string) string {
 		if id == "openrouter" {
 			return "old-key"
 		}
@@ -260,84 +291,71 @@ func TestProvidersCommandEditsConfiguredProviderAndSavesNewKey(t *testing.T) {
 	}
 	var savedProvider modelcatalog.Provider
 	var savedKey string
-	m.configureProvider = func(provider modelcatalog.Provider, key string) error {
+	a.configureProvider = func(provider modelcatalog.Provider, key string) error {
 		savedProvider, savedKey = provider, key
 		return nil
 	}
 
-	m.runCommand("/providers")
-	if !m.providers.active || len(m.providers.items) != 2 {
-		t.Fatalf("provider picker = active %v items %d", m.providers.active, len(m.providers.items))
+	a.runCommand("/providers")
+	if a.modalKind != modalProviders || len(a.providers.items) != 2 {
+		t.Fatalf("provider modal = %v items %d", a.modalKind, len(a.providers.items))
 	}
-	m.openProviderKeyEntry()
-	if m.keyFor.ID != "openrouter" || m.keyInput.Value() != "old-key" {
+	a.openProviderKeyEntry()
+	if a.keyFor.ID != "openrouter" || a.modalInput != "old-key" {
 		t.Fatal("configured provider should open an editor seeded with its stored key")
 	}
-	m.keyInput.SetValue("replacement-key")
-	m.saveProviderKey()
+	a.modalInput = "replacement-key"
+	a.saveProviderKey()
 	if savedProvider.ID != "openrouter" || savedKey != "replacement-key" {
 		t.Fatalf("edited provider/key = %#v/%q", savedProvider, savedKey)
 	}
-	m.providers.move(1)
-	m.openProviderKeyEntry()
-	if m.keyFor.ID != "zenmux" {
-		t.Fatalf("key entry provider = %q, want zenmux", m.keyFor.ID)
+	a.providers.move(1)
+	a.openProviderKeyEntry()
+	if a.keyFor.ID != "zenmux" {
+		t.Fatalf("key entry provider = %q, want zenmux", a.keyFor.ID)
 	}
-	m.keyInput.SetValue("key-value")
-	m.saveProviderKey()
+	a.modalInput = "key-value"
+	a.saveProviderKey()
 	if savedProvider.ID != "zenmux" || savedKey != "key-value" {
 		t.Fatalf("saved provider/key = %#v/%q", savedProvider, savedKey)
 	}
-	if m.keyFor.ID != "" || !m.providers.active {
-		t.Fatal("picker should return after a successful key save")
+	if a.keyFor.ID != "" || a.modalKind != modalProviders {
+		t.Fatal("modal should return to the provider list after a successful key save")
 	}
 }
 
 func TestProvidersCommandDoesNotEditCustomProviderCollision(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m.providers.open([]modelcatalog.Provider{{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"}})
-	m.providerIsCustom = func(id string) bool { return id == "openrouter" }
-	m.providerConfigured = func(string) bool { return false }
-	m.providerAPIKey = func(string) string { return "" }
+	a := newTestApp(t, agent.Config{}, nil)
+	a.providers.open([]modelcatalog.Provider{{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1"}})
+	a.modalKind = modalProviders
+	a.providerIsCustom = func(id string) bool { return id == "openrouter" }
+	a.providerConfigured = func(string) bool { return false }
+	a.providerAPIKey = func(string) string { return "" }
 
-	_, cmd := m.openProviderKeyEntry()
-	if cmd != nil {
-		t.Fatal("custom collision should not focus the built-in key editor")
-	}
-	if m.keyFor.ID != "" || !m.providers.active {
+	a.openProviderKeyEntry()
+	if a.keyFor.ID != "" || a.modalKind != modalProviders {
 		t.Fatal("custom collision opened the built-in key editor")
 	}
-	if !strings.Contains(m.statusMsg, "managed as a custom provider") {
-		t.Fatalf("status = %q", m.statusMsg)
-	}
-	if !strings.Contains(m.renderProviderPicker(), "managed as custom") {
-		t.Fatalf("collision is not marked in provider picker: %q", m.renderProviderPicker())
+	if !strings.Contains(a.statusMsg, "managed as a custom provider") {
+		t.Fatalf("status = %q", a.statusMsg)
 	}
 }
 
 func TestProviderKeyPasteStaysInMaskedInput(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	m.providers.open([]modelcatalog.Provider{{ID: "zenmux", Name: "ZenMux"}})
-	m.providerConfigured = func(string) bool { return false }
-	m.providerAPIKey = func(string) string { return "" }
-	_, focus := m.openProviderKeyEntry()
-	if focus != nil {
-		_ = focus()
-	}
-	m.input.SetValue("keep this out of the composer")
+	a := newTestApp(t, agent.Config{}, nil)
+	a.providers.open([]modelcatalog.Provider{{ID: "zenmux", Name: "ZenMux"}})
+	a.modalKind = modalProviders
+	a.providerConfigured = func(string) bool { return false }
+	a.providerAPIKey = func(string) string { return "" }
+	a.openProviderKeyEntry()
+	a.prompt.setValue("keep this out of the composer")
 
-	updated, _ := m.Update(tea.PasteMsg{Content: "pasted-api-key"})
-	got := updated.(*model)
-	if got.keyInput.Value() != "pasted-api-key" {
-		t.Fatalf("key input = %q, want pasted API key", got.keyInput.Value())
+	a.onKey(engine.Key{Code: "rune", Text: "pasted-api-key"})
+	if a.modalInput != "pasted-api-key" {
+		t.Fatalf("key input = %q, want pasted API key", a.modalInput)
 	}
-	if got.input.Value() != "keep this out of the composer" {
-		t.Fatalf("composer changed to %q", got.input.Value())
+	if a.prompt.value() != "keep this out of the composer" {
+		t.Fatalf("composer changed to %q", a.prompt.value())
 	}
 }
 
@@ -385,151 +403,141 @@ func TestCommandPickerDismissesUntilInputChanges(t *testing.T) {
 }
 
 func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
-	m.input.SetValue("/m")
-	m.picker.sync(m.input.Value())
+	a := newTestApp(t, agent.Config{}, nil)
+	a.prompt.setValue("/m")
+	a.picker.sync(a.prompt.value())
 
-	_, cmd := m.acceptCommandPicker(true)
-	if cmd != nil {
+	a.acceptCommand(true)
+	if a.working {
 		t.Fatal("argument command should not submit")
 	}
-	if got := m.input.Value(); got != "/model " {
+	if got := a.prompt.value(); got != "/model " {
 		t.Fatalf("input = %q, want %q", got, "/model ")
 	}
-	if m.picker.active {
+	if a.picker.active {
 		t.Fatal("picker remained open after accepting a command")
 	}
 }
 
 func TestThinkingCommandTogglesTranscriptVisibility(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, nil)
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "test-model", "")
+	a := newTestApp(t, agent.Config{}, nil)
 
 	// Default is shown; /thinking off hides it.
-	if !m.transcript.showThinking {
+	if !a.sb.showThinking {
 		t.Fatal("thinking should default to shown")
 	}
-	m.input.SetValue("/thinking off")
-	m.submit(submitFollowUp)
-	if m.transcript.showThinking {
+	a.prompt.setValue("/thinking off")
+	a.submit(submitFollowUp)
+	if a.sb.showThinking {
 		t.Fatal("/thinking off did not hide thinking")
 	}
 
 	// Bare /thinking toggles back on.
-	m.input.SetValue("/thinking")
-	m.submit(submitFollowUp)
-	if !m.transcript.showThinking {
+	a.prompt.setValue("/thinking")
+	a.submit(submitFollowUp)
+	if !a.sb.showThinking {
 		t.Fatal("bare /thinking did not re-show thinking")
 	}
 
-	// The toggle is retroactive: blocks captured while hidden appear.
-	tr := m.transcript
-	tr.beginThinking()
-	tr.appendThinkingDelta("captured while hidden")
-	tr.endThinking()
-	tr.setShowThinking(false)
-	out := tr.render(80)
+	// The toggle is retroactive: entries captured while hidden appear.
+	a.sb.beginThinking()
+	a.sb.appendThinkingDelta("captured while hidden")
+	a.sb.endThinking()
+	a.sb.setShowThinking(false)
+	out := sbText(a.sb, 80, false, false)
 	if strings.Contains(out, "captured while hidden") {
 		t.Fatal("thinking leaked while hidden")
 	}
-	m.input.SetValue("/thinking")
-	m.submit(submitFollowUp)
-	out = tr.render(80)
+	a.prompt.setValue("/thinking")
+	a.submit(submitFollowUp)
+	out = sbText(a.sb, 80, false, true)
 	if !strings.Contains(out, "captured while hidden") {
 		t.Fatalf("thinking not revealed after toggle:\n%s", out)
 	}
 
 	// An invalid argument is rejected without changing state.
-	m.input.SetValue("/thinking banana")
-	m.submit(submitFollowUp)
-	if !m.transcript.showThinking || m.statusMsg != "usage: /thinking [on|off]" {
-		t.Fatalf("bad arg: show=%v statusMsg=%q", m.transcript.showThinking, m.statusMsg)
+	a.prompt.setValue("/thinking banana")
+	a.submit(submitFollowUp)
+	if !a.sb.showThinking || a.statusMsg != "usage: /thinking [on|off]" {
+		t.Fatalf("bad arg: show=%v statusMsg=%q", a.sb.showThinking, a.statusMsg)
 	}
 }
 
 func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "old-model", "")
+	a := newTestApp(t, agent.Config{}, []types.Message{userMessage("prior")})
 
-	m.availableModels = func() []modelcatalog.Model { return []modelcatalog.Model{{Provider: "local", ID: "new-model"}} }
-	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
-		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
+	a.availableModels = func() []modelcatalog.Model { return []modelcatalog.Model{{Provider: "local", ID: "new-model"}} }
+	a.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return a.r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
 	}
-	m.input.SetValue("/model local/new-model")
-	m.submit(submitFollowUp)
-	if r.cfg.Model.ID != "new-model" || m.modelID != "local/new-model" {
-		t.Fatalf("model ids = %q/%q, want local/new-model", r.cfg.Model.ID, m.modelID)
+	a.prompt.setValue("/model local/new-model")
+	a.submit(submitFollowUp)
+	if a.r.cfg.Model.ID != "new-model" || a.modelID != "local/new-model" {
+		t.Fatalf("model ids = %q/%q, want local/new-model", a.r.cfg.Model.ID, a.modelID)
 	}
-	if len(r.history) != 1 {
-		t.Fatalf("history length = %d, want unchanged history", len(r.history))
+	if len(a.r.history) != 1 {
+		t.Fatalf("history length = %d, want unchanged history", len(a.r.history))
 	}
 
-	m.input.SetValue("/clear")
-	m.submit(submitFollowUp)
-	if len(m.transcript.blocks) != 0 {
-		t.Fatalf("clear left %d transcript blocks", len(m.transcript.blocks))
+	a.prompt.setValue("/clear")
+	a.submit(submitFollowUp)
+	if len(a.sb.entries) != 0 {
+		t.Fatalf("clear left %d scrollback entries", len(a.sb.entries))
 	}
-	if len(r.history) != 1 {
-		t.Fatalf("clear changed history length to %d", len(r.history))
+	if len(a.r.history) != 1 {
+		t.Fatalf("clear changed history length to %d", len(a.r.history))
 	}
 }
 
 func TestNewCommandResetsConversation(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, []types.Message{userMessage("prior")})
+	a := newTestApp(t, agent.Config{}, []types.Message{userMessage("prior")})
 	created := false
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "", func() error {
+	a.newSession = func() error {
 		created = true
-		r.reset()
+		a.r.reset()
 		return nil
-	})
-	m.transcript.addUser("prior")
-	m.usage.Input = 10
-	m.input.SetValue("/new")
-	m.submit(submitFollowUp)
+	}
+	a.sb.addUser("prior")
+	a.usage.Input = 10
+	a.prompt.setValue("/new")
+	a.submit(submitFollowUp)
 
 	if !created {
 		t.Fatal("new-session callback was not called")
 	}
-	if len(r.history) != 0 || len(m.transcript.blocks) != 0 || m.usage.Input != 0 {
-		t.Fatalf("/new did not reset conversation: history=%d blocks=%d input=%d", len(r.history), len(m.transcript.blocks), m.usage.Input)
+	if len(a.r.history) != 0 || len(a.sb.entries) != 0 || a.usage.Input != 0 {
+		t.Fatalf("/new did not reset conversation: history=%d entries=%d input=%d", len(a.r.history), len(a.sb.entries), a.usage.Input)
 	}
 }
 
 func TestResumeCommandSelectsAndLoadsSession(t *testing.T) {
-	q := newMsgQueue()
-	r := newRunner(agent.Config{}, q, []types.Message{userMessage("current")})
-	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	a := newTestApp(t, agent.Config{}, []types.Message{userMessage("current")})
 	info := session.Info{ID: "session-2", Modified: time.Now(), Preview: "resumed prompt"}
-	m.listSessions = func() ([]session.Info, error) {
+	a.listSessions = func() ([]session.Info, error) {
 		return []session.Info{info}, nil
 	}
 	resumedHistory := []types.Message{userMessage("resumed prompt")}
 	var resumedID string
-	m.resumeSession = func(id string) ([]types.Message, error) {
+	a.resumeSession = func(id string) ([]types.Message, error) {
 		resumedID = id
 		return resumedHistory, nil
 	}
 
-	m.runCommand("/resume")
-	if !m.sessions.active || len(m.sessions.items) != 1 {
-		t.Fatalf("session picker = active %v, items %d", m.sessions.active, len(m.sessions.items))
+	a.runCommand("/resume")
+	if a.modalKind != modalSessions || len(a.sessions.items) != 1 {
+		t.Fatalf("session modal = %v, items %d", a.modalKind, len(a.sessions.items))
 	}
-	m.resumeSelectedSession()
+	a.resumeSelected()
 	if resumedID != info.ID {
 		t.Fatalf("resumed id = %q, want %q", resumedID, info.ID)
 	}
-	if m.sessions.active {
-		t.Fatal("session picker remained open")
+	if a.modalKind == modalSessions {
+		t.Fatal("session modal remained open")
 	}
-	if len(r.history) != 1 || textOf(r.history[0]) != "resumed prompt" {
-		t.Fatalf("runner history = %#v, want resumed history", r.history)
+	if len(a.r.history) != 1 || textOf(a.r.history[0]) != "resumed prompt" {
+		t.Fatalf("runner history = %#v, want resumed history", a.r.history)
 	}
-	if len(m.transcript.blocks) != 1 || m.transcript.blocks[0].text != "resumed prompt" {
-		t.Fatalf("transcript was not replaced with resumed history: %#v", m.transcript.blocks)
+	if len(a.sb.entries) != 1 || a.sb.entries[0].text != "resumed prompt" {
+		t.Fatalf("scrollback was not replaced with resumed history: %#v", a.sb.entries)
 	}
 }

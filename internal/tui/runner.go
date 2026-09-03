@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/types"
@@ -13,64 +11,28 @@ import (
 
 var errNothingToCompact = errors.New("there is not enough conversation history to compact")
 
-// agentEventMsg wraps an AgentEvent for delivery into the bubbletea Update
-// loop. generation prevents late events from a prior operation repainting a
-// transcript after /clear or /new.
-type agentEventMsg struct {
-	ev         types.AgentEvent
-	generation uint64
-}
-
-// agentDoneMsg signals that the current agent Run finished (or errored).
-type agentDoneMsg struct {
-	err        error
-	generation uint64
-}
-
-// agentTitleMsg carries the isolated title-generator result to the UI. It is
-// deliberately not an AgentEvent, so it cannot appear in the transcript.
-type agentTitleMsg struct {
-	title      string
-	generation uint64
-}
-
-type runnerEvent struct {
-	ev         *types.AgentEvent
-	done       *agentDoneMsg
-	title      *agentTitleMsg
-	generation uint64
-}
-
-// eventChannelClosedMsg is delivered if the event channel is ever closed. In
-// practice r.events is a single long-lived pump that is never closed, so this
-// is defensive/dead code kept only so waitForEvent has a well-defined return
-// for a closed channel.
-type eventChannelClosedMsg struct{}
-
 // runner owns the agent loop and its persistent conversation. A single runner
 // backs the whole session; each user prompt starts a new Run on the same
-// underlying message history, mirroring pi where the interactive loop keeps
-// one conversation alive across turns.
+// underlying message history. Events are delivered to the app through
+// unbuffered callback wiring rather than a UI framework.
 type runner struct {
 	cfg     agent.Config
+	app     *app
 	queue   *msgQueue
 	history []types.Message
 
-	// events carries AgentEvents from the loop goroutine to the UI. It is
-	// buffered generously so streaming deltas rarely block the loop; the UI
-	// drains it continuously via waitForEvent.
-	events chan runnerEvent
-
 	generation uint64
 
+	// synchronous executes runs inline instead of spawning a goroutine. It is
+	// set by tests so runs are deterministic; the UI always leaves it false.
+	synchronous bool
+
 	// generateTitle is invoked once, before the first main-agent request of a
-	// fresh session. It must persist the title itself and returns it for UI use.
+	// fresh session. It must persist the title itself.
 	generateTitle func(context.Context, string) (string, error)
 
-	// onEvent, if set, is called for every AgentEvent (on the loop goroutine,
-	// before the event is forwarded to the UI channel). Used to persist
-	// messages and compactions to the session file as they complete, so the
-	// session stays in sync with the loop's in-memory history.
+	// onEvent is called for every AgentEvent (on the loop goroutine, before
+	// the event is forwarded). Used to persist messages and compactions.
 	onEvent func(types.AgentEvent) error
 }
 
@@ -80,33 +42,40 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 	return &runner{
 		cfg:     cfg,
 		queue:   queue,
-		history: history,
-		events:  make(chan runnerEvent, 1024),
+		history: append([]types.Message(nil), history...),
 	}
 }
 
+// bindApp connects the runner to the app's event channel.
+func (r *runner) bindApp(a *app) { r.app = a }
+
 // start launches an agent Run for the given prompt in a background goroutine.
-// Completion travels through the same FIFO channel as AgentEvents, ensuring the
-// UI cannot become idle before the final transcript event has rendered.
-func (r *runner) start(ctx context.Context, prompt types.Message) tea.Cmd {
+// Completion travels through the same FIFO channel as AgentEvents, so the UI
+// cannot become idle before the final event has rendered.
+func (r *runner) start(ctx context.Context, prompt types.Message) {
 	r.generation++
 	generation := r.generation
-	return r.run(ctx, generation, func(loop *agent.Loop) error {
+	action := func(loop *agent.Loop) error {
 		if len(r.history) == 0 && r.generateTitle != nil {
 			if title, err := r.generateTitle(ctx, textOf(prompt)); err == nil && title != "" {
-				r.events <- runnerEvent{title: &agentTitleMsg{title: title, generation: generation}, generation: generation}
+				r.sendTitle(title, generation)
 			}
 		}
 		_, err := loop.Run(ctx, []types.Message{prompt})
 		return err
-	})
+	}
+	if r.synchronous {
+		r.run(ctx, generation, action)
+		return
+	}
+	go r.run(ctx, generation, action)
 }
 
 // compact runs forced compaction without creating a user message.
-func (r *runner) compact(ctx context.Context) tea.Cmd {
+func (r *runner) compact(ctx context.Context) {
 	r.generation++
 	generation := r.generation
-	return r.run(ctx, generation, func(loop *agent.Loop) error {
+	action := func(loop *agent.Loop) error {
 		compacted, err := loop.Compact(ctx)
 		if err != nil {
 			return err
@@ -115,33 +84,40 @@ func (r *runner) compact(ctx context.Context) tea.Cmd {
 			return errNothingToCompact
 		}
 		return nil
-	})
+	}
+	if r.synchronous {
+		r.run(ctx, generation, action)
+		return
+	}
+	go r.run(ctx, generation, action)
 }
 
-func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.Loop) error) tea.Cmd {
-	return func() tea.Msg {
-		sink := func(sctx context.Context, ev types.AgentEvent) error {
-			// Persist messages/compactions to the session before forwarding to
-			// the UI, so the session stays in sync with the loop's history.
-			if r.onEvent != nil {
-				if err := r.onEvent(ev); err != nil {
-					return err
-				}
-			}
-			select {
-			case r.events <- runnerEvent{ev: &ev, generation: generation}:
-				return nil
-			case <-sctx.Done():
-				return sctx.Err()
+func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.Loop) error) {
+	sink := func(sctx context.Context, ev types.AgentEvent) error {
+		if r.onEvent != nil {
+			if err := r.onEvent(ev); err != nil {
+				return err
 			}
 		}
-		loop := agent.New(r.cfg, r.history, sink)
-		err := action(loop)
-		// Persist the full conversation so subsequent prompts continue it.
-		r.history = loop.Messages()
-		done := agentDoneMsg{err: err, generation: generation}
-		r.events <- runnerEvent{done: &done, generation: generation}
-		return nil
+		select {
+		case r.app.agentCh <- agentEventEnvelope{ev: ev, generation: generation}:
+			return nil
+		case <-sctx.Done():
+			return sctx.Err()
+		}
+	}
+	loop := agent.New(r.cfg, r.history, sink)
+	err := action(loop)
+	r.history = loop.Messages()
+	if r.app != nil {
+		r.app.loopCh <- loopEvent{done: &agentDoneEvent{err: err, generation: generation}}
+	}
+}
+
+// sendTitle forwards a generated session title to the UI.
+func (r *runner) sendTitle(title string, generation uint64) {
+	if r.app != nil {
+		r.app.loopCh <- loopEvent{title: &agentTitleEvent{title: title, generation: generation}}
 	}
 }
 
@@ -167,23 +143,4 @@ func (r *runner) resume(history []types.Message) {
 	r.discardEvents()
 	r.history = append([]types.Message(nil), history...)
 	r.queue.DrainAll()
-}
-
-// waitForEvent returns a command that blocks until the next AgentEvent is
-// available (or the channel drains during idle). It re-arms itself from Update
-// after each delivered event, forming a continuous pump.
-func (r *runner) waitForEvent() tea.Cmd {
-	return func() tea.Msg {
-		ev, ok := <-r.events
-		if !ok {
-			return eventChannelClosedMsg{}
-		}
-		if ev.title != nil {
-			return *ev.title
-		}
-		if ev.done != nil {
-			return *ev.done
-		}
-		return agentEventMsg{ev: *ev.ev, generation: ev.generation}
-	}
 }
