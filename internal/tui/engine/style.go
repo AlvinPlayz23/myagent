@@ -159,13 +159,29 @@ func (s Style) diff(prev Style, full string) string {
 	if s.Bg != prev.Bg {
 		emit(s.Bg.seq(false))
 	}
+	intensity := AttrBold | AttrDim
+	if removed := prev.Attr & intensity &^ s.Attr; removed != 0 {
+		// SGR 22 clears both intensity flags, so re-enable the one that remains.
+		emit("22")
+		if s.Attr&AttrBold != 0 {
+			emit("1")
+		}
+		if s.Attr&AttrDim != 0 {
+			emit("2")
+		}
+	} else {
+		if s.Attr&AttrBold != 0 && prev.Attr&AttrBold == 0 {
+			emit("1")
+		}
+		if s.Attr&AttrDim != 0 && prev.Attr&AttrDim == 0 {
+			emit("2")
+		}
+	}
 	for _, mod := range []struct {
 		a Attr
 		c string
 		r string
 	}{
-		{AttrBold, "1", "22"},
-		{AttrDim, "2", "22"},
 		{AttrItalic, "3", "23"},
 		{AttrUnderline, "4", "24"},
 		{AttrReverse, "7", "27"},

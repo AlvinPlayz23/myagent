@@ -30,7 +30,8 @@ const (
 	discoveryTTL = 10 * time.Minute
 )
 
-var catalogWriteMu sync.Mutex
+// catalogFileMu avoids redundant OS lock acquisition within this process.
+var catalogFileMu sync.Mutex
 
 // Model is a provider-qualified, selectable model.
 type Model struct {
@@ -55,8 +56,8 @@ type Provider struct {
 
 // FindModel returns exact provider/model metadata, including custom models.
 func (c *Catalog) FindModel(provider, id string) (Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, model := range append(append([]Model(nil), c.data.Models...), c.data.Custom...) {
 		if model.Provider == provider && model.ID == id {
 			return model, true
@@ -68,8 +69,8 @@ func (c *Catalog) FindModel(provider, id string) (Model, bool) {
 // FindBuiltinModel returns metadata sourced from models.dev, excluding
 // discovered custom IDs whose capabilities are unknown.
 func (c *Catalog) FindBuiltinModel(provider, id string) (Model, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, model := range c.data.Models {
 		if model.Provider == provider && model.ID == id {
 			return model, true
@@ -93,8 +94,8 @@ func (c *Catalog) Enrich(model llm.Model) llm.Model {
 // IsBuiltinProvider reports whether a provider is present in the downloaded
 // catalog. Presets are used as an offline fallback for first-run operation.
 func (c *Catalog) IsBuiltinProvider(id string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, provider := range c.data.Providers {
 		if provider.ID == id {
 			return true
@@ -114,7 +115,7 @@ type cache struct {
 type Catalog struct {
 	path string
 	data cache
-	mu   sync.Mutex
+	mu   sync.RWMutex
 
 	// discovered caches per-provider live /v1/models results in memory.
 	// It is deliberately not persisted: discovered IDs survive restarts
@@ -132,33 +133,101 @@ func New(dir string) *Catalog { return &Catalog{path: filepath.Join(dir, cacheFi
 
 // Load restores cached choices. A missing cache is not an error.
 func (c *Catalog) Load() error {
-	b, err := os.ReadFile(c.path)
-	if os.IsNotExist(err) {
+	return c.withFileLock(func() error {
+		data, found, err := loadCache(c.path)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		c.mu.Lock()
+		c.data = data
+		c.mu.Unlock()
 		return nil
-	}
+	})
+}
+
+// withFileLock serializes every cache read and read-modify-write cycle across
+// both Catalog instances and cooperating myagent processes.
+func (c *Catalog) withFileLock(fn func() error) error {
+	catalogFileMu.Lock()
+	defer catalogFileMu.Unlock()
+	release, err := lockCatalogFile(c.path)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, &c.data)
+	defer release()
+	return fn()
 }
 
-func (c *Catalog) Empty() bool { return len(c.data.Models) == 0 }
+func loadCache(path string) (cache, bool, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return cache{}, false, nil
+	}
+	if err != nil {
+		return cache{}, false, err
+	}
+	var data cache
+	if err := json.Unmarshal(b, &data); err != nil {
+		return cache{}, false, err
+	}
+	return data, true, nil
+}
+
+func cloneCache(data cache) cache {
+	return cache{
+		CheckedAt: data.CheckedAt,
+		Models:    append([]Model(nil), data.Models...),
+		Providers: append([]Provider(nil), data.Providers...),
+		Custom:    append([]Model(nil), data.Custom...),
+	}
+}
+
+// currentCacheLocked returns the newest persisted state, falling back to the
+// in-memory state before the cache has been created.
+func (c *Catalog) currentCacheLocked() (cache, error) {
+	data, found, err := loadCache(c.path)
+	if err != nil {
+		return cache{}, err
+	}
+	if found {
+		return data, nil
+	}
+	return cloneCache(c.data), nil
+}
+
+func (c *Catalog) Empty() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.data.Models) == 0
+}
 
 // NeedsRefresh reports whether the cache should be refreshed. A stale catalog
 // remains usable while a refresh is attempted.
 func (c *Catalog) NeedsRefresh(now time.Time) bool {
 	// Older cache versions did not persist provider metadata. Refresh them even
 	// when their model entries are otherwise still fresh.
-	return c.Empty() || len(c.data.Providers) == 0 || c.data.CheckedAt.IsZero() || now.Sub(c.data.CheckedAt) >= 4*time.Hour
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.data.Models) == 0 || len(c.data.Providers) == 0 || c.data.CheckedAt.IsZero() || now.Sub(c.data.CheckedAt) >= 4*time.Hour
 }
 
-// Models returns only candidates for the configured provider names.
+// Models returns unique candidates for the configured provider names. Built-in
+// catalog metadata wins over an identically named discovered custom model.
 func (c *Catalog) Models(providers map[string]struct{}) []Model {
+	c.mu.RLock()
 	all := append(append([]Model(nil), c.data.Models...), c.data.Custom...)
+	c.mu.RUnlock()
 	out := make([]Model, 0, len(all))
+	seen := make(map[string]struct{}, len(all))
 	for _, model := range all {
 		if _, ok := providers[model.Provider]; ok {
-			out = append(out, model)
+			if _, duplicate := seen[model.Ref()]; !duplicate {
+				seen[model.Ref()] = struct{}{}
+				out = append(out, model)
+			}
 		}
 	}
 	return out
@@ -167,8 +236,8 @@ func (c *Catalog) Models(providers map[string]struct{}) []Model {
 // CachedDiscovery returns IDs from a recent live /v1/models lookup for the
 // provider, if one is still fresh. The returned slice is a copy.
 func (c *Catalog) CachedDiscovery(provider string, now time.Time) ([]string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	entry, ok := c.discovered[provider]
 	if !ok || now.Sub(entry.at) >= discoveryTTL {
 		return nil, false
@@ -191,8 +260,6 @@ func (c *Catalog) RememberDiscovery(provider string, ids []string, now time.Time
 // SetCustomModels stores model IDs discovered from a user-configured endpoint.
 // They are kept independently of models.dev so refreshes cannot erase them.
 func (c *Catalog) SetCustomModels(provider, providerName string, ids []string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
 		return fmt.Errorf("custom provider name is required")
@@ -200,48 +267,72 @@ func (c *Catalog) SetCustomModels(provider, providerName string, ids []string) e
 	if providerName == "" {
 		providerName = provider
 	}
-	seen := make(map[string]struct{}, len(ids))
-	custom := c.data.Custom[:0]
-	for _, model := range c.data.Custom {
-		if model.Provider != provider {
-			custom = append(custom, model)
+	return c.withFileLock(func() error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		data, err := c.currentCacheLocked()
+		if err != nil {
+			return err
 		}
-	}
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
+		seen := make(map[string]struct{}, len(ids))
+		custom := make([]Model, 0, len(data.Custom)+len(ids))
+		for _, model := range data.Custom {
+			if model.Provider != provider {
+				custom = append(custom, model)
+			}
 		}
-		if _, ok := seen[id]; ok {
-			continue
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			custom = append(custom, Model{Provider: provider, ProviderName: providerName, ID: id})
 		}
-		seen[id] = struct{}{}
-		custom = append(custom, Model{Provider: provider, ProviderName: providerName, ID: id})
-	}
-	c.data.Custom = custom
-	sort.Slice(c.data.Custom, func(i, j int) bool { return c.data.Custom[i].Ref() < c.data.Custom[j].Ref() })
-	return c.save()
+		data.Custom = custom
+		sort.Slice(data.Custom, func(i, j int) bool { return data.Custom[i].Ref() < data.Custom[j].Ref() })
+		if err := saveCache(c.path, data); err != nil {
+			return err
+		}
+		c.data = data
+		return nil
+	})
 }
 
 // RemoveCustomProvider removes catalog entries belonging to a deleted or
 // renamed user-configured provider.
 func (c *Catalog) RemoveCustomProvider(provider string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := c.data.Custom[:0]
-	for _, model := range c.data.Custom {
-		if model.Provider != provider {
-			out = append(out, model)
+	return c.withFileLock(func() error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		data, err := c.currentCacheLocked()
+		if err != nil {
+			return err
 		}
-	}
-	c.data.Custom = out
-	return c.save()
+		out := make([]Model, 0, len(data.Custom))
+		for _, model := range data.Custom {
+			if model.Provider != provider {
+				out = append(out, model)
+			}
+		}
+		data.Custom = out
+		if err := saveCache(c.path, data); err != nil {
+			return err
+		}
+		c.data = data
+		return nil
+	})
 }
 
 // Providers returns compatible catalog providers in stable display order.
 func (c *Catalog) Providers() []Provider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if len(c.data.Providers) == 0 {
-		return providersFromModels(c.data.Models)
+		return providersFromModels(append([]Model(nil), c.data.Models...))
 	}
 	out := make([]Provider, len(c.data.Providers))
 	copy(out, c.data.Providers)
@@ -296,45 +387,93 @@ func (c *Catalog) Refresh(ctx context.Context, client *http.Client) error {
 	if len(models) == 0 {
 		return fmt.Errorf("models catalog contains no compatible tool-capable models")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.data = cache{CheckedAt: time.Now(), Models: models, Providers: providers, Custom: c.data.Custom}
-	return c.save()
+	return c.withFileLock(func() error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		data, err := c.currentCacheLocked()
+		if err != nil {
+			return err
+		}
+		data.CheckedAt = time.Now()
+		data.Models = append([]Model(nil), models...)
+		data.Providers = append([]Provider(nil), providers...)
+		if err := saveCache(c.path, data); err != nil {
+			return err
+		}
+		c.data = data
+		return nil
+	})
 }
 
-func (c *Catalog) save() error {
-	// Catalogs are constructed in multiple UI flows, so serialize writes across
-	// instances as well as individual Catalog mutations.
-	catalogWriteMu.Lock()
-	defer catalogWriteMu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
+func saveCache(path string, data cache) error {
+	return saveCacheWithReplace(path, data, os.Rename)
+}
+
+func saveCacheWithReplace(path string, data cache, replace func(string, string) error) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(c.data, "", "  ")
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
 	b = append(b, '\n')
 
-	// Update the existing cache entry directly rather than replacing it with a
-	// rename. Windows can allow writes to a file while denying replacement of
-	// its directory entry. This cache is rebuildable, so direct persistence is
-	// preferable to blocking provider configuration on that restriction.
-	f, err := os.OpenFile(c.path, os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.CreateTemp(dir, cacheFile+"-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := f.Truncate(0); err != nil {
-		return err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
+	tempPath := f.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+		_ = os.Remove(tempPath)
+	}()
 	if _, err := f.Write(b); err != nil {
 		return err
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	closed = true
+	if err := replace(tempPath, path); err != nil {
+		// Windows can permit writes to an open cache while denying replacement
+		// of its directory entry. Keep that cache usable in this rare case.
+		if fallbackErr := writeCacheInPlace(path, b); fallbackErr != nil {
+			return fmt.Errorf("replace models cache: %w; in-place fallback: %w", err, fallbackErr)
+		}
+	}
+	return nil
+}
+
+func writeCacheInPlace(path string, b []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 type provider struct {

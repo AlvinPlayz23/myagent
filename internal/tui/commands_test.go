@@ -210,12 +210,22 @@ func TestModelSwitchKeepsEffortForPermissiveModel(t *testing.T) {
 
 func TestInitCommandStartsRunWithInitPrompt(t *testing.T) {
 	a := newTestApp(t, agent.Config{}, nil)
+	var sent types.Message
+	a.r.onEvent = func(event types.AgentEvent) error {
+		if event.Type == types.EventMessageStart && event.Message != nil && event.Message.Role == types.RoleUser {
+			sent = *event.Message
+		}
+		return nil
+	}
 
 	a.runCommand("/init")
-	// The model receives the full instruction, but the scrollback shows the
-	// command the user actually typed.
-	if a.activePrompt == nil || !strings.Contains(a.activePrompt.Content[0].Text, "AGENTS.md") {
-		t.Fatalf("active prompt = %#v, want the init prompt", a.activePrompt)
+	if a.working {
+		t.Fatal("synchronous init run did not complete")
+	}
+	// The agent event carries the full instruction, while scrollback retains
+	// the command the user actually typed.
+	if !strings.Contains(textOf(sent), "AGENTS.md") {
+		t.Fatalf("sent prompt = %#v, want the init prompt", sent)
 	}
 	rendered := sbText(a.sb, 80, false, true)
 	if !strings.Contains(rendered, "/init") {
@@ -223,6 +233,25 @@ func TestInitCommandStartsRunWithInitPrompt(t *testing.T) {
 	}
 	if strings.Contains(rendered, "Analyse this repository") {
 		t.Fatalf("scrollback leaked the full init prompt: %q", rendered)
+	}
+}
+
+func TestWelcomeModelShortcutOpensPicker(t *testing.T) {
+	a := newTestApp(t, agent.Config{}, nil)
+	a.availableModels = func() []modelcatalog.Model {
+		return []modelcatalog.Model{{Provider: "openrouter", ID: "model"}}
+	}
+	a.selectModel = func(string, string) (llm.Provider, llm.Model, error) {
+		return nil, llm.Model{}, nil
+	}
+
+	a.welcomeKey(engine.Key{Code: "m", Text: "m"})
+
+	if a.welcome || a.modalKind != modalModels || !a.models.active {
+		t.Fatalf("model shortcut state = welcome %v modal %d active %v", a.welcome, a.modalKind, a.models.active)
+	}
+	if a.prompt.value() != "" {
+		t.Fatalf("model shortcut inserted prompt text %q", a.prompt.value())
 	}
 }
 
@@ -402,20 +431,40 @@ func TestCommandPickerDismissesUntilInputChanges(t *testing.T) {
 	}
 }
 
-func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
+func TestCommandPickerCompletesRequiredArgumentCommandWithoutSubmitting(t *testing.T) {
 	a := newTestApp(t, agent.Config{}, nil)
-	a.prompt.setValue("/m")
+	a.prompt.setValue("/ren")
 	a.picker.sync(a.prompt.value())
 
 	a.acceptCommand(true)
 	if a.working {
 		t.Fatal("argument command should not submit")
 	}
-	if got := a.prompt.value(); got != "/model " {
-		t.Fatalf("input = %q, want %q", got, "/model ")
+	if got := a.prompt.value(); got != "/rename " {
+		t.Fatalf("input = %q, want %q", got, "/rename ")
 	}
 	if a.picker.active {
 		t.Fatal("picker remained open after accepting a command")
+	}
+}
+
+func TestCommandPickerSubmitsOptionalArgumentCommand(t *testing.T) {
+	a := newTestApp(t, agent.Config{}, nil)
+	a.availableModels = func() []modelcatalog.Model {
+		return []modelcatalog.Model{{Provider: "local", ID: "test-model"}}
+	}
+	a.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
+		return a.r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
+	}
+	a.prompt.setValue("/m")
+	a.picker.sync(a.prompt.value())
+
+	a.acceptCommand(true)
+	if a.prompt.value() != "" {
+		t.Fatalf("input = %q, want cleared", a.prompt.value())
+	}
+	if a.modalKind != modalModels || !a.models.active {
+		t.Fatalf("model picker = kind %v active %v, want open", a.modalKind, a.models.active)
 	}
 }
 

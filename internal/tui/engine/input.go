@@ -64,12 +64,17 @@ type Event struct {
 // Decoder reads the tty byte stream and emits Events. Lone-Esc detection
 // waits for a following sequence before reporting a bare Esc.
 type Decoder struct {
-	out      chan Event
-	buf      []byte
-	escDelay time.Duration
+	out         chan Event
+	buf         []byte
+	escDelay    time.Duration
+	escTimer    *time.Timer
+	escReady    bool
+	escDeadline time.Time
+	escEpoch    uint64
 
-	mu     sync.Mutex
-	closed bool
+	mu      sync.Mutex
+	drainMu sync.Mutex
+	closed  bool
 }
 
 // NewDecoder starts a goroutine decoding f into the returned channel.
@@ -95,28 +100,77 @@ func (d *Decoder) readLoop(f *os.File) {
 		if err != nil {
 			d.mu.Lock()
 			d.closed = true
+			d.stopEscTimerLocked()
 			d.mu.Unlock()
+			d.drainMu.Lock()
 			close(d.out)
+			d.drainMu.Unlock()
 			return
 		}
 	}
 }
 
 func (d *Decoder) drain() {
+	d.drainMu.Lock()
+	defer d.drainMu.Unlock()
 	for {
 		d.mu.Lock()
 		ev, used := d.decodeOne()
 		if used == 0 {
+			d.scheduleEscLocked()
 			d.mu.Unlock()
 			return
 		}
 		d.buf = d.buf[used:]
+		d.escReady = false
+		d.stopEscTimerLocked()
 		closed := d.closed
 		d.mu.Unlock()
 		if ev != nil && !closed {
 			d.out <- *ev
 		}
 	}
+}
+
+// scheduleEscLocked resolves a lone escape after a short delay without
+// blocking the reader that must receive a possible CSI continuation.
+func (d *Decoder) scheduleEscLocked() {
+	if d.closed || d.escTimer != nil || len(d.buf) != 1 || d.buf[0] != 0x1b {
+		return
+	}
+	d.escEpoch++
+	epoch := d.escEpoch
+	d.escDeadline = time.Now().Add(d.escDelay)
+	d.escTimer = time.AfterFunc(d.escDelay, func() { d.resolveEscTimer(epoch) })
+}
+
+// stopEscTimerLocked invalidates a fired callback as well as stopping a
+// pending timer, so an older Escape cannot resolve a newer one.
+func (d *Decoder) stopEscTimerLocked() {
+	d.escEpoch++
+	d.escDeadline = time.Time{}
+	if d.escTimer != nil {
+		d.escTimer.Stop()
+		d.escTimer = nil
+	}
+}
+
+func (d *Decoder) escResolvedLocked() bool {
+	return d.escReady || (!d.escDeadline.IsZero() && !time.Now().Before(d.escDeadline))
+}
+
+func (d *Decoder) resolveEscTimer(epoch uint64) {
+	d.mu.Lock()
+	if d.closed || epoch != d.escEpoch {
+		d.mu.Unlock()
+		return
+	}
+	d.escTimer = nil
+	if len(d.buf) == 1 && d.buf[0] == 0x1b {
+		d.escReady = true
+	}
+	d.mu.Unlock()
+	d.drain()
 }
 
 // decodeOne decodes the first event in the buffer, returning bytes consumed
@@ -126,9 +180,15 @@ func (d *Decoder) decodeOne() (*Event, int) {
 	if len(b) == 0 {
 		return nil, 0
 	}
-	// Incomplete CSI/SS3/OSC prefix: wait for the terminator.
+	// Once the lone-Escape deadline has elapsed, continuation bytes belong to
+	// the next event rather than turning the resolved key into Alt+input.
+	if b[0] == 0x1b && d.escResolvedLocked() {
+		return keyEvent("esc"), 1
+	}
+	// Incomplete CSI/SS3/OSC prefixes wait for their terminator. A lone escape
+	// is resolved by the timer scheduled from drain.
 	if b[0] == 0x1b && len(b) < 2 {
-		if d.escWait() {
+		if d.escResolvedLocked() {
 			return keyEvent("esc"), 1
 		}
 		return nil, 0
@@ -171,29 +231,11 @@ func (d *Decoder) decodeOne() (*Event, int) {
 	}
 }
 
-func (d *Decoder) escWait() bool {
-	// A lone ESC with no bytes following within escDelay resolves to Esc.
-	deadline := time.Now().Add(d.escDelay)
-	for time.Now().Before(deadline) {
-		d.mu.Lock()
-		n := len(d.buf)
-		d.mu.Unlock()
-		if n >= 2 {
-			return false
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	d.mu.Lock()
-	n := len(d.buf)
-	d.mu.Unlock()
-	return n < 2
-}
-
 // decodeEscape handles every 0x1b-prefixed sequence.
 func (d *Decoder) decodeEscape() (*Event, int) {
 	b := d.buf
 	if len(b) < 2 {
-		if d.escWait() {
+		if d.escResolvedLocked() {
 			return keyEvent("esc"), 1
 		}
 		return nil, 0

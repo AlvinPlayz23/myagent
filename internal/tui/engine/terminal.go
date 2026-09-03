@@ -4,26 +4,32 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 
-	"golang.org/x/sys/unix"
+	"github.com/charmbracelet/x/term"
 )
 
 // Terminal owns the tty: raw mode, alternate screen, mouse tracking, and the
 // cell diff that turns a Screen into ANSI output on every flush.
 type Terminal struct {
-	in     *os.File
-	out    *bufio.Writer
-	outMu  sync.Mutex
-	oldTio *unix.Termios
-	Prev   *Screen // last flushed frame (nil = full repaint)
+	in         *os.File
+	out        *bufio.Writer
+	outMu      sync.Mutex
+	oldTio     *term.State
+	Prev       *Screen // last flushed frame (nil = full repaint)
+	styleKnown bool
+	style      Style
 	// Mouse enables SGR mouse tracking before entering the alt screen.
 	Mouse bool
 }
 
-// OpenTerminal prepares /dev/tty for raw, unbuffered use.
+// OpenTerminal prepares the controlling terminal for raw, unbuffered use.
 func OpenTerminal() (*Terminal, error) {
+	if runtime.GOOS == "windows" {
+		return &Terminal{in: os.Stdin, out: bufio.NewWriterSize(os.Stdout, 64*1024)}, nil
+	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("no controlling terminal: %w", err)
@@ -47,6 +53,7 @@ func (t *Terminal) Enter() {
 	b.WriteString("\x1b[?25l") // hide cursor
 	fmt.Fprint(t.out, b.String())
 	t.out.Flush()
+	t.styleKnown = false
 }
 
 // Leave restores the primary screen and disables tracking modes.
@@ -77,9 +84,14 @@ func (t *Terminal) frame(cur *Screen, cx, cy int, showCursor bool) string {
 		b.WriteString("\x1b[2J") // clear once so stale content never bleeds
 	}
 	blank := Style{}
-	last := blank
+	last := t.style
+	if !t.styleKnown {
+		b.WriteString("\x1b[0m")
+		last = Style{Fg: Def(), Bg: Def()}
+		t.styleKnown = true
+	}
 	movePending := false
-	lastMoveX, lastMoveY := -1, -1
+	cursorX, cursorY := -1, -1
 	for y := 0; y < cur.H; y++ {
 		for x := 0; x < cur.W; x++ {
 			cell := cur.Cells[y*cur.W+x]
@@ -93,11 +105,10 @@ func (t *Terminal) frame(cur *Screen, cx, cy int, showCursor bool) string {
 				movePending = true
 				continue
 			}
-			if movePending || lastMoveX != x || lastMoveY != y {
+			if movePending || cursorX != x || cursorY != y {
 				fmt.Fprintf(&b, "\x1b[%d;%dH", y+1, x+1)
 				movePending = false
 			}
-			lastMoveX, lastMoveY = x, y
 			if cell.Style != last {
 				b.WriteString(cell.Style.diff(last, ""))
 				last = cell.Style
@@ -107,6 +118,8 @@ func (t *Terminal) frame(cur *Screen, cx, cy int, showCursor bool) string {
 			} else {
 				b.WriteRune(cell.Ch)
 			}
+			width := max(1, cell.Width)
+			cursorX, cursorY = x+width, y
 			if cell.Width > 1 {
 				x += cell.Width - 1
 			}
@@ -118,6 +131,7 @@ func (t *Terminal) frame(cur *Screen, cx, cy int, showCursor bool) string {
 	} else {
 		b.WriteString("\x1b[?25l")
 	}
+	t.style = last
 	return b.String()
 }
 
@@ -130,28 +144,18 @@ func (t *Terminal) Resize(w, h int) {
 
 // Raw switches the tty into raw mode.
 func (t *Terminal) Raw() error {
-	fd := int(t.in.Fd())
-	tio, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	state, err := term.MakeRaw(t.in.Fd())
 	if err != nil {
 		return err
 	}
-	t.oldTio = tio
-	raw := *tio
-	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP |
-		unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-	raw.Oflag &^= unix.OPOST
-	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
-	raw.Cflag &^= unix.CSIZE | unix.PARENB
-	raw.Cflag |= unix.CS8
-	raw.Cc[unix.VMIN] = 1
-	raw.Cc[unix.VTIME] = 0
-	return unix.IoctlSetTermios(fd, unix.TCSETS, &raw)
+	t.oldTio = state
+	return nil
 }
 
 // Restore returns the tty to its saved modes and shows the cursor.
 func (t *Terminal) Restore() {
 	if t.oldTio != nil {
-		_ = unix.IoctlSetTermios(int(t.in.Fd()), unix.TCSETS, t.oldTio)
+		_ = term.Restore(t.in.Fd(), t.oldTio)
 	}
 	fmt.Fprint(t.out, "\x1b[?25h\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l")
 	t.out.Flush()
@@ -159,11 +163,11 @@ func (t *Terminal) Restore() {
 
 // TermSize returns the tty window size in cells.
 func TermSize(f *os.File) (int, int) {
-	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
-	if err != nil || ws.Col == 0 || ws.Row == 0 {
+	w, h, err := term.GetSize(f.Fd())
+	if err != nil || w == 0 || h == 0 {
 		return 80, 24
 	}
-	return int(ws.Col), int(ws.Row)
+	return w, h
 }
 
 // Clone deep-copies the screen.

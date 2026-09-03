@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
@@ -15,8 +14,10 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-// chromeHeight counts the status line + footer rows under the scrollback.
-const chromeHeight = 6
+const (
+	footerHeight = 2
+	statusHeight = 1
+)
 
 // tickRate drives the spinner/shimmer animations and elapsed timers.
 const tickRate = 66 * time.Millisecond
@@ -50,6 +51,7 @@ type agentTitleEvent struct {
 
 type discoveryResult struct {
 	provider string
+	request  uint64
 	models   []string
 	err      error
 }
@@ -65,9 +67,8 @@ type app struct {
 	term       *engine.Terminal
 	screen     *engine.Screen
 	input      <-chan engine.Event
-	resizeCh   chan os.Signal
 	loopCh     chan loopEvent
-	agentCh    chan agentEventEnvelope
+	loopDone   chan struct{}
 	start      time.Time
 	generation uint64
 
@@ -112,38 +113,41 @@ type app struct {
 	usage          types.Usage
 
 	// Session metadata.
-	sessionTitle    string
-	hasSessionTitle bool
-	modelID         string
-	cwd             string
-	gitBranch       string
-	discovering     string
-	exportFormat    export.Format
-	escAt           time.Time
+	sessionTitle        string
+	hasSessionTitle     bool
+	modelID             string
+	cwd                 string
+	gitBranch           string
+	discovering         string
+	modelDiscovery      uint64
+	modelDiscoverCancel context.CancelFunc
+	exportFormat        export.Format
+	escAt               time.Time
 
 	// Queued prompts echoed beside the composer.
 	queuedFollowUps []queuedMessage
 	queuedSteering  []types.Message
 
 	// Wiring injected by Run, mirroring the previous model's seams.
-	newSession         func() error
-	saveWelcomeStyle   func(welcomeStyle) error
-	savePromptStyle    func(promptStyle) error
-	setTerminalTitle   func(string)
-	availableModels    func() []modelcatalog.Model
-	discoverModels     func(context.Context, string) ([]string, error)
-	availableProviders func() []modelcatalog.Provider
-	providerConfigured func(string) bool
-	providerIsCustom   func(string) bool
-	providerAPIKey     func(string) string
-	configureProvider  func(modelcatalog.Provider, string) error
-	selectModel        func(string, string) (llm.Provider, llm.Model, error)
-	listSessions       func() ([]session.Info, error)
-	currentSessionID   func() string
-	resumeSession      func(string) ([]types.Message, error)
-	exportSession      func(export.Format, string, bool) (string, error)
-	renameSession      func(string) error
-	clipboardRead      func() (clipboardPayload, error)
+	newSession               func() error
+	saveWelcomeStyle         func(welcomeStyle) error
+	savePromptStyle          func(promptStyle) error
+	setTerminalTitle         func(string)
+	availableModels          func() []modelcatalog.Model
+	discoverModels           func(context.Context, string) ([]string, error)
+	rememberDiscoveredModels func(string, []string)
+	availableProviders       func() []modelcatalog.Provider
+	providerConfigured       func(string) bool
+	providerIsCustom         func(string) bool
+	providerAPIKey           func(string) string
+	configureProvider        func(modelcatalog.Provider, string) error
+	selectModel              func(string, string) (llm.Provider, llm.Model, error)
+	listSessions             func() ([]session.Info, error)
+	currentSessionID         func() string
+	resumeSession            func(string) ([]types.Message, error)
+	exportSession            func(export.Format, string, bool) (string, error)
+	renameSession            func(string) error
+	clipboardRead            func() (clipboardPayload, error)
 
 	keyFor modelcatalog.Provider
 }
@@ -159,7 +163,7 @@ func newApp(ctx context.Context, cfg agent.Config, history []types.Message, mode
 		q:            queue,
 		th:           currentTheme(),
 		loopCh:       make(chan loopEvent, 256),
-		agentCh:      make(chan agentEventEnvelope, 1024),
+		loopDone:     make(chan struct{}),
 		start:        time.Now(),
 		sb:           newScrollback(),
 		prompt:       newPromptWidget(),
@@ -173,6 +177,7 @@ func newApp(ctx context.Context, cfg agent.Config, history []types.Message, mode
 	}
 	a.picker = newCommandPicker()
 	a.effort = newEffortPicker("")
+	a.exportPick = newExportPicker()
 	return a
 }
 
@@ -180,20 +185,35 @@ func newApp(ctx context.Context, cfg agent.Config, history []types.Message, mode
 func (a *app) loop() error {
 	tick := time.NewTicker(tickRate)
 	defer tick.Stop()
+	defer func() {
+		a.invalidateModelDiscovery()
+		close(a.loopDone)
+	}()
+	input := a.input
+	inputClosed := false
 	a.onResize()
 	for !a.quit {
 		a.render()
 		select {
-		case ev := <-a.input:
+		case ev, ok := <-input:
+			if !ok {
+				input = nil
+				inputClosed = true
+				if a.working && a.abortActiveRun() {
+					continue
+				}
+				a.quit = true
+				continue
+			}
 			a.handleInput(ev)
-		case env := <-a.agentCh:
-			a.dispatchAgent(env)
 		case le := <-a.loopCh:
 			a.dispatchLoop(le)
-		case <-a.resizeCh:
-			a.onResize()
+			if inputClosed && !a.working {
+				a.quit = true
+			}
 		case <-tick.C:
 			a.spinnerFrame = (a.spinnerFrame + 1) % len(spinnerFrames)
+			a.onResize()
 		}
 	}
 	return nil
@@ -202,15 +222,19 @@ func (a *app) loop() error {
 // dispatchLoop routes runner completions, titles, and background results.
 func (a *app) dispatchLoop(le loopEvent) {
 	switch {
+	case le.agent != nil:
+		a.dispatchAgent(*le.agent)
 	case le.done != nil:
-		a.finishRun(le.done.err)
+		if le.done.generation == a.generation {
+			a.finishRun(le.done.err)
+		}
 	case le.title != nil:
-		if le.title.generation == a.generation || le.title.generation == a.r.generation {
+		if le.title.generation == a.generation {
 			a.setSessionTitle(le.title.title)
 			a.statusMsg = "Session title: " + le.title.title
 		}
 	case le.discovery != nil:
-		a.onDiscovered(le.discovery.provider, le.discovery.models, le.discovery.err)
+		a.onDiscovered(le.discovery)
 	case le.clipboard != nil:
 		a.onClipboard(le.clipboard.payload, le.clipboard.err)
 	}
@@ -222,14 +246,18 @@ func (a *app) onResize() {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	resized := a.w != w || a.h != h
 	if a.screen == nil || a.screen.W != w || a.screen.H != h {
+		resized = true
 		a.screen = engine.NewScreen(w, h)
 		if a.term != nil {
 			a.term.Resize(w, h)
 		}
 	}
-	a.w, a.h = w, h
-	a.sb.invalidate()
+	if resized {
+		a.w, a.h = w, h
+		a.sb.invalidate()
+	}
 }
 
 // render paints one full frame; the engine diffs it onto the tty.
@@ -242,7 +270,9 @@ func (a *app) render() {
 	th := a.th
 
 	if a.welcome {
-		scr.Fill(engine.Rect{X: 0, Y: 0, W: a.w, H: a.h}, engine.Style{}.WithBg(th.BGTerminal))
+		// A frame buffer is reused across views, so every frame must erase its
+		// previous glyphs before the current view paints its sparse layout.
+		scr.Clear(engine.Rect{X: 0, Y: 0, W: a.w, H: a.h}, engine.Style{}.WithBg(th.BGTerminal))
 		a.welcomeRender(scr, engine.Rect{X: 0, Y: 0, W: a.w, H: a.h}, a.welcomeSel, time.Now())
 		if a.modalKind != modalNone {
 			a.renderModal(scr, a.w, a.h)
@@ -253,17 +283,14 @@ func (a *app) render() {
 		return
 	}
 
-	scr.Fill(engine.Rect{X: 0, Y: 0, W: a.w, H: a.h}, engine.Style{}.WithBg(th.BGBase))
+	scr.Clear(engine.Rect{X: 0, Y: 0, W: a.w, H: a.h}, engine.Style{}.WithBg(th.BGBase))
 
 	// Layout: scrollback, then status, composer stack, footer.
-	footerH := 2
-	statusH := 1
+	footerH := footerHeight
+	statusH := statusHeight
 	composerH := a.composerHeight()
 	dropdownH := a.dropdownHeight()
-	sbH := a.h - footerH - statusH - composerH - dropdownH
-	if sbH < 1 {
-		sbH = 1
-	}
+	sbH := a.sbHeight()
 
 	sbArea := engine.Rect{X: 0, Y: 0, W: a.w, H: sbH}
 	a.sb.render(scr, sbArea)
@@ -274,8 +301,8 @@ func (a *app) render() {
 		a.renderDropdown(engine.Rect{X: 0, Y: y, W: a.w, H: dropdownH})
 		y += dropdownH
 	}
-	a.renderStatusLine(engine.Rect{X: 0, Y: y, W: a.w, H: 1})
-	y++
+	a.renderStatusLine(engine.Rect{X: 0, Y: y, W: a.w, H: statusH})
+	y += statusH
 	a.renderComposer(engine.Rect{X: 0, Y: y, W: a.w, H: composerH})
 	y += composerH
 	a.renderFooter(engine.Rect{X: 0, Y: y, W: a.w, H: footerH})

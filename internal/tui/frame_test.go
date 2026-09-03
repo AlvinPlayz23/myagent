@@ -50,6 +50,32 @@ func TestWelcomeFrameRendersLogoAndMenu(t *testing.T) {
 	}
 }
 
+func TestRenderClearsRemovedViewLayers(t *testing.T) {
+	a := newTestApp(t, cfgForTest(), nil)
+	a.w, a.h = 100, 30
+	a.screen = engine.NewScreen(100, 30)
+	a.term = nil
+
+	if frame := frameText(a); !strings.Contains(frame, "Resume a session") {
+		t.Fatalf("welcome frame missing expected menu item:\n%s", frame)
+	}
+
+	a.startAgent()
+	if frame := frameText(a); strings.Contains(frame, "Resume a session") {
+		t.Fatalf("session frame retained welcome text:\n%s", frame)
+	}
+
+	a.modalKind = modalModels
+	if frame := frameText(a); !strings.Contains(frame, "Models — type to filter") {
+		t.Fatalf("modal frame missing title:\n%s", frame)
+	}
+
+	a.modalKind = modalNone
+	if frame := frameText(a); strings.Contains(frame, "Models — type to filter") {
+		t.Fatalf("session frame retained modal text:\n%s", frame)
+	}
+}
+
 func TestAgentFrameRendersComposerAndFooter(t *testing.T) {
 	a := newTestApp(t, cfgForTest(), nil)
 	a.w, a.h = 100, 30

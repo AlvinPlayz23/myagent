@@ -19,7 +19,14 @@ import (
 func (a *app) handleInput(ev engine.Event) {
 	switch {
 	case ev.Paste != nil:
-		a.onPaste(ev.Paste.Text)
+		if a.modalOverwrite {
+			return
+		}
+		if a.modalKind != modalNone {
+			a.modalPaste(ev.Paste.Text)
+		} else {
+			a.onPaste(ev.Paste.Text)
+		}
 		return
 	case ev.Focus != nil:
 		return
@@ -73,6 +80,10 @@ func (a *app) welcomeClick(m engine.Mouse) {
 
 // onKey dispatches a decoded key press.
 func (a *app) onKey(k engine.Key) {
+	if a.modalOverwrite {
+		a.overwriteKey(k)
+		return
+	}
 	if a.modalKind != modalNone {
 		a.modalKey(k)
 		return
@@ -102,6 +113,12 @@ func (a *app) welcomeKey(k engine.Key) {
 	case "tab":
 		a.startAgent()
 	default:
+		for i, item := range welcomeMenuItems {
+			if item.key != "" && strings.EqualFold(k.Text, item.key) {
+				a.welcomeActivate(i)
+				return
+			}
+		}
 		// Printable keys jump straight into the session with the text
 		// pre-filled, like the pager's welcome prompt.
 		if k.Text != "" {
@@ -166,10 +183,10 @@ func (a *app) agentKey(k engine.Key) {
 			a.sb.scrollBy(1, a.sbTotal(), a.sbHeight())
 			return
 		case "pgup":
-			a.sb.scrollBy(-a.sbHeight()/2, a.sbTotal(), a.sbHeight())
+			a.sb.scrollBy(-max(1, a.sbHeight()/2), a.sbTotal(), a.sbHeight())
 			return
 		case "pgdown":
-			a.sb.scrollBy(a.sbHeight()/2, a.sbTotal(), a.sbHeight())
+			a.sb.scrollBy(max(1, a.sbHeight()/2), a.sbTotal(), a.sbHeight())
 			return
 		case "home":
 			a.sb.scrollHome()
@@ -178,19 +195,6 @@ func (a *app) agentKey(k engine.Key) {
 			a.sb.scrollEnd()
 			return
 		}
-	}
-
-	// Export overwrite confirm intercepts everything.
-	if a.modalOverwrite {
-		switch k.Code {
-		case "enter":
-			a.writeExport(true)
-		case "esc":
-			a.modalOverwrite = false
-			a.exportFormat = ""
-			a.statusMsg = "Export cancelled."
-		}
-		return
 	}
 
 	// Inline pickers capture navigation before the editor.
@@ -355,10 +359,10 @@ func (a *app) agentKey(k engine.Key) {
 		a.prompt.move("down")
 		return
 	case "pgup":
-		a.sb.scrollBy(-a.sbHeight()/2, a.sbTotal(), a.sbHeight())
+		a.sb.scrollBy(-max(1, a.sbHeight()/2), a.sbTotal(), a.sbHeight())
 		return
 	case "pgdown":
-		a.sb.scrollBy(a.sbHeight()/2, a.sbTotal(), a.sbHeight())
+		a.sb.scrollBy(max(1, a.sbHeight()/2), a.sbTotal(), a.sbHeight())
 		return
 	}
 
@@ -399,7 +403,7 @@ func (a *app) filesStart(count int) int {
 
 // sbHeight is the scrollback viewport height (recomputed at render).
 func (a *app) sbHeight() int {
-	h := a.h - chromeHeight - a.composerHeight() - a.dropdownHeight()
+	h := a.h - footerHeight - statusHeight - a.composerHeight() - a.dropdownHeight()
 	if h < 1 {
 		return 1
 	}
@@ -408,18 +412,11 @@ func (a *app) sbHeight() int {
 
 // sbTotal computes the total scrollback content rows.
 func (a *app) sbTotal() int {
-	total := 0
 	width := a.w - chromeAccent - chromeLeft - chromeRight
 	if width <= 0 {
 		return 0
 	}
-	for _, e := range a.sb.entries {
-		if e.kind == sbThinking && !a.sb.showThinking && !e.streaming {
-			continue
-		}
-		total += e.entryHeight(width, a.sb.expanded, a.sb.showThinking, a.th)
-	}
-	return total
+	return a.sb.totalRows(width)
 }
 
 // openPalette opens the ctrl+p command palette.
@@ -471,9 +468,7 @@ func (a *app) modalKey(k engine.Key) {
 		case "enter":
 			a.selectPickedModel()
 		case "esc":
-			a.models.close()
-			a.modalKind = modalNone
-			a.statusMsg = "Model selection cancelled."
+			a.closeModelPicker("Model selection cancelled.")
 		case "backspace":
 			if a.modalInput != "" {
 				r := []rune(a.modalInput)
@@ -569,22 +564,28 @@ func (a *app) modalKey(k engine.Key) {
 		case "down":
 			a.exportPick.move(1)
 		case "enter":
-			a.exportFormat = a.exportPick.items[a.exportPick.sel].format
+			item, ok := a.exportPick.selected()
+			if !ok {
+				a.exportPick.close()
+				a.modalKind = modalNone
+				a.modalOverwrite = false
+				a.exportFormat = ""
+				a.modalInput = ""
+				a.statusMsg = "No export formats are available."
+				return
+			}
+			a.exportFormat = item.format
 			a.modalKind = modalExportName
 			a.modalInput = export.DefaultFilename(a.sessionTitle)
 			a.statusMsg = "Enter a file name, then press enter to export."
 		case "esc":
-			a.modalKind = modalNone
-			a.statusMsg = "Export cancelled."
+			a.cancelExport()
 		}
 
 	case modalExportName:
 		switch k.Code {
 		case "esc":
-			a.modalKind = modalNone
-			a.exportFormat = ""
-			a.modalInput = ""
-			a.statusMsg = "Export cancelled."
+			a.cancelExport()
 		case "enter":
 			a.writeExport(false)
 		case "backspace":
@@ -597,6 +598,40 @@ func (a *app) modalKey(k engine.Key) {
 				a.modalInput += k.Text
 			}
 		}
+	}
+}
+
+// overwriteKey captures confirmation input before the underlying name modal.
+func (a *app) overwriteKey(k engine.Key) {
+	switch k.Code {
+	case "enter":
+		a.writeExport(true)
+	case "esc":
+		a.cancelExport()
+	}
+}
+
+// cancelExport clears all state owned by the export flow.
+func (a *app) cancelExport() {
+	a.exportPick.close()
+	a.modalKind = modalNone
+	a.modalOverwrite = false
+	a.exportFormat = ""
+	a.modalInput = ""
+	a.statusMsg = "Export cancelled."
+}
+
+// modalPaste routes bracketed paste into the active modal's text field.
+func (a *app) modalPaste(text string) {
+	switch a.modalKind {
+	case modalCommands, modalPalette:
+		a.modalInput += text
+		a.picker.sync("/" + a.modalInput)
+	case modalModels:
+		a.modalInput += text
+		a.models.setQuery(a.modalInput)
+	case modalProviderKey, modalExportName:
+		a.modalInput += text
 	}
 }
 
@@ -642,7 +677,7 @@ func (a *app) readClipboard() {
 
 // dispatchAgent routes async loop events into state updates.
 func (a *app) dispatchAgent(env agentEventEnvelope) {
-	if env.generation != a.generation && env.generation != 0 {
+	if env.generation != a.generation {
 		return
 	}
 	ev := env.ev
@@ -667,16 +702,20 @@ func (a *app) dispatchAgent(env agentEventEnvelope) {
 		}
 	case types.EventMessageUpdate:
 		ame := ev.AssistantMessageEvent
-		if ame == nil || ame.Delta == "" {
+		if ame == nil {
 			return
 		}
 		switch ame.Type {
 		case "text_delta":
-			a.sb.appendAssistantDelta(ame.Delta)
+			if ame.Delta != "" {
+				a.sb.appendAssistantDelta(ame.Delta)
+			}
 		case "thinking_start":
 			a.sb.beginThinking()
 		case "thinking_delta":
-			a.sb.appendThinkingDelta(ame.Delta)
+			if ame.Delta != "" {
+				a.sb.appendThinkingDelta(ame.Delta)
+			}
 		case "thinking_end":
 			a.sb.endThinking()
 		}
@@ -807,7 +846,7 @@ func (a *app) startRun(display string, um types.Message) {
 	a.startedAt = time.Now()
 	a.statusMsg = ""
 	a.lastErr = nil
-	a.r.start(runCtx, um)
+	a.generation = a.r.start(runCtx, um)
 }
 
 // finishRun settles the run state after the runner reports completion.

@@ -111,6 +111,13 @@ func (p *exportPicker) move(delta int) {
 	p.sel = (p.sel + delta + len(p.items)) % len(p.items)
 }
 
+func (p *exportPicker) selected() (exportItem, bool) {
+	if !p.active || p.sel < 0 || p.sel >= len(p.items) {
+		return exportItem{}, false
+	}
+	return p.items[p.sel], true
+}
+
 // sessionPicker lists persisted sessions; the active one is pinned on top.
 type sessionPicker struct {
 	items     []session.Info

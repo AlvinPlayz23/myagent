@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStyleDiffEmitsMinimalSGR(t *testing.T) {
@@ -72,6 +74,63 @@ func TestFrameEmitsOnlyChangedCellsIncremental(t *testing.T) {
 	out := term.frame(b, -1, -1, false)
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatal("incremental frame cleared the screen")
+	}
+}
+
+func TestFrameDoesNotMoveCursorAcrossAdjacentCells(t *testing.T) {
+	prev := NewScreen(10, 3)
+	term := &Terminal{Prev: prev.Clone(), styleKnown: true, style: Style{}}
+	cur := prev.Clone()
+	cur.SetString(1, 1, "abc", Style{})
+
+	out := term.frame(cur, -1, -1, false)
+	if got := strings.Count(out, "\x1b[2;2H"); got != 1 {
+		t.Fatalf("moves to first changed cell = %d, want 1: %q", got, out)
+	}
+	if strings.Contains(out, "\x1b[2;3H") || strings.Contains(out, "\x1b[2;4H") {
+		t.Fatalf("adjacent cells caused redundant cursor moves: %q", out)
+	}
+}
+
+func TestFrameTracksWideCellCursorAdvance(t *testing.T) {
+	prev := NewScreen(10, 1)
+	term := &Terminal{Prev: prev.Clone(), styleKnown: true, style: Style{}}
+	cur := prev.Clone()
+	cur.SetString(0, 0, "世x", Style{})
+
+	out := term.frame(cur, -1, -1, false)
+	if !strings.Contains(out, "\x1b[1;1H世x") {
+		t.Fatalf("wide glyph and adjacent cell were not emitted contiguously: %q", out)
+	}
+	if strings.Contains(out, "\x1b[1;3H") {
+		t.Fatalf("wide glyph caused an unnecessary cursor move: %q", out)
+	}
+}
+
+func TestFrameRestoresRemainingIntensityAfterSharedReset(t *testing.T) {
+	both := Style{}.Bold().Dim()
+	for _, tt := range []struct {
+		name string
+		next Style
+		want string
+	}{
+		{name: "bold", next: Style{}.Bold(), want: "\x1b[22;1m"},
+		{name: "dim", next: Style{}.Dim(), want: "\x1b[22;2m"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := NewScreen(2, 1)
+			prev.SetString(0, 0, "x", both)
+			cur := prev.Clone()
+			cur.SetString(0, 0, "x", tt.next)
+			term := &Terminal{Prev: prev.Clone(), styleKnown: true, style: both}
+
+			if out := term.frame(cur, -1, -1, false); !strings.Contains(out, tt.want) {
+				t.Fatalf("frame = %q, want intensity transition %q", out, tt.want)
+			}
+			if term.style != tt.next {
+				t.Fatalf("tracked style = %#v, want %#v", term.style, tt.next)
+			}
+		})
 	}
 }
 
@@ -148,6 +207,131 @@ func TestDecodeCtrlCAndAltEnter(t *testing.T) {
 	if ev.Key == nil || ev.Key.Code != "alt+enter" {
 		t.Fatalf("alt+enter = %#v", ev)
 	}
+}
+
+func TestDecoderEmitsLoneEscape(t *testing.T) {
+	d, write := newPipeDecoder(t, 10*time.Millisecond)
+	if _, err := write.Write([]byte{0x1b}); err != nil {
+		t.Fatalf("write escape: %v", err)
+	}
+
+	select {
+	case event := <-d.Events():
+		if event.Key == nil || event.Key.Code != "esc" {
+			t.Fatalf("lone escape = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lone escape was not emitted")
+	}
+}
+
+func TestDecoderWaitsForEscapeSequenceContinuation(t *testing.T) {
+	d, write := newPipeDecoder(t, 80*time.Millisecond)
+	if _, err := write.Write([]byte{0x1b}); err != nil {
+		t.Fatalf("write escape prefix: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := write.Write([]byte("[B")); err != nil {
+		t.Fatalf("write down sequence: %v", err)
+	}
+
+	select {
+	case event := <-d.Events():
+		if event.Key == nil || event.Key.Code != "down" {
+			t.Fatalf("escape continuation = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("escape continuation was not emitted")
+	}
+
+	select {
+	case event := <-d.Events():
+		t.Fatalf("unexpected extra event after escape sequence: %#v", event)
+	case <-time.After(2 * d.escDelay):
+	}
+}
+
+func TestDecoderIgnoresStaleEscapeTimer(t *testing.T) {
+	d := &Decoder{out: make(chan Event, 1), escDelay: time.Hour}
+	d.mu.Lock()
+	d.buf = []byte{0x1b}
+	d.scheduleEscLocked()
+	staleEpoch := d.escEpoch
+	d.stopEscTimerLocked()
+	d.buf = []byte{0x1b}
+	d.scheduleEscLocked()
+	currentEpoch := d.escEpoch
+	currentTimer := d.escTimer
+	d.mu.Unlock()
+	currentTimer.Stop()
+
+	d.resolveEscTimer(staleEpoch)
+	select {
+	case event := <-d.Events():
+		t.Fatalf("stale timer emitted %#v", event)
+	default:
+	}
+
+	d.resolveEscTimer(currentEpoch)
+	select {
+	case event := <-d.Events():
+		if event.Key == nil || event.Key.Code != "esc" {
+			t.Fatalf("current timer emitted %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("current timer did not emit escape")
+	}
+}
+
+func TestDecoderSeparatesInputAfterEscapeDeadline(t *testing.T) {
+	d := &Decoder{out: make(chan Event, 2)}
+	d.mu.Lock()
+	d.buf = []byte{0x1b, 'a'}
+	d.escReady = true
+	d.mu.Unlock()
+	d.drain()
+
+	first := <-d.Events()
+	if first.Key == nil || first.Key.Code != "esc" {
+		t.Fatalf("resolved escape = %#v", first)
+	}
+	second := <-d.Events()
+	if second.Key == nil || second.Key.Code != "rune" || second.Key.Text != "a" {
+		t.Fatalf("input after resolved escape = %#v", second)
+	}
+}
+
+func TestDecoderChecksEscapeDeadlineBeforeTimerCallback(t *testing.T) {
+	d := &Decoder{
+		out:         make(chan Event, 2),
+		buf:         []byte{0x1b, 'a'},
+		escDeadline: time.Now().Add(-time.Millisecond),
+	}
+	d.drain()
+
+	first := <-d.Events()
+	if first.Key == nil || first.Key.Code != "esc" {
+		t.Fatalf("expired escape = %#v", first)
+	}
+	second := <-d.Events()
+	if second.Key == nil || second.Key.Code != "rune" || second.Key.Text != "a" {
+		t.Fatalf("input after expired escape = %#v", second)
+	}
+}
+
+func newPipeDecoder(t *testing.T, delay time.Duration) (*Decoder, *os.File) {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	d := &Decoder{out: make(chan Event, 4), escDelay: delay}
+	go d.readLoop(read)
+	t.Cleanup(func() {
+		_ = write.Close()
+		_ = read.Close()
+	})
+	return d, write
 }
 
 func TestSetStringWideRunes(t *testing.T) {

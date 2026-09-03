@@ -13,8 +13,7 @@ var errNothingToCompact = errors.New("there is not enough conversation history t
 
 // runner owns the agent loop and its persistent conversation. A single runner
 // backs the whole session; each user prompt starts a new Run on the same
-// underlying message history. Events are delivered to the app through
-// unbuffered callback wiring rather than a UI framework.
+// underlying message history.
 type runner struct {
 	cfg     agent.Config
 	app     *app
@@ -49,10 +48,9 @@ func newRunner(cfg agent.Config, queue *msgQueue, history []types.Message) *runn
 // bindApp connects the runner to the app's event channel.
 func (r *runner) bindApp(a *app) { r.app = a }
 
-// start launches an agent Run for the given prompt in a background goroutine.
-// Completion travels through the same FIFO channel as AgentEvents, so the UI
-// cannot become idle before the final event has rendered.
-func (r *runner) start(ctx context.Context, prompt types.Message) {
+// start launches an agent Run for the given prompt in a background goroutine
+// and returns the generation assigned to its event stream.
+func (r *runner) start(ctx context.Context, prompt types.Message) uint64 {
 	r.generation++
 	generation := r.generation
 	action := func(loop *agent.Loop) error {
@@ -65,14 +63,16 @@ func (r *runner) start(ctx context.Context, prompt types.Message) {
 		return err
 	}
 	if r.synchronous {
+		r.activateGeneration(generation)
 		r.run(ctx, generation, action)
-		return
+		return generation
 	}
 	go r.run(ctx, generation, action)
+	return generation
 }
 
 // compact runs forced compaction without creating a user message.
-func (r *runner) compact(ctx context.Context) {
+func (r *runner) compact(ctx context.Context) uint64 {
 	r.generation++
 	generation := r.generation
 	action := func(loop *agent.Loop) error {
@@ -86,10 +86,12 @@ func (r *runner) compact(ctx context.Context) {
 		return nil
 	}
 	if r.synchronous {
+		r.activateGeneration(generation)
 		r.run(ctx, generation, action)
-		return
+		return generation
 	}
 	go r.run(ctx, generation, action)
+	return generation
 }
 
 func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.Loop) error) {
@@ -99,25 +101,66 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 				return err
 			}
 		}
-		select {
-		case r.app.agentCh <- agentEventEnvelope{ev: ev, generation: generation}:
-			return nil
-		case <-sctx.Done():
-			return sctx.Err()
-		}
+		return r.sendEvent(sctx, loopEvent{agent: &agentEventEnvelope{ev: ev, generation: generation}})
 	}
 	loop := agent.New(r.cfg, r.history, sink)
 	err := action(loop)
 	r.history = loop.Messages()
-	if r.app != nil {
-		r.app.loopCh <- loopEvent{done: &agentDoneEvent{err: err, generation: generation}}
-	}
+	r.send(loopEvent{done: &agentDoneEvent{err: err, generation: generation}})
 }
 
 // sendTitle forwards a generated session title to the UI.
 func (r *runner) sendTitle(title string, generation uint64) {
+	r.send(loopEvent{title: &agentTitleEvent{title: title, generation: generation}})
+}
+
+// activateGeneration lets deterministic test runs dispatch before start
+// returns, without relying on the bounded production event queue.
+func (r *runner) activateGeneration(generation uint64) {
 	if r.app != nil {
-		r.app.loopCh <- loopEvent{title: &agentTitleEvent{title: title, generation: generation}}
+		r.app.generation = generation
+	}
+}
+
+func (r *runner) sendEvent(ctx context.Context, event loopEvent) error {
+	if r.app == nil {
+		return nil
+	}
+	if r.synchronous {
+		r.app.dispatchLoop(event)
+		return nil
+	}
+	select {
+	case <-r.app.loopDone:
+		return context.Canceled
+	default:
+	}
+	select {
+	case r.app.loopCh <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.app.loopDone:
+		return context.Canceled
+	}
+}
+
+func (r *runner) send(event loopEvent) {
+	if r.app == nil {
+		return
+	}
+	if r.synchronous {
+		r.app.dispatchLoop(event)
+		return
+	}
+	select {
+	case <-r.app.loopDone:
+		return
+	default:
+	}
+	select {
+	case r.app.loopCh <- event:
+	case <-r.app.loopDone:
 	}
 }
 
@@ -131,16 +174,18 @@ func (r *runner) setEffort(effort llm.Effort) {
 }
 
 // discardEvents makes buffered events from earlier operations invisible.
-func (r *runner) discardEvents() {
+func (r *runner) discardEvents() uint64 {
 	r.generation++
+	return r.generation
 }
 
-func (r *runner) reset() {
-	r.resume(nil)
+func (r *runner) reset() uint64 {
+	return r.resume(nil)
 }
 
-func (r *runner) resume(history []types.Message) {
-	r.discardEvents()
+func (r *runner) resume(history []types.Message) uint64 {
+	generation := r.discardEvents()
 	r.history = append([]types.Message(nil), history...)
 	r.queue.DrainAll()
+	return generation
 }

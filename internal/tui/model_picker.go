@@ -7,11 +7,12 @@ import (
 )
 
 type modelPicker struct {
-	items   []modelcatalog.Model
-	matched []int
-	query   string
-	sel     int
-	active  bool
+	items    []modelcatalog.Model
+	matched  []int
+	query    string
+	provider string
+	sel      int
+	active   bool
 }
 
 type providerPicker struct {
@@ -53,9 +54,10 @@ func (p *providerPicker) height() int {
 	return min(10, len(p.items)+1)
 }
 
-func (p *modelPicker) open(items []modelcatalog.Model, query string) {
+func (p *modelPicker) open(items []modelcatalog.Model, query, provider string) {
 	p.items = append(p.items[:0], items...)
 	p.query = query
+	p.provider = strings.TrimSpace(provider)
 	p.sel = 0
 	p.active = true
 	p.filter()
@@ -84,6 +86,7 @@ func (p *modelPicker) close() {
 	p.active = false
 	p.matched = p.matched[:0]
 	p.query = ""
+	p.provider = ""
 	p.sel = 0
 }
 
@@ -128,18 +131,30 @@ func (p *modelPicker) setQuery(query string) {
 	p.filter()
 }
 
-// mergeDiscovered folds live-discovered model IDs into the picker items.
-func (p *modelPicker) mergeDiscovered(ids []string) {
-	provider := ""
-	if len(p.items) > 0 {
-		provider = p.items[0].Provider
-	}
-	extra := make([]modelcatalog.Model, 0, len(ids))
-	for _, id := range ids {
-		extra = append(extra, modelcatalog.Model{Provider: provider, ID: id})
-	}
-	if len(extra) == 0 {
+// mergeDiscovered folds one provider's live model IDs into the picker items.
+func (p *modelPicker) mergeDiscovered(provider string, ids []string) {
+	if !p.active || p.provider == "" || !strings.EqualFold(provider, p.provider) {
 		return
 	}
-	p.replace(append(append([]modelcatalog.Model{}, p.items...), extra...))
+	items := append([]modelcatalog.Model(nil), p.items...)
+	known := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		known[strings.ToLower(item.Ref())] = struct{}{}
+	}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		ref := strings.ToLower(p.provider + "/" + id)
+		if _, exists := known[ref]; exists {
+			continue
+		}
+		known[ref] = struct{}{}
+		items = append(items, modelcatalog.Model{Provider: p.provider, ID: id})
+	}
+	if len(items) == len(p.items) {
+		return
+	}
+	p.replace(items)
 }

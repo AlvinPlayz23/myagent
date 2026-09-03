@@ -31,7 +31,7 @@ func (a *app) runCommand(text string) {
 	case commandHelp:
 		a.sb.addNotice(helpText)
 	case commandClear:
-		a.r.discardEvents()
+		a.generation = a.r.discardEvents()
 		a.sb.clear()
 		a.statusMsg = "Transcript cleared; conversation context is retained."
 	case commandNew:
@@ -43,6 +43,7 @@ func (a *app) runCommand(text string) {
 			a.statusMsg = "Could not create a new session: " + err.Error()
 			return
 		}
+		a.generation = a.r.reset()
 		a.sb.clear()
 		a.usage = types.Usage{}
 		a.sessionTitle = ""
@@ -71,7 +72,7 @@ func (a *app) runCommand(text string) {
 		a.startedAt = time.Now()
 		a.statusMsg = "Compacting context…"
 		a.lastErr = nil
-		a.r.compact(runCtx)
+		a.generation = a.r.compact(runCtx)
 	case commandResume:
 		a.openSessions()
 	case commandExport:
@@ -147,7 +148,7 @@ func (a *app) resumeSelected() {
 	a.modalKind = modalNone
 	a.sb.clear()
 	seedScrollback(a.sb, history)
-	a.r.resume(history)
+	a.generation = a.r.resume(history)
 	a.sessionTitle = info.Title
 	a.hasSessionTitle = info.Title != "" && info.Title != "new"
 	a.usage = types.Usage{}
@@ -161,13 +162,16 @@ func (a *app) openModelPicker(query string) {
 		a.statusMsg = "Model selection is unavailable."
 		return
 	}
+	a.invalidateModelDiscovery()
+	provider := a.activeModelProvider()
 	items := a.availableModels()
 	if len(items) == 0 && a.discoverModels != nil {
 		// Nothing in the catalog for the configured providers (offline first
 		// run, or an endpoint models.dev does not know). Open the picker
 		// anyway and populate it from the provider's live /v1/models listing.
-		a.models.open(items, query)
+		a.models.open(items, query, provider)
 		a.modalKind = modalModels
+		a.modalInput = query
 		a.statusMsg = "Catalog unavailable; discovering models from the provider…"
 		a.discoverActiveProviderModels()
 		return
@@ -182,8 +186,9 @@ func (a *app) openModelPicker(query string) {
 			return
 		}
 	}
-	a.models.open(items, query)
+	a.models.open(items, query, provider)
 	a.modalKind = modalModels
+	a.modalInput = query
 	a.statusMsg = "Search models, use up/down, enter selects, esc cancels."
 	a.discoverActiveProviderModels()
 }
@@ -194,32 +199,78 @@ func (a *app) discoverActiveProviderModels() {
 	if a.discoverModels == nil {
 		return
 	}
-	provider, _, ok := strings.Cut(strings.TrimSpace(a.modelID), "/")
-	provider = strings.TrimSpace(provider)
-	if !ok || provider == "" || a.discovering == provider {
+	provider := a.models.provider
+	if provider == "" || a.discovering == provider {
 		return
 	}
+	a.modelDiscovery++
+	request := a.modelDiscovery
 	a.discovering = provider
 	target := provider
 	discover := a.discoverModels
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.modelDiscoverCancel = cancel
 	go func() {
-		ids, err := discover(a.ctx, target)
-		a.loopCh <- loopEvent{discovery: &discoveryResult{provider: target, models: ids, err: err}}
+		ids, err := discover(ctx, target)
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case a.loopCh <- loopEvent{discovery: &discoveryResult{provider: target, request: request, models: ids, err: err}}:
+		case <-ctx.Done():
+		}
 	}()
 }
 
-// onDiscovered merges live-discovered model IDs into the open picker.
-func (a *app) onDiscovered(provider string, ids []string, err error) {
-	if a.discovering == provider {
-		a.discovering = ""
+// activeModelProvider extracts the active provider without depending on the
+// catalog order used by the picker.
+func (a *app) activeModelProvider() string {
+	provider, _, ok := strings.Cut(strings.TrimSpace(a.modelID), "/")
+	if ok && provider != "" {
+		return provider
 	}
-	if err != nil {
+	return strings.TrimSpace(a.r.cfg.Model.Provider)
+}
+
+// invalidateModelDiscovery prevents a late response from a closed picker from
+// mutating the next picker session.
+func (a *app) invalidateModelDiscovery() {
+	if a.modelDiscoverCancel != nil {
+		a.modelDiscoverCancel()
+		a.modelDiscoverCancel = nil
+	}
+	a.modelDiscovery++
+	a.discovering = ""
+}
+
+// closeModelPicker drops picker state and ignores any in-flight discovery.
+func (a *app) closeModelPicker(status string) {
+	a.models.close()
+	a.invalidateModelDiscovery()
+	a.modalKind = modalNone
+	a.modalInput = ""
+	a.statusMsg = status
+}
+
+// onDiscovered merges the response only when it belongs to the active picker.
+func (a *app) onDiscovered(result *discoveryResult) {
+	if result == nil || result.request != a.modelDiscovery || !strings.EqualFold(result.provider, a.discovering) {
 		return
 	}
-	if a.modalKind != modalModels {
+	a.modelDiscoverCancel = nil
+	a.discovering = ""
+	if a.modalKind != modalModels || !a.models.active || !strings.EqualFold(result.provider, a.models.provider) {
 		return
 	}
-	a.models.mergeDiscovered(ids)
+	if result.err != nil {
+		a.statusMsg = fmt.Sprintf("Could not discover models from %s: %v", result.provider, result.err)
+		return
+	}
+	a.models.mergeDiscovered(result.provider, result.models)
+	if a.rememberDiscoveredModels != nil {
+		a.rememberDiscoveredModels(result.provider, result.models)
+	}
+	a.statusMsg = "Models refreshed from " + result.provider + "."
 }
 
 // selectPickedModel applies the highlighted model.
@@ -246,7 +297,10 @@ func (a *app) applyModel(item modelcatalog.Model) {
 	}
 	a.modelID = item.Ref()
 	a.effort.value = a.r.cfg.Effort
+	a.models.close()
+	a.invalidateModelDiscovery()
 	a.modalKind = modalNone
+	a.modalInput = ""
 	a.statusMsg = "Model set to " + item.Ref() + "."
 	a.updateTerminalTitle()
 }
@@ -413,14 +467,14 @@ func (a *app) acceptFile() {
 	a.files.close()
 }
 
-// acceptCommand completes the highlighted slash command; submit runs it now
-// unless it still needs an argument, in which case it completes the input.
+// acceptCommand completes the highlighted slash command. Enter runs commands
+// whose arguments are optional; Tab always leaves room for a direct argument.
 func (a *app) acceptCommand(submit bool) {
 	item, ok := a.picker.selected()
 	if !ok {
 		return
 	}
-	if submit && !item.requiresArg {
+	if submit && (!item.requiresArg || item.allowsOmittedArg()) {
 		a.prompt.setValue("")
 		a.picker.close()
 		a.runCommand(item.name)

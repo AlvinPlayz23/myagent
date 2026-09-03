@@ -84,6 +84,11 @@ type scrollback struct {
 	offset int // rows above the window when unpinned
 }
 
+type scrollbackRow struct {
+	entry *sbEntry
+	spans []engine.Span
+}
+
 func newScrollback() *scrollback {
 	return &scrollback{pinned: true, showThinking: true}
 }
@@ -254,8 +259,11 @@ func (s *scrollback) setShowThinking(show bool) {
 // scrollBy moves the viewport; any scroll unpins from the tail.
 func (s *scrollback) scrollBy(delta int, total, viewH int) {
 	maxOff := max(0, total-viewH)
+	if s.pinned {
+		s.offset = maxOff
+	}
 	s.offset = clamp(s.offset+delta, 0, maxOff)
-	s.pinned = s.offset >= maxOff
+	s.pinned = s.offset == maxOff
 }
 
 // scrollHome jumps to the oldest content.
@@ -264,85 +272,58 @@ func (s *scrollback) scrollHome() { s.pinned = false; s.offset = 0 }
 // scrollEnd returns to the tail.
 func (s *scrollback) scrollEnd() { s.pinned = true; s.offset = 0 }
 
-// render paints the scrollback into area, returning total content rows.
-func (s *scrollback) render(scr *engine.Screen, area engine.Rect) int {
+// layoutRows materializes the exact rows used for both painting and scrolling.
+func (s *scrollback) layoutRows(width int) []scrollbackRow {
 	th := currentTheme()
-	width := area.W - chromeAccent - chromeLeft - chromeRight
 	if width <= 0 {
-		return 0
+		return nil
 	}
 
-	// Materialize rows lazily top to bottom, tracking (entry, row) so the
-	// window slice can paint with rail + vpad.
-	type rendered struct {
-		e     *sbEntry
-		rows  [][]engine.Span
-		skipV bool
-	}
-	visible := make([]rendered, 0, 64)
-	total := 0
-	vpad := 0
+	entries := make([]*sbEntry, 0, len(s.entries))
 	for _, e := range s.entries {
 		if e.kind == sbThinking && !s.showThinking && !e.streaming {
 			continue
 		}
-		rows := e.renderRows(width, s.expanded, s.showThinking, th)
-		hasVpad := e.railOn
-		if hasVpad && len(visible) > 0 {
-			vpad++
-		}
-		total += vpad + len(rows)
-		visible = append(visible, rendered{e: e, rows: rows})
-		_ = vpad
-		vpad = 0
-		if hasVpad {
-			total += sbVpad
-		}
+		entries = append(entries, e)
 	}
 
+	rows := make([]scrollbackRow, 0, len(entries)*2)
+	for i, e := range entries {
+		if i > 0 && (entries[i-1].railOn || e.railOn) {
+			for range sbVpad {
+				rows = append(rows, scrollbackRow{})
+			}
+		}
+		for _, spans := range e.renderRows(width, s.expanded, s.showThinking, th) {
+			rows = append(rows, scrollbackRow{entry: e, spans: spans})
+		}
+	}
+	return rows
+}
+
+func (s *scrollback) totalRows(width int) int {
+	return len(s.layoutRows(width))
+}
+
+// render paints the scrollback into area, returning total content rows.
+func (s *scrollback) render(scr *engine.Screen, area engine.Rect) int {
+	width := area.W - chromeAccent - chromeLeft - chromeRight
+	rows := s.layoutRows(width)
+	total := len(rows)
+	maxOff := max(0, total-area.H)
 	if s.pinned {
-		s.offset = 0
+		s.offset = maxOff
+	} else {
+		s.offset = clamp(s.offset, 0, maxOff)
 	}
-	y := area.Y
-	skipped := 0
-	if !s.pinned && s.offset > 0 {
-		skipped = s.offset
-	}
-	painted := 0
-	for ri := range visible {
-		v := &visible[ri]
-		start := 0
-		// vpad above rail-on entries (not before the first).
-		if v.e.railOn && ri > 0 {
-			if skipped > 0 {
-				skipped--
-			} else if painted < area.H {
-				paintVpad(scr, area.X, y, area.W, th)
-				y++
-				painted++
-			}
-		}
-		for riRow := range v.rows {
-			if skipped > 0 {
-				skipped--
-				start++
-				continue
-			}
-			if painted >= area.H {
-				return total
-			}
-			paintRow(scr, area.X, y, area.W, v.e, v.rows[riRow], th)
-			y++
-			painted++
-		}
-		if v.e.railOn && ri < len(visible)-1 {
-			if skipped > 0 {
-				skipped--
-			} else if painted < area.H {
-				paintVpad(scr, area.X, y, area.W, th)
-				y++
-				painted++
-			}
+	end := min(s.offset+area.H, total)
+	for i := s.offset; i < end; i++ {
+		y := area.Y + i - s.offset
+		row := rows[i]
+		if row.entry == nil {
+			paintVpad(scr, area.X, y, area.W, currentTheme())
+		} else {
+			paintRow(scr, area.X, y, area.W, row.entry, row.spans, currentTheme())
 		}
 	}
 	return total
@@ -683,16 +664,6 @@ func resultTextOf(r *types.ToolResult) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-// entryHeight is the painted height of one entry at a width (incl. vpad).
-func (e *sbEntry) entryHeight(width int, expanded, showThinking bool, th *theme) int {
-	rows := e.renderRows(width, expanded, showThinking, th)
-	h := len(rows)
-	if e.railOn {
-		h += sbVpad
-	}
-	return h
 }
 
 var _ = runewidth.StringWidth

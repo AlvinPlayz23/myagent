@@ -41,6 +41,17 @@ type commandItem struct {
 	hidden bool
 }
 
+// allowsOmittedArg identifies commands whose bare form performs an action
+// while an optional argument enables a direct selection.
+func (item commandItem) allowsOmittedArg() bool {
+	switch item.kind {
+	case commandModel, commandEffort, commandThinking:
+		return true
+	default:
+		return false
+	}
+}
+
 var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
@@ -164,8 +175,7 @@ func parseSlashCommand(text string) (slashCommand, error) {
 		if item.name != name {
 			continue
 		}
-		optionalArg := item.kind == commandModel || item.kind == commandEffort || item.kind == commandThinking
-		if (item.requiresArg && arg == "" && !optionalArg) || (!item.requiresArg && arg != "" && !optionalArg) {
+		if (item.requiresArg && arg == "" && !item.allowsOmittedArg()) || (!item.requiresArg && arg != "" && !item.allowsOmittedArg()) {
 			return slashCommand{}, fmt.Errorf("usage: %s", item.usage)
 		}
 		return slashCommand{kind: item.kind, arg: arg}, nil

@@ -7,13 +7,14 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/auth"
 	"github.com/AlvinPlayz23/myagent/internal/config"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 )
 
-func TestDiscoverProviderModelsFetchesPersistsAndCaches(t *testing.T) {
+func TestDiscoverProviderModelsFetchesAndCachesAcceptedResults(t *testing.T) {
 	dir := t.TempDir()
 	catalog := modelcatalog.New(dir)
 
@@ -42,8 +43,11 @@ func TestDiscoverProviderModelsFetchesPersistsAndCaches(t *testing.T) {
 		t.Fatalf("discovered = %v, want [alpha zeta]", ids)
 	}
 
-	// Discovered IDs are persisted as custom entries so they survive
-	// restarts and catalog refreshes.
+	// Only the active picker accepts a result, then caches and persists it.
+	catalog.RememberDiscovery("local", ids, time.Now())
+	if err := catalog.SetCustomModels("local", "local", ids); err != nil {
+		t.Fatalf("persist discovered models: %v", err)
+	}
 	if _, ok := catalog.FindModel("local", "zeta"); !ok {
 		t.Fatal("discovered model was not persisted to the catalog")
 	}

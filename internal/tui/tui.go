@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
@@ -45,11 +43,6 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	a.term = term
 	a.input = engine.NewDecoder(term.Input()).Events()
 	a.r.bindApp(a)
-
-	resize := make(chan os.Signal, 1)
-	signal.Notify(resize, syscall.SIGWINCH)
-	a.resizeCh = resize
-	defer signal.Stop(resize)
 
 	if err := setupApp(a, persistedConfig, authStore, catalog, &sess, history, modelID); err != nil {
 		return sess, err
@@ -102,6 +95,17 @@ func setupApp(a *app, persistedConfig *config.Config, authStore *auth.Store, cat
 	}
 	a.discoverModels = func(ctx context.Context, provider string) ([]string, error) {
 		return discoverProviderModels(ctx, catalog, persistedConfig, authStore, provider)
+	}
+	a.rememberDiscoveredModels = func(provider string, ids []string) {
+		if catalog == nil {
+			return
+		}
+		catalog.RememberDiscovery(provider, ids, time.Now())
+		ids = append([]string(nil), ids...)
+		go func() {
+			// Persistence is deliberately off the render loop.
+			_ = catalog.SetCustomModels(provider, provider, ids)
+		}()
 	}
 	a.availableProviders = func() []modelcatalog.Provider {
 		if catalog == nil {
@@ -214,7 +218,6 @@ func setupApp(a *app, persistedConfig *config.Config, authStore *auth.Store, cat
 			}
 		}
 		*sess = newSess
-		a.r.reset()
 		return nil
 	}
 
@@ -315,8 +318,7 @@ func seedScrollback(t *scrollback, history []types.Message) {
 
 // discoverProviderModels queries the provider's own /v1/models endpoint so
 // the picker can offer models that ship before the catalog knows about them.
-// Results are memoized briefly and persisted as custom entries; failures are
-// non-fatal because the catalog list remains usable on its own.
+// The active picker owns accepting, caching, and persisting a response.
 func discoverProviderModels(ctx context.Context, catalog *modelcatalog.Catalog, cfg *config.Config, authStore *auth.Store, provider string) ([]string, error) {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
@@ -336,12 +338,6 @@ func discoverProviderModels(ctx context.Context, catalog *modelcatalog.Catalog, 
 	ids, err := llm.ListOpenAIModels(ctx, nil, apiKey, baseURL)
 	if err != nil {
 		return nil, err
-	}
-	if catalog != nil {
-		catalog.RememberDiscovery(provider, ids, time.Now())
-		// Best-effort persistence: discovered IDs should survive restarts,
-		// but a cache write failure must not fail the discovery itself.
-		_ = catalog.SetCustomModels(provider, provider, ids)
 	}
 	return ids, nil
 }
