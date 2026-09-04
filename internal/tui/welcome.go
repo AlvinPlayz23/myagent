@@ -92,7 +92,43 @@ func (m *model) renderWelcome() string {
 
 		return m.renderFill() + "\n\n" + hint
 	}
-	return title + "\n" + subtitle + "\n\n" + hint
+	if compact || m.width < 40 {
+		return title + "\n" + subtitle + "\n\n" + hint
+	}
+	return m.renderHero(title, subtitle) + "\n\n" + hint
+}
+
+// renderHero frames the wordmark and subtitle in Grok's centered hero box and
+// adds the `label … key` menu rows beneath it.
+func (m *model) renderHero(title, subtitle string) string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#323237")).
+		Padding(1, 4).
+		Render(title + "\n" + subtitle)
+
+	menu := []struct{ label, key string }{
+		{"Type a prompt", "enter"},
+		{"Slash commands", "/help"},
+		{"Switch model", "/model"},
+	}
+	rows := make([]string, 0, len(menu))
+	for _, item := range menu {
+		rows = append(rows, "  "+m.th.userText.Render(item.label)+"   "+m.th.muted.Render(item.key)+"  ")
+	}
+	menuWidth := 0
+	for _, item := range menu {
+		menuWidth = max(menuWidth, len([]rune(item.label))+len([]rune(item.key))+5)
+	}
+	_ = menuWidth
+
+	var out []string
+	out = append(out, lipgloss.PlaceHorizontal(m.width, lipgloss.Center, box, lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#323237")))), "\n")
+	for _, row := range rows {
+		out = append(out, centerLine(row, m.width), "\n")
+	}
+	out = out[:len(out)-1]
+	return strings.Join(out, "")
 }
 
 // welcomeFrameCount is the shared animation cycle length for every animated

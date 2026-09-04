@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
 )
@@ -14,25 +15,84 @@ import (
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // renderComposer draws the textarea with the chrome its prompt style calls
-// for. The default style is the Grok-style panel: a rounded border, dim while
-// unfocused and brighter when focused, with one cell of side padding. The
-// ruled style keeps its historical rule-above/rule-below frame.
+// for. The default style is Grok's boxed prompt: a rounded border carrying
+// the session title inlined in the top rule and the model info right-aligned
+// into the bottom rule, brightening while focused. The ruled style keeps its
+// historical rule-above/rule-below frame.
 func (m *model) renderComposer() string {
 	body := m.input.View()
 	if m.promptStyle == promptRuled {
 		rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
 		return rule + "\n" + body + "\n" + rule
 	}
-	frame := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		Width(m.composerTextWidth())
-	if m.input.Focused() {
-		frame = frame.BorderForeground(lipgloss.Color("#505058"))
-	} else {
-		frame = frame.BorderForeground(lipgloss.Color("#323237"))
+	w := max(1, m.width)
+	inner := w - 2
+	if inner < 3 {
+		return body
 	}
-	return frame.Render(body)
+	rail := m.th.composerRule
+	if m.input.Focused() {
+		rail = m.th.borderOn
+	}
+
+	// Top rule with the caption inlined, ending two cells before the corner,
+	// drawn as ` title ` so its padding blanks the adjacent fill cells.
+	top := "╭" + strings.Repeat("─", inner) + "╮"
+	if caption := m.promptCaption(); caption != "" && inner >= 6 {
+		label := " " + caption + " "
+		if runes := []rune(label); len(runes) > inner-4 {
+			label = string(runes[:inner-4])
+		}
+		labelW := len([]rune(label))
+		if labelW >= 3 {
+			left := strings.Repeat("─", inner-2-labelW)
+			top = "╭" + left + rail.Render(label) + "──╮"
+		}
+	}
+
+	// Text rows between the rails, one cell of side padding.
+	rows := []string{top}
+	innerBody := max(1, w-4)
+	for _, line := range strings.Split(body, "\n") {
+		if lipgloss.Width(line) > innerBody {
+			line = ansi.Truncate(line, innerBody, "")
+		}
+		fill := max(0, innerBody-lipgloss.Width(line))
+		rows = append(rows, "│ "+line+strings.Repeat(" ", fill)+" │")
+	}
+
+	// Bottom rule doubles as the info line: the model and flags right-aligned
+	// over the fill, one padding cell from the corner.
+	info := " " + m.promptInfo()
+	infoW := len([]rune(info))
+	fill := max(0, inner-infoW)
+	rows = append(rows, "╰"+strings.Repeat("─", fill)+rail.Render(info)+"╯")
+	return strings.Join(rows, "\n")
+}
+
+// promptCaption is the title inlined in the composer's top rule.
+func (m *model) promptCaption() string {
+	if m.hasSessionTitle {
+		return m.sessionTitle
+	}
+	return "new"
+}
+
+// promptInfo is the info inlined in the composer's bottom rule: the active
+// model plus attachment flags, separated the Grok way.
+func (m *model) promptInfo() string {
+	parts := []string{m.modelID}
+	if n := m.attachments.len(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d image%s attached", n, pluralS(n)))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func (m *model) renderQueuedFollowUps() string {
@@ -57,14 +117,76 @@ func (m *model) renderQueuedFollowUps() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderPanel draws the topmost active overlay's panel.
+// renderPanel draws the topmost active overlay's panel. Pickers with room to
+// spare render as Grok's centered bordered modal windows; on short terminals
+// the border rows collapse first and the bare list is drawn bottom-attached.
 func (m *model) renderPanel() string {
 	for _, o := range m.overlayRoute() {
 		if o.overlayActive() {
-			return o.overlayRender()
+			body := o.overlayRender()
+			if m.modalWindowFits(o) {
+				return m.modalWindow(body)
+			}
+			return body
 		}
 	}
 	return ""
+}
+
+// modalWindowRows counts the rounded window's top and bottom border rows.
+const modalWindowRows = 2
+
+// modalWindowFits reports whether the overlay can render as a centered
+// bordered window: the terminal must be wide enough for the chrome and have
+// two spare transcript rows for the borders.
+func (m *model) modalWindowFits(o overlayHandler) bool {
+	available := m.height - m.fixedHeight() - 1
+	return m.width >= 40 && o.overlayHeight() <= available-modalWindowRows
+}
+
+// modalWindow centers the overlay content in a rounded Grok window.
+func (m *model) modalWindow(body string) string {
+	w := max(1, m.width-4)
+	contentW := 0
+	for _, line := range strings.Split(body, "\n") {
+		contentW = max(contentW, lipgloss.Width(line))
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#323237")).
+		Padding(0, 1).
+		Width(min(w-4, contentW)).
+		Render(body)
+	return lipgloss.PlaceHorizontal(max(1, m.width), lipgloss.Center, box)
+}
+
+// renderScrollbar renders Grok's right-edge scrollbar: a dim track whose
+// thumb brightens once the user scrolls away from the tail, advertising the
+// non-following state. Each entry pairs with a viewport row.
+func (m *model) renderScrollbar(height int) []string {
+	track := m.th.border.Render("│")
+	contentH := len(m.rows)
+	visible := m.viewport.Height()
+	thumb := m.th.footerRight.Render("▐") // following: dim
+	if !m.viewport.AtBottom() {
+		thumb = m.th.muted.Render("▐") // scrolled up: brighter
+	}
+	cells := make([]string, height)
+	if contentH <= visible || visible <= 0 || contentH <= 0 {
+		for i := range cells {
+			cells[i] = track
+		}
+		return cells
+	}
+	size := max(1, visible*visible/contentH)
+	start := m.viewport.YOffset() * visible / contentH
+	for i := range cells {
+		cells[i] = track
+		if i >= start && i < start+size {
+			cells[i] = thumb
+		}
+	}
+	return cells
 }
 
 // renderCommandPicker draws the slash-command completion menu.
@@ -378,22 +500,19 @@ func (m *model) renderProviderKeyEntry() string {
 	return m.th.cmdPickerSel.Render(action+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
-// statusLine renders the Grok-style segment row: a ` │ `-separated strip
-// carrying the working indicator, transient status, and — when the user has
-// scrolled away from the tail — how many rows of output wait below.
+// statusLine renders Grok's turn-status row: activity on the left, the
+// elapsed timer right-aligned, and a ` │ `-separated unseen-rows hint. The
+// status text keeps the segment feel of the bottom status line.
 func (m *model) statusLine() string {
 	sep := m.th.footerRight.Render(" │ ")
 	var segments []string
 	if m.working {
 		frame := m.th.spinner.Render(spinnerFrames[m.spinnerFrame])
-		elapsed := time.Since(m.startedAt).Seconds()
 		msg := "Working…"
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		segments = append(segments,
-			frame+" "+m.th.userText.Render(msg),
-			m.th.muted.Render(fmt.Sprintf("%.1fs · esc to cancel", elapsed)))
+		segments = append(segments, frame+" "+m.th.userText.Render(msg))
 	} else if m.statusMsg != "" {
 		segments = append(segments, m.th.muted.Render(m.statusMsg))
 	}
@@ -403,7 +522,15 @@ func (m *model) statusLine() string {
 	if len(segments) == 0 {
 		return ""
 	}
-	return strings.Join(segments, sep)
+	left := strings.Join(segments, sep)
+	if !m.working {
+		return left
+	}
+	timer := m.th.muted.Render(fmt.Sprintf("%.1fs · esc to cancel", time.Since(m.startedAt).Seconds()))
+	if lipgloss.Width(left)+lipgloss.Width(timer)+3 <= m.width {
+		return padBetween(left, timer, m.width)
+	}
+	return left + sep + timer
 }
 
 // footer renders the Grok-style status strip: cwd, model, and usage segments

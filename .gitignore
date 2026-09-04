@@ -43,3 +43,6 @@ paseo/
 test-ui/
 muse-session.md
 RENDRED_DESK.md
+
+# xAI grok-build reference checkout (Apache-2.0, studied only, never built or shipped)
+/grok-build/

@@ -369,17 +369,28 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	m.width, m.height = w, h
 
 	m.syncComposerStyle()
+	vpWidth := m.transcriptWidth()
 	vpHeight := m.viewportHeight()
 	if !m.ready {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
+		m.viewport = viewport.New(viewport.WithWidth(vpWidth), viewport.WithHeight(vpHeight))
 		m.ready = true
 	} else {
-		m.viewport.SetWidth(w)
+		m.viewport.SetWidth(vpWidth)
 		m.viewport.SetHeight(vpHeight)
 	}
 	m.transcript.invalidate()
 	m.refreshViewport()
 	return m, nil
+}
+
+// transcriptWidth is the scrollback content width. Grok reserves a gap and a
+// track column on the right edge for the scrollbar; tiny terminals keep the
+// full width so content is never starved.
+func (m *model) transcriptWidth() int {
+	if m.width > 40 {
+		return m.width - 2
+	}
+	return m.width
 }
 
 // chromeHeight is the status row plus the two footer rows. The composer's own
@@ -612,7 +623,7 @@ func (m *model) refreshViewport() {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	m.rows = m.transcript.layout(m.width)
+	m.rows = m.transcript.layout(m.transcriptWidth())
 	var content string
 	if m.showWelcome() {
 		content = m.renderWelcome()
@@ -636,7 +647,16 @@ func (m *model) View() tea.View {
 		return tea.NewView("")
 	}
 	var sb strings.Builder
-	sb.WriteString(m.viewport.View())
+	vp := m.viewport.View()
+	if m.width > 40 && !m.showWelcome() {
+		bar := m.renderScrollbar(strings.Count(vp, "\n") + 1)
+		lines := strings.Split(vp, "\n")
+		for i := range lines {
+			lines[i] += "  " + bar[i]
+		}
+		vp = strings.Join(lines, "\n")
+	}
+	sb.WriteString(vp)
 	sb.WriteByte('\n')
 	sb.WriteString(m.statusLine())
 	sb.WriteByte('\n')
