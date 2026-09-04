@@ -283,8 +283,10 @@ func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if err := m.clipboardWrite(text); err != nil {
-		m.statusMsg = "Could not copy selection: " + err.Error()
-		return m, nil
+		// The system clipboard is unavailable (headless box, ssh without an
+		// agent): fall back to OSC 52 so capable terminals copy locally.
+		m.statusMsg = fmt.Sprintf("Copied %d characters (terminal clipboard).", len([]rune(text)))
+		return m, tea.Batch(tea.SetClipboard(text), clearStatusCmd(m.statusMsg))
 	}
 	m.statusMsg = fmt.Sprintf("Copied %d characters.", len([]rune(text)))
 	return m, clearStatusCmd(m.statusMsg)

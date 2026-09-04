@@ -298,7 +298,7 @@ func TestTranscriptClickWithoutDragDoesNotCopy(t *testing.T) {
 	}
 }
 
-func TestTranscriptCopyFailureIsReported(t *testing.T) {
+func TestTranscriptCopyFailureFallsBackToTerminalClipboard(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.hasSessionTitle = true
 	m.transcript.addUser("hello")
@@ -306,11 +306,14 @@ func TestTranscriptCopyFailureIsReported(t *testing.T) {
 	m.clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
 
 	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	_, cmd := m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	_, cmd = m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
 
-	if m.statusMsg != "Could not copy selection: clipboard unavailable" {
+	if m.statusMsg != "Copied 5 characters (terminal clipboard)." {
 		t.Fatalf("status = %q", m.statusMsg)
+	}
+	if cmd == nil {
+		t.Fatal("OSC 52 fallback returned no command")
 	}
 }
 

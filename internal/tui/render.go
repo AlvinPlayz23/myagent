@@ -79,6 +79,27 @@ func (m *model) renderCommandPicker() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderHelpOverlay draws the commands-and-keys panel, truncating with an
+// indicator when the terminal is too short to show it all.
+func (m *model) renderHelpOverlay() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	width := max(1, m.width)
+	lines := []string{m.th.cmdPickerSel.MaxWidth(width).Render("Help — esc close")}
+	body := strings.Split(strings.TrimSpace(helpText), "\n")
+	if len(body) > height-1 {
+		hidden := len(body) - (height - 2)
+		body = append(body[:height-2], fmt.Sprintf("… (%d more lines)", hidden))
+	}
+	for _, line := range body {
+		lines = append(lines, m.th.cmdPickerItem.MaxWidth(width).Render(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderExportPicker draws the export format chooser.
 func (m *model) renderExportPicker() string {
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Export session as — ↑/↓ select, enter continue, esc cancel")}
 	for i, format := range []export.Format{export.Markdown, export.HTML} {

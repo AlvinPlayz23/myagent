@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
@@ -23,8 +25,12 @@ type overlayHandler interface {
 // is active at a time today; the fixed order makes stacked overlays (a
 // confirmation above a picker, a palette above a viewer) well-defined when
 // they arrive, without reordering anybody's dismissal keys.
+//
+// Adding an overlay means writing one adapter here: declare active/height/
+// key/render, and routing, layout, and the view pick it up uniformly.
 func (m *model) overlayRoute() []overlayHandler {
 	return []overlayHandler{
+		helpOverlay{m},
 		exportPickOverlay{m},
 		exportOverwriteOverlay{m},
 		exportNameOverlay{m},
@@ -37,6 +43,30 @@ func (m *model) overlayRoute() []overlayHandler {
 		fileOverlay{m},
 		commandOverlay{m},
 	}
+}
+
+// helpOverlay lists commands and keybindings above the agent screen. It is
+// the template for future informational overlays.
+type helpOverlay struct{ *model }
+
+func (o helpOverlay) overlayActive() bool { return o.helpActive }
+func (o helpOverlay) overlayHeight() int {
+	return len(strings.Split(strings.TrimSpace(helpText), "\n")) + 1
+}
+func (o helpOverlay) overlayRender() string { return o.renderHelpOverlay() }
+
+func (o helpOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	switch k.Keystroke() {
+	case "esc", "enter":
+		o.helpActive = false
+		o.statusMsg = ""
+		o.updateLayout()
+		return o, nil, true
+	case "ctrl+c":
+		// Preserve the global quit behavior in the composer layer.
+		return o, nil, false
+	}
+	return o, nil, true
 }
 
 // exportPickOverlay chooses an export format.

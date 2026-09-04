@@ -86,6 +86,7 @@ type model struct {
 	selection       *textSelection
 	rows            []layoutRow
 	unseenRows      int
+	helpActive      bool
 	clipboardWrite  func(string) error
 	clipboardRead   func() (clipboardPayload, error)
 	clipboardBusy   bool

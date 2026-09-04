@@ -240,8 +240,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 
 	switch cmd.kind {
 	case commandHelp:
-		m.transcript.addNotice(helpText)
-		m.refreshViewport()
+		m.helpActive = true
+		m.updateLayout()
 	case commandClear:
 		m.runner.discardEvents()
 		m.transcript.clear()
