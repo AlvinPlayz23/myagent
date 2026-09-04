@@ -324,7 +324,7 @@ func seedTranscript(t *transcript, history []types.Message) {
 				t.addNotice("∼ " + textOf(msg))
 				continue
 			}
-			t.addUser(textOf(msg))
+			t.addUserAt(textOf(msg), msg.Timestamp)
 		case types.RoleAssistant:
 			// Walk content blocks so thinking and text interleave in their
 			// original order rather than collapsing into one text block.

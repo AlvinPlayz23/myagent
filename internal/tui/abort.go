@@ -18,9 +18,9 @@ func (m *model) abortActiveRun() bool {
 		m.queuedSteering = nil
 		m.queuedFollowUps = nil
 		m.activePrompt = nil
-		m.updateLayout()
 		m.cancel()
 	}
 	m.statusMsg = "Aborting…"
+	m.updateLayout()
 	return true
 }

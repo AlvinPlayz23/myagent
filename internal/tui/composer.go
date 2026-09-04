@@ -37,14 +37,14 @@ type promptChoice struct {
 }
 
 var promptChoices = []promptChoice{
-	{style: promptDefault, label: "Default", description: "(default) framed panel with a ❯ arrow"},
+	{style: promptDefault, label: "Default", description: "(default) compact framed prompt with a ❯ arrow"},
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
-// defaultComposerHeight is the framed composer's body height. The panel adds
-// a top and bottom border, so the chrome totals the same six rows the
-// bubbles textarea default occupied — keeping short-terminal layouts intact.
-const defaultComposerHeight = 4
+// defaultComposerHeight is the framed composer's idle body height. It grows
+// only after an explicit multiline edit, keeping the normal screen as compact
+// as a coding agent's one-line dispatch prompt.
+const defaultComposerHeight = 1
 
 // ruledPrompt is the marker drawn at the start of the ruled composer's line.
 const ruledPrompt = "› "
@@ -107,10 +107,12 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	}
 	if m.clipboardBusy {
 		m.statusMsg = "Wait for the clipboard image to finish loading."
+		m.updateLayout()
 		return m, nil
 	}
 	if m.abortRequested {
 		m.statusMsg = "Wait for the current run to finish aborting."
+		m.updateLayout()
 		return m, nil
 	}
 	m.picker.close()
@@ -126,12 +128,14 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 	content, err := expandPromptContent(text, m.cwd)
 	if err != nil {
 		m.statusMsg = err.Error()
+		m.updateLayout()
 		return m, nil
 	}
 	attachmentCount := m.attachments.len()
 	content, err = m.attachments.appendTo(content)
 	if err != nil {
 		m.statusMsg = err.Error()
+		m.updateLayout()
 		return m, nil
 	}
 	display := text
@@ -158,7 +162,7 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 		}
 
 		if mode == submitSteering {
-			m.transcript.addUser(display)
+			m.transcript.addUserAt(display, um.Timestamp)
 		}
 		m.updateLayout()
 		return m, nil
@@ -172,8 +176,7 @@ func (m *model) submit(mode submissionMode) (tea.Model, tea.Cmd) {
 // text the user actually typed. (The loop also emits message_start for this
 // user message, but onAgentEvent skips RoleUser to avoid a duplicate.)
 func (m *model) startRun(display string, um types.Message) (tea.Model, tea.Cmd) {
-	m.transcript.addUser(display)
-	m.refreshViewport()
+	m.transcript.addUserAt(display, um.Timestamp)
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.cancel = cancel
 	m.working = true
@@ -182,6 +185,7 @@ func (m *model) startRun(display string, um types.Message) (tea.Model, tea.Cmd) 
 	m.startedAt = time.Now()
 	m.statusMsg = ""
 	m.lastErr = nil
+	m.updateLayout()
 	return m, m.runner.start(runCtx, um)
 }
 
@@ -233,10 +237,10 @@ func (m *model) syncComposerStyle() {
 		m.input.MaxContentHeight = composerContentRows
 	} else {
 		m.input.Prompt = m.defaultPrompt
-		m.input.DynamicHeight = false
-		m.input.MinHeight = 0
-		m.input.MaxHeight = m.defaultMaxHeight
-		m.input.MaxContentHeight = 0
+		m.input.DynamicHeight = true
+		m.input.MinHeight = defaultComposerHeight
+		m.input.MaxHeight = m.framedGrowthLimit()
+		m.input.MaxContentHeight = composerContentRows
 		m.input.SetHeight(defaultComposerHeight)
 	}
 	m.input.SetWidth(m.composerTextWidth())
@@ -249,6 +253,17 @@ func (m *model) ruledGrowthLimit() int {
 	if m.height <= 0 {
 		return ruledComposerMaxRows
 	}
-	budget := m.height - chromeHeight - ruledComposerRules - ruledComposerReserve
+	budget := m.height - m.chromeHeight() - ruledComposerRules - ruledComposerReserve
 	return max(ruledComposerMinRows, min(ruledComposerMaxRows, budget))
+}
+
+// framedGrowthLimit reserves the frame's borders plus one scrollback row.
+// The default prompt is compact at rest but never turns a multiline paste
+// into a clipped single-line editor.
+func (m *model) framedGrowthLimit() int {
+	if m.height <= 0 {
+		return ruledComposerMaxRows
+	}
+	budget := m.height - m.chromeHeight() - composerFrameRows - 1
+	return max(defaultComposerHeight, min(ruledComposerMaxRows, budget))
 }

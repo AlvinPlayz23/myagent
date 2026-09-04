@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/AlvinPlayz23/myagent/internal/types"
@@ -31,7 +32,8 @@ type block struct {
 	kind blockKind
 
 	// assistant/user/error text (markdown for user/assistant, plain for error)
-	text string
+	text      string
+	timestamp int64 // Unix milliseconds; user turns use it for the card metadata.
 
 	// tool fields
 	toolCallID string
@@ -134,7 +136,13 @@ func (t *transcript) toggleExpand() {
 
 // addUser appends a user block.
 func (t *transcript) addUser(text string) {
-	t.add(&block{kind: blockUser, text: text})
+	t.addUserAt(text, 0)
+}
+
+// addUserAt appends a user block with its durable message timestamp. Keeping
+// this in the block means resumed and live sessions use the same card chrome.
+func (t *transcript) addUserAt(text string, timestamp int64) {
+	t.add(&block{kind: blockUser, text: text, timestamp: timestamp})
 }
 
 // beginAssistant starts a new (empty) streaming assistant block.
@@ -328,16 +336,37 @@ func (t *transcript) layoutUser(b *block, width int) []layoutRow {
 		if i == 0 {
 			prefix = "❯ "
 		}
+		meta := ""
+		if i == 0 && b.timestamp > 0 && width >= 36 {
+			meta = time.UnixMilli(b.timestamp).Local().Format("3:04 PM")
+		}
 		fill := max(0, width-2-ansi.StringWidth(line))
+		metaGap := 0
+		if meta != "" {
+			metaWidth := ansi.StringWidth(meta)
+			if fill > metaWidth {
+				metaGap = fill - metaWidth
+				fill = 0
+			} else {
+				meta = ""
+			}
+		}
+		spans := []layoutSpan{
+			{text: prefix, style: t.th.userPrefix},
+			{text: line + strings.Repeat(" ", fill+metaGap), style: t.th.userText},
+		}
+		suffixCols := 0
+		if meta != "" {
+			spans = append(spans, layoutSpan{text: meta, style: t.th.userMeta})
+			suffixCols = ansi.StringWidth(meta)
+		}
 		rows = append(rows, layoutRow{
-			kind:    rowUser,
-			blockID: b.id,
-			lineIdx: i,
-			spans: []layoutSpan{
-				{text: prefix, style: t.th.userPrefix},
-				{text: line + strings.Repeat(" ", fill), style: t.th.userText},
-			},
-			gutterCols: 2,
+			kind:             rowUser,
+			blockID:          b.id,
+			lineIdx:          i,
+			spans:            spans,
+			gutterCols:       2,
+			gutterSuffixCols: suffixCols,
 		})
 	}
 	return wrapRows(rows, width)

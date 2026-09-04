@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -241,13 +243,13 @@ func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 	m.viewport.GotoBottom()
 
 	initialOffset := m.viewport.YOffset()
-	m.onMouseWheel(tea.MouseWheelMsg{Y: 0, Button: tea.MouseWheelUp})
+	m.onMouseWheel(tea.MouseWheelMsg{Y: m.topBarHeight(), Button: tea.MouseWheelUp})
 	if m.viewport.YOffset() >= initialOffset {
 		t.Fatalf("wheel up offset = %d, want less than %d", m.viewport.YOffset(), initialOffset)
 	}
 
 	scrolledOffset := m.viewport.YOffset()
-	m.onMouseWheel(tea.MouseWheelMsg{Y: m.viewport.Height(), Button: tea.MouseWheelDown})
+	m.onMouseWheel(tea.MouseWheelMsg{Y: m.topBarHeight() + m.viewport.Height(), Button: tea.MouseWheelDown})
 	if m.viewport.YOffset() != scrolledOffset {
 		t.Fatalf("wheel outside transcript offset = %d, want %d", m.viewport.YOffset(), scrolledOffset)
 	}
@@ -264,9 +266,10 @@ func TestTranscriptDragCopiesDisplayedText(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: 0, Button: tea.MouseLeft})
+	y := m.topBarHeight()
+	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: y, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: y, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: y, Button: tea.MouseLeft})
 
 	if copied != "hello" {
 		t.Fatalf("clipboard = %q, want %q", copied, "hello")
@@ -290,8 +293,9 @@ func TestTranscriptClickWithoutDragDoesNotCopy(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	y := m.topBarHeight()
+	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 1, Y: y, Button: tea.MouseLeft})
 
 	if calls != 0 {
 		t.Fatalf("clipboard writes = %d, want 0", calls)
@@ -305,9 +309,10 @@ func TestTranscriptCopyFailureFallsBackToTerminalClipboard(t *testing.T) {
 	m.onResize(40, 20)
 	m.clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
 
-	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
-	_, cmd := m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: 0, Button: tea.MouseLeft})
-	_, cmd = m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: 0, Button: tea.MouseLeft})
+	y := m.topBarHeight()
+	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: y, Button: tea.MouseLeft})
+	_, cmd := m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: y, Button: tea.MouseLeft})
+	_, cmd = m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: y, Button: tea.MouseLeft})
 
 	if m.statusMsg != "Copied 5 characters (terminal clipboard)." {
 		t.Fatalf("status = %q", m.statusMsg)
@@ -323,7 +328,7 @@ func TestTranscriptPointIncludesViewportOffset(t *testing.T) {
 	m.viewport.SetContent(strings.Repeat("line\n", m.viewport.Height()*2))
 	m.viewport.GotoBottom()
 
-	point, ok := m.transcriptPoint(3, 1)
+	point, ok := m.transcriptPoint(3, m.topBarHeight()+1)
 	if !ok {
 		t.Fatal("transcript point was rejected")
 	}
@@ -345,11 +350,95 @@ func TestViewFitsTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestWorkingStatusFitsTerminalHeight(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 12)
+	m.working = true
+	m.startedAt = time.Now()
+	m.updateLayout()
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "Working…") || !strings.Contains(view, "esc to cancel") {
+		t.Fatalf("working status not rendered:\n%s", view)
+	}
+	if got := strings.Count(view, "\n") + 1; got > m.height {
+		t.Fatalf("working view height = %d, terminal height = %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestModalPanelFitsTerminalHeight(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(100, 30)
+	m.helpActive = true
+	m.updateLayout()
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "Help — esc close") {
+		t.Fatalf("rounded help modal not rendered:\n%s", view)
+	}
+	if got := strings.Count(view, "\n") + 1; got > m.height {
+		t.Fatalf("modal view height = %d, terminal height = %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestGrokFrameUsesCompactPromptAndNeverOverflows(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "openai/gpt-5.5", "/workspace/myagent")
+	m.hasSessionTitle = true
+	m.sessionTitle = "inspect layout"
+	m.transcript.addUserAt("Inspect the terminal layout.", time.Date(2026, time.September, 4, 12, 34, 0, 0, time.Local).UnixMilli())
+	m.onResize(80, 16)
+
+	if got, want := m.composerHeight(), composerFrameRows+defaultComposerHeight; got != want {
+		t.Fatalf("idle composer height = %d, want compact %d", got, want)
+	}
+	view := ansi.Strip(m.View().Content)
+	for i, line := range strings.Split(view, "\n") {
+		if got := ansi.StringWidth(line); got > m.width {
+			t.Fatalf("line %d is %d cells wide, terminal is %d:\n%q", i, got, m.width, line)
+		}
+	}
+	for _, want := range []string{
+		"/workspace/myagent",
+		"0 tokens",
+		"❯ Inspect the terminal layout.",
+		time.Date(2026, time.September, 4, 12, 34, 0, 0, time.Local).Format("3:04 PM"),
+		"╭",
+		"╰",
+		"ctrl+enter newline",
+		"enter:send",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Grok frame missing %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "\n╭") || strings.Contains(view, "│╭") {
+		t.Fatalf("scrollbar joined the composer frame:\n%s", view)
+	}
+}
+
+func TestUserCardTimestampIsVisualOnlyWhenCopied(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	ts := time.Date(2026, time.September, 4, 12, 34, 0, 0, time.Local).UnixMilli()
+	tr.addUserAt("hello", ts)
+	row := tr.layout(80)[0]
+	if row.gutterSuffixCols == 0 {
+		t.Fatal("timestamp was not marked as visual-only card metadata")
+	}
+	copied := copyRowsText([]layoutRow{row}, textSelection{
+		anchor:  textPoint{row: 0, col: 0},
+		current: textPoint{row: 0, col: row.width()},
+		dragged: true,
+	})
+	if got, want := copied, "hello"; got != want {
+		t.Fatalf("copied user card = %q, want %q", got, want)
+	}
+}
+
 func TestWelcomeShownForEmptySession(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(80, 20)
 
-	if content := m.viewport.View(); !strings.Contains(content, "myagent") || !strings.Contains(content, "Type a prompt to begin") {
+	if content := m.viewport.View(); !strings.Contains(content, "Ask anything or describe a change") || !strings.Contains(content, "Type a prompt") {
 		t.Fatalf("empty-session viewport does not contain welcome: %q", content)
 	}
 }
@@ -380,7 +469,7 @@ func TestWelcomeDoesNotReturnAfterClearingEstablishedConversation(t *testing.T) 
 	m.transcript.clear()
 	m.refreshViewport()
 
-	if content := m.viewport.View(); strings.Contains(content, "Your terminal coding agent") {
+	if content := m.viewport.View(); strings.Contains(content, "Ask anything or describe a change") {
 		t.Fatalf("welcome returned after clearing an established conversation: %q", content)
 	}
 }
@@ -411,7 +500,7 @@ func TestOrbWelcomeAnimatesWhileSessionIsEmpty(t *testing.T) {
 	if first == second {
 		t.Fatal("orb welcome did not change across animation ticks")
 	}
-	if !strings.Contains(second, "myagent") || !strings.Contains(second, "●") {
+	if !strings.Contains(second, "Ask anything or describe a change") || !strings.Contains(second, "●") {
 		t.Fatalf("animated orb welcome is incomplete: %q", second)
 	}
 }

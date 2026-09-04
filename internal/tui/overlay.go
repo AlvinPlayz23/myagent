@@ -51,7 +51,9 @@ type helpOverlay struct{ *model }
 
 func (o helpOverlay) overlayActive() bool { return o.helpActive }
 func (o helpOverlay) overlayHeight() int {
-	return len(strings.Split(strings.TrimSpace(helpText), "\n")) + 1
+	// Measure the same framed content used by the modal: its side padding can
+	// wrap the two longest help rows even when the terminal itself is wide.
+	return strings.Count(o.modalWindow(o.helpContent()), "\n") + 1 - modalWindowRows
 }
 func (o helpOverlay) overlayRender() string { return o.renderHelpOverlay() }
 
@@ -61,12 +63,12 @@ func (o helpOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 		o.helpActive = false
 		o.statusMsg = ""
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	case "ctrl+c":
 		// Preserve the global quit behavior in the composer layer.
-		return o, nil, false
+		return o.model, nil, false
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // exportPickOverlay chooses an export format.
@@ -96,7 +98,7 @@ func (o exportPickOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		o.statusMsg = "Export cancelled."
 		o.updateLayout()
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // exportOverwriteOverlay confirms overwriting an existing export file.
@@ -122,7 +124,7 @@ func (o exportOverwriteOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cm
 		o.statusMsg = "Export cancelled."
 		o.updateLayout()
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // exportNameOverlay collects the export file name.
@@ -141,14 +143,14 @@ func (o exportNameOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		o.exportName.Reset()
 		o.statusMsg = "Export cancelled."
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	case "enter":
 		view, cmd := o.writeExport(false)
 		return view, cmd, true
 	}
 	var cmd tea.Cmd
 	o.exportName, cmd = o.exportName.Update(k)
-	return o, cmd, true
+	return o.model, cmd, true
 }
 
 // sessionOverlay resumes a persisted session.
@@ -164,10 +166,10 @@ func (o sessionOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool)
 	switch k.Keystroke() {
 	case "up":
 		o.sessions.move(-1)
-		return o, nil, true
+		return o.model, nil, true
 	case "down":
 		o.sessions.move(1)
-		return o, nil, true
+		return o.model, nil, true
 	case "enter":
 		view, cmd := o.resumeSelectedSession()
 		return view, cmd, true
@@ -175,12 +177,12 @@ func (o sessionOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool)
 		o.sessions.close()
 		o.statusMsg = "Resume cancelled."
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	case "ctrl+c":
 		// Preserve the global quit behavior in the composer layer.
-		return o, nil, false
+		return o.model, nil, false
 	default:
-		return o, nil, true
+		return o.model, nil, true
 	}
 }
 
@@ -223,7 +225,7 @@ func (o modelOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 			o.updateLayout()
 		}
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // effortOverlay selects reasoning effort.
@@ -249,7 +251,7 @@ func (o effortOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) 
 		o.statusMsg = "Effort selection cancelled."
 		o.updateLayout()
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // customizeOverlay picks welcome and composer styles.
@@ -275,7 +277,7 @@ func (o customizeOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 		o.statusMsg = "Customization cancelled."
 		o.updateLayout()
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // providerKeyOverlay collects a provider API key.
@@ -297,14 +299,14 @@ func (o providerKeyOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, b
 		o.providers.active = true
 		o.statusMsg = "Provider edit cancelled."
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	case "enter":
 		view, cmd := o.saveProviderKey()
 		return view, cmd, true
 	}
 	var cmd tea.Cmd
 	o.keyInput, cmd = o.keyInput.Update(k)
-	return o, cmd, true
+	return o.model, cmd, true
 }
 
 // providerOverlay selects a provider to configure.
@@ -332,7 +334,7 @@ func (o providerOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool
 		o.statusMsg = "Provider selection cancelled."
 		o.updateLayout()
 	}
-	return o, nil, true
+	return o.model, nil, true
 }
 
 // fileOverlay completes an @file mention. Unhandled keys continue to the
@@ -349,19 +351,19 @@ func (o fileOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	switch k.Keystroke() {
 	case "up":
 		o.files.move(-1)
-		return o, nil, true
+		return o.model, nil, true
 	case "down":
 		o.files.move(1)
-		return o, nil, true
+		return o.model, nil, true
 	case "tab", "enter":
 		view, cmd := o.acceptFilePicker()
 		return view, cmd, true
 	case "esc":
 		o.files.dismiss(o.input.Value())
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	}
-	return o, nil, false
+	return o.model, nil, false
 }
 
 // commandOverlay completes a slash command. Unhandled keys continue to the
@@ -378,10 +380,10 @@ func (o commandOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool)
 	switch k.Keystroke() {
 	case "up":
 		o.picker.move(-1)
-		return o, nil, true
+		return o.model, nil, true
 	case "down":
 		o.picker.move(1)
-		return o, nil, true
+		return o.model, nil, true
 	case "tab":
 		view, cmd := o.acceptCommandPicker(false)
 		return view, cmd, true
@@ -391,7 +393,7 @@ func (o commandOverlay) overlayKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool)
 	case "esc":
 		o.picker.dismiss(o.input.Value())
 		o.updateLayout()
-		return o, nil, true
+		return o.model, nil, true
 	}
-	return o, nil, false
+	return o.model, nil, false
 }

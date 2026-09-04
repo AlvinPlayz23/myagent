@@ -5,10 +5,15 @@ import (
 	"testing"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newThinkingTestTranscript() *transcript {
 	return newTranscript(newTheme(), newMDRenderer())
+}
+
+func renderedThinkingTranscript(tr *transcript) string {
+	return ansi.Strip(tr.render(80))
 }
 
 func TestThinkingBlockAccumulatesDeltas(t *testing.T) {
@@ -67,7 +72,7 @@ func TestThinkingHiddenByToggle(t *testing.T) {
 	tr.appendAssistantDelta("visible answer")
 	tr.endAssistant()
 
-	out := tr.render(80)
+	out := renderedThinkingTranscript(tr)
 	if strings.Contains(out, "secret reasoning") || strings.Contains(out, "Thought") {
 		t.Fatalf("rendered thinking while hidden:\n%s", out)
 	}
@@ -77,7 +82,7 @@ func TestThinkingHiddenByToggle(t *testing.T) {
 
 	// Toggling back on reveals the accumulated text retroactively.
 	tr.setShowThinking(true)
-	out = tr.render(80)
+	out = renderedThinkingTranscript(tr)
 	if !strings.Contains(out, "secret reasoning") {
 		t.Fatalf("thinking not revealed after toggle:\n%s", out)
 	}
@@ -89,14 +94,14 @@ func TestThinkingRenderStates(t *testing.T) {
 	// Streaming state shows the live header.
 	tr.beginThinking()
 	tr.appendThinkingDelta("musing")
-	out := tr.render(80)
+	out := renderedThinkingTranscript(tr)
 	if !strings.Contains(out, "◇ Thinking…") || !strings.Contains(out, "musing") {
 		t.Fatalf("streaming render = %q", out)
 	}
 	tr.endThinking()
 
 	// Completed state flips the header.
-	out = tr.render(80)
+	out = renderedThinkingTranscript(tr)
 	if !strings.Contains(out, "◆ Thought") || !strings.Contains(out, "musing") {
 		t.Fatalf("completed render = %q", out)
 	}
@@ -106,12 +111,12 @@ func TestThinkingRenderStates(t *testing.T) {
 	tr.beginThinking()
 	tr.appendThinkingDelta(long)
 	tr.endThinking()
-	collapsed := tr.render(80)
+	collapsed := renderedThinkingTranscript(tr)
 	if strings.Contains(collapsed, long) || !strings.Contains(collapsed, "ctrl+o to expand") {
 		t.Fatalf("collapsed render should preview the tail:\n%s", collapsed)
 	}
 	tr.toggleExpand()
-	expanded := tr.render(80)
+	expanded := renderedThinkingTranscript(tr)
 	if !strings.Contains(expanded, "end") || !strings.Contains(expanded, "(ctrl+o to collapse)") {
 		t.Fatalf("expanded render =\n%s", expanded)
 	}
@@ -136,7 +141,7 @@ func TestEndAssistantFinalizesThinkingOnMidReasoningAbort(t *testing.T) {
 	if !tr.blocks[1].done {
 		t.Fatal("thinking block left unfinished after endAssistant")
 	}
-	out := tr.render(80)
+	out := renderedThinkingTranscript(tr)
 	if strings.Contains(out, "Thinking\u2026") {
 		t.Fatalf("transcript still shows streaming header after end:\n%s", out)
 	}
@@ -182,7 +187,7 @@ func TestSeedTranscriptPreservesThinkingOrder(t *testing.T) {
 	}
 
 	// Seeded thinking is complete and renders with the Thought header.
-	out := tr.render(80)
+	out := renderedThinkingTranscript(tr)
 	if !strings.Contains(out, "◆ Thought") {
 		t.Fatalf("seeded thinking should be complete:\n%s", out)
 	}

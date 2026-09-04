@@ -47,6 +47,26 @@ func TestHelpOverlayRoutesThroughOverlayStack(t *testing.T) {
 	}
 }
 
+func TestOverlayKeyHandlingKeepsTheRootModel(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	m.helpActive = true
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if got, ok := next.(*model); !ok || got != m {
+		t.Fatalf("dismissed help returned %T, want the root model", next)
+	}
+
+	_, cmd := next.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Fatal("ctrl+c after dismissing help returned no quit command")
+	}
+	message := cmd()
+	if _, ok := message.(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c after dismissing help returned %T, want tea.QuitMsg", message)
+	}
+}
+
 func TestResizeNarrowWideNarrowPreservesContentAndSelectionMath(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.hasSessionTitle = true
@@ -77,7 +97,7 @@ func TestResizeNarrowWideNarrowPreservesContentAndSelectionMath(t *testing.T) {
 	if last < 0 {
 		t.Fatal("no rows after resize")
 	}
-	y := min(m.viewport.Height()-1, last)
+	y := m.topBarHeight() + min(m.viewport.Height()-1, last)
 	m.onMouseClick(tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
 	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: y, Button: tea.MouseLeft})
 	var copied string

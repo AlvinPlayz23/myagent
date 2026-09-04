@@ -25,7 +25,7 @@ type welcomeChoice struct {
 }
 
 var welcomeChoices = []welcomeChoice{
-	{style: welcomeDefault, label: "Default", description: "myagent text"},
+	{style: welcomeDefault, label: "Default", description: "minimal session-ready view"},
 	{style: welcomeOrb, label: "Orb", description: "animated dotted orb"},
 	{style: welcomeBanner, label: "Banner", description: "block letters with a shimmer sweep"},
 	{style: welcomeWave, label: "Wave", description: "flowing ripple under the title"},
@@ -53,7 +53,7 @@ func (m *model) showWelcome() bool {
 // lives outside the transcript so it is never persisted as conversation
 // history and disappears as soon as the first prompt gives the session a title.
 func (m *model) renderWelcome() string {
-	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
+	title := centerLine(m.th.orbBright.Render("✦"), m.width)
 	if m.welcomeStyle == welcomeBanner && m.width >= bannerMinWidth {
 		title = m.renderBanner()
 	}
@@ -64,8 +64,8 @@ func (m *model) renderWelcome() string {
 		return title
 	}
 
-	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
-	hint := "Type a prompt to begin · /help for commands"
+	subtitle := centerLine(m.th.muted.Render("Ask anything or describe a change"), m.width)
+	hint := "Type a prompt · /help for commands"
 	if m.width < 44 {
 		hint = "Type a prompt · /help for commands"
 	}
@@ -114,7 +114,7 @@ func (m *model) renderHero(title, subtitle string) string {
 	}
 	rows := make([]string, 0, len(menu))
 	for _, item := range menu {
-		rows = append(rows, "  "+m.th.userText.Render(item.label)+"   "+m.th.muted.Render(item.key)+"  ")
+		rows = append(rows, "  "+m.th.assistantTxt.Render(item.label)+"   "+m.th.muted.Render(item.key)+"  ")
 	}
 	menuWidth := 0
 	for _, item := range menu {

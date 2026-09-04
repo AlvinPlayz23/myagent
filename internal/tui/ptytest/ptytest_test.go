@@ -33,9 +33,12 @@ func TestStartupAndCleanExit(t *testing.T) {
 	srv := mustServer(t)
 	app := Launch(t, srv)
 
-	// The welcome screen renders: title, subtitle, and the /help hint.
-	app.RequireContains("Your terminal coding agent", startupWait)
+	// The welcome screen renders the compact session-ready subtitle and help hint.
+	app.RequireContains("Ask anything or describe a change", startupWait)
 	app.RequireContains("/help for commands", stepWait)
+	app.RequireContains("0 tokens", stepWait)
+	app.RequireContains("ctrl+enter newline", stepWait)
+	app.RequireContains("enter:send", stepWait)
 
 	// Ctrl+C on an idle app quits; the TUI restores the terminal and main
 	// prints the resume instructions before exiting 0.
@@ -55,14 +58,16 @@ func TestPromptReceivesMockedResponse(t *testing.T) {
 		Text: []string{
 			"Mocked ", "assistant ", "reply ", "from ", "the ", "fake ", "server.",
 		},
+		GateAfter: 1,
 	})
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	app.Send("What is a PTY?\r")
 	// The working status appears while the turn streams, then the scripted
 	// assistant text lands in the transcript.
 	app.RequireContains("esc to cancel", stepWait)
+	srv.Release()
 	app.RequireContains("Mocked assistant reply from the fake server.", stepWait)
 	app.QuitClean()
 }
@@ -80,7 +85,7 @@ func TestAbortWithEscWhileStreaming(t *testing.T) {
 		GateAfter: 1,
 	})
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	app.Send("Answer slowly please.\r")
 	app.RequireContains("First visible delta.", stepWait)
@@ -117,7 +122,7 @@ func TestQueueFollowUpWhileStreaming(t *testing.T) {
 		Text: []string{"Second queued ", "reply ", "arrived."},
 	})
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	app.Send("First prompt please.\r")
 	app.RequireContains("First reply half.", stepWait)
@@ -143,7 +148,7 @@ func TestResizeWhileStreaming(t *testing.T) {
 		GateAfter: 1,
 	})
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	app.Send("Reply while I resize.\r")
 	app.RequireContains("Resize live reply start.", stepWait)
@@ -164,7 +169,7 @@ func TestResizeWhileStreaming(t *testing.T) {
 func TestHelpOverlayOpenAndDismiss(t *testing.T) {
 	srv := mustServer(t)
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	// Typing "/" opens the command-picker overlay with the /help suggestion.
 	app.Send("/")
@@ -184,6 +189,9 @@ func TestHelpOverlayOpenAndDismiss(t *testing.T) {
 	// The Keys line is longer than the terminal is wide, so only its prefix
 	// is on screen; assert the part that fits.
 	app.RequireContains("Keys: enter send/queue follow-up", stepWait)
+	app.Send("\x1b")
+	app.RequireGone("Commands:", stepWait)
+	app.RequireContains("Send a message", stepWait)
 	app.QuitClean()
 }
 
@@ -199,7 +207,7 @@ func TestPageUpScrollKeepsAppResponsive(t *testing.T) {
 	}
 	srv.EnqueueScript(Script{Text: paras})
 	app := Launch(t, srv)
-	app.RequireContains("Your terminal coding agent", startupWait)
+	app.RequireContains("Ask anything or describe a change", startupWait)
 
 	app.Send("Write thirty paragraphs.\r")
 	// The tail is on screen when the viewport sits at the bottom.

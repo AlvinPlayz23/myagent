@@ -97,11 +97,9 @@ type model struct {
 	welcomeStyle    welcomeStyle
 	welcomeFrame    int
 	promptStyle     promptStyle
-	// defaultPrompt is the textarea's stock gutter and defaultMaxHeight its stock
-	// row cap, both captured at construction so switching back from the ruled
-	// style restores them without hardcoding bubbles' defaults.
-	defaultPrompt    string
-	defaultMaxHeight int
+	// defaultPrompt is the textarea's stock gutter, captured so switching back
+	// from the ruled style restores the compact framed prompt's arrow.
+	defaultPrompt string
 
 	modelID string
 	cwd     string
@@ -163,26 +161,25 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		createSession = newSession[0]
 	}
 	return &model{
-		ctx:              ctx,
-		runner:           r,
-		queue:            q,
-		th:               th,
-		md:               md,
-		transcript:       newTranscript(th, md),
-		input:            ta,
-		keyInput:         key,
-		exportName:       exportName,
-		picker:           newCommandPicker(),
-		clipboardWrite:   clipboard.WriteAll,
-		clipboardRead:    readNativeClipboard,
-		historyIndex:     -1,
-		welcomeStyle:     welcomeDefault,
-		promptStyle:      promptDefault,
-		defaultPrompt:    ta.Prompt,
-		defaultMaxHeight: ta.MaxHeight,
-		modelID:          modelID,
-		cwd:              cwd,
-		newSession:       createSession,
+		ctx:            ctx,
+		runner:         r,
+		queue:          q,
+		th:             th,
+		md:             md,
+		transcript:     newTranscript(th, md),
+		input:          ta,
+		keyInput:       key,
+		exportName:     exportName,
+		picker:         newCommandPicker(),
+		clipboardWrite: clipboard.WriteAll,
+		clipboardRead:  readNativeClipboard,
+		historyIndex:   -1,
+		welcomeStyle:   welcomeDefault,
+		promptStyle:    promptDefault,
+		defaultPrompt:  ta.Prompt,
+		modelID:        modelID,
+		cwd:            cwd,
+		newSession:     createSession,
 	}
 }
 
@@ -232,11 +229,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clipboardBusy = false
 		if msg.err != nil {
 			m.statusMsg = "Could not read clipboard: " + msg.err.Error()
+			m.updateLayout()
 			return m, nil
 		}
 		if len(msg.payload.image) > 0 {
 			if err := m.attachments.add(msg.payload.image); err != nil {
 				m.statusMsg = "Could not attach clipboard image: " + err.Error()
+				m.updateLayout()
 				return m, nil
 			}
 			m.statusMsg = fmt.Sprintf("Attached clipboard image (%d/%d).", m.attachments.len(), images.MaxImages)
@@ -251,6 +250,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.statusMsg = "Clipboard does not contain text or an image."
+		m.updateLayout()
 		return m, nil
 
 	case modelsDiscoveredMsg:
@@ -261,6 +261,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.models.active && len(m.models.matched) == 0 {
 				m.statusMsg = fmt.Sprintf("Model discovery failed: %v", msg.err)
+				m.updateLayout()
 				return m, clearStatusCmd(m.statusMsg)
 			}
 			return m, nil
@@ -290,6 +291,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				plural = ""
 			}
 			m.statusMsg = fmt.Sprintf("Discovered %d new model%s from %s.", added, plural, msg.provider)
+			m.updateLayout()
 		}
 		return m, nil
 
@@ -332,6 +334,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cancel != nil {
 			m.cancel = nil
 		}
+		m.updateLayout()
 		return m, m.runner.waitForEvent()
 
 	case tickMsg:
@@ -352,6 +355,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearStatusMsg:
 		if m.statusMsg == msg.status {
 			m.statusMsg = ""
+			m.updateLayout()
 		}
 		return m, nil
 	}
@@ -383,8 +387,8 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// transcriptWidth is the scrollback content width. Grok reserves a gap and a
-// track column on the right edge for the scrollbar; tiny terminals keep the
+// transcriptWidth is the scrollback content width. Grok reserves exactly one
+// gap column and one track column on the right edge; tiny terminals keep the
 // full width so content is never starved.
 func (m *model) transcriptWidth() int {
 	if m.width > 40 {
@@ -393,16 +397,39 @@ func (m *model) transcriptWidth() int {
 	return m.width
 }
 
-// chromeHeight is the status row plus the two footer rows. The composer's own
-// height varies with the prompt style, so it is added separately. The blocks in
-// View are joined by newlines rather than separated by blank rows, so the
-// separators cost no extra rows.
-const chromeHeight = 3
+// topBarHeight and shortcutsHeight collapse the auxiliary frame first on
+// very small terminals, leaving a usable prompt and at least one scrollback
+// row.
+func (m *model) topBarHeight() int {
+	if m.height >= 8 && m.width >= 20 {
+		return 1
+	}
+	return 0
+}
+
+func (m *model) shortcutsHeight() int {
+	if m.height >= 8 && m.width >= 20 {
+		return 1
+	}
+	return 0
+}
+
+func (m *model) statusHeight() int {
+	if m.statusLine() != "" {
+		return 1
+	}
+	return 0
+}
+
+// chromeHeight is the non-scrollback frame excluding the variable composer.
+func (m *model) chromeHeight() int {
+	return m.topBarHeight() + m.statusHeight() + m.shortcutsHeight()
+}
 
 // fixedHeight is the part of the layout the transcript can never use. The
 // command picker borrows rows from the transcript while always leaving it at
 // least one row.
-func (m *model) fixedHeight() int { return chromeHeight + m.composerHeight() }
+func (m *model) fixedHeight() int { return m.chromeHeight() + m.composerHeight() }
 
 func (m *model) viewportHeight() int {
 	height := m.height - m.fixedHeight() - m.panelHeight() - m.queuedFollowUpHeight() - m.attachmentHeight()
@@ -429,17 +456,33 @@ func (m *model) panelHeight() int {
 	available := m.height - m.fixedHeight() - 1
 	for _, o := range m.overlayRoute() {
 		if o.overlayActive() {
-			return min(o.overlayHeight(), max(0, available))
+			height := o.overlayHeight()
+			if m.modalWindowFits(o) {
+				height += modalWindowRows
+			}
+			return min(height, max(0, available))
 		}
 	}
 	return 0
+}
+
+// panelContentHeight is the active overlay's body budget. Rounded windows
+// consume two additional border rows, which must not be offered to list or
+// help renderers as content space.
+func (m *model) panelContentHeight() int {
+	height := m.panelHeight()
+	for _, o := range m.overlayRoute() {
+		if o.overlayActive() && m.modalWindowFits(o) {
+			return max(0, height-modalWindowRows)
+		}
+	}
+	return height
 }
 
 func (m *model) updateLayout() {
 	if !m.ready {
 		return
 	}
-	m.viewport.SetHeight(m.viewportHeight())
 	m.refreshViewport()
 }
 
@@ -516,6 +559,7 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
+	y -= m.topBarHeight()
 	if !m.ready || y < 0 || y >= m.viewport.Height() || x < 0 || x >= m.viewport.Width() {
 		return textPoint{}, false
 	}
@@ -545,7 +589,7 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 				} else if i := queuedMessageIndex(m.queuedFollowUps, *ev.Message); i >= 0 {
 					queued := m.queuedFollowUps[i]
 					m.queuedFollowUps = append(m.queuedFollowUps[:i], m.queuedFollowUps[i+1:]...)
-					m.transcript.addUser(queued.display)
+					m.transcript.addUserAt(queued.display, queued.message.Timestamp)
 					m.statusMsg = ""
 					m.updateLayout()
 				}
@@ -622,22 +666,33 @@ func (m *model) refreshViewport() {
 	if !m.ready {
 		return
 	}
-	atBottom := m.viewport.AtBottom()
-	m.rows = m.transcript.layout(m.transcriptWidth())
-	var content string
-	if m.showWelcome() {
-		content = m.renderWelcome()
-	} else {
-		content = strings.Join(renderRowsSelection(m.rows, m.selection, m.th.selection), "\n") + "\n"
-	}
-	m.viewport.SetContent(content)
-	if m.selection == nil && atBottom {
-		m.viewport.GotoBottom()
-	}
-	if m.viewport.AtBottom() || m.selection != nil {
-		m.unseenRows = 0
-	} else {
-		m.unseenRows = max(0, len(m.rows)-(m.viewport.YOffset()+m.viewport.Height()))
+	// A status can appear because work begins, ends, or scrollback falls below
+	// the viewport. Re-render once after that change so its row is always
+	// accounted for before View appends it beneath the transcript.
+	for range 2 {
+		if height := m.viewportHeight(); m.viewport.Height() != height {
+			m.viewport.SetHeight(height)
+		}
+		atBottom := m.viewport.AtBottom()
+		m.rows = m.transcript.layout(m.transcriptWidth())
+		var content string
+		if m.showWelcome() {
+			content = m.renderWelcome()
+		} else {
+			content = strings.Join(renderRowsSelection(m.rows, m.selection, m.th.selection), "\n") + "\n"
+		}
+		m.viewport.SetContent(content)
+		if m.selection == nil && atBottom {
+			m.viewport.GotoBottom()
+		}
+		if m.viewport.AtBottom() || m.selection != nil {
+			m.unseenRows = 0
+		} else {
+			m.unseenRows = max(0, len(m.rows)-(m.viewport.YOffset()+m.viewport.Height()))
+		}
+		if m.viewport.Height() == m.viewportHeight() {
+			break
+		}
 	}
 }
 
@@ -646,43 +701,54 @@ func (m *model) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
 	}
-	var sb strings.Builder
-	vp := m.viewport.View()
-	if m.width > 40 && !m.showWelcome() {
-		bar := m.renderScrollbar(strings.Count(vp, "\n") + 1)
-		lines := strings.Split(vp, "\n")
-		for i := range lines {
-			lines[i] += "  " + bar[i]
-		}
-		vp = strings.Join(lines, "\n")
+	parts := make([]string, 0, 7)
+	if bar := m.topBar(); bar != "" {
+		parts = append(parts, bar)
 	}
-	sb.WriteString(vp)
-	sb.WriteByte('\n')
-	sb.WriteString(m.statusLine())
-	sb.WriteByte('\n')
+	lines := viewportRows(m.viewport.View(), m.viewport.Height())
+	if m.width > 40 && !m.showWelcome() {
+		bar := m.renderScrollbar(len(lines))
+		for i := range lines {
+			lines[i] += " " + bar[i]
+		}
+	}
+	parts = append(parts, strings.Join(lines, "\n"))
+	if status := m.statusLine(); status != "" {
+		parts = append(parts, status)
+	}
 	if picker := m.renderPanel(); picker != "" {
-		sb.WriteString(picker)
-		sb.WriteByte('\n')
+		parts = append(parts, picker)
 	}
 	if queued := m.renderQueuedFollowUps(); queued != "" {
-		sb.WriteString(queued)
-		sb.WriteByte('\n')
+		parts = append(parts, queued)
 	}
 	if attachments := m.attachments.render(m.th, m.width); attachments != "" {
-		sb.WriteString(attachments)
-		sb.WriteByte('\n')
+		parts = append(parts, attachments)
 	}
-	sb.WriteString(m.renderComposer())
-	sb.WriteByte('\n')
-	sb.WriteString(m.footer())
+	parts = append(parts, m.renderComposer())
+	if shortcuts := m.shortcuts(); shortcuts != "" {
+		parts = append(parts, shortcuts)
+	}
 
-	v := tea.NewView(sb.String())
+	v := tea.NewView(m.th.canvas.Width(m.width).Height(m.height).Render(strings.Join(parts, "\n")))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 
 	v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
 	v.KeyboardEnhancements.ReportAssociatedText = true
 	return v
+}
+
+// viewportRows clips and pads the view model to its advertised height.
+// Welcome and modal output may otherwise contain more lines than the current
+// scrollback budget and push the composer off the bottom of the terminal.
+func viewportRows(content string, height int) []string {
+	lines := strings.Split(content, "\n")
+	lines = lines[:min(len(lines), max(1, height))]
+	for len(lines) < max(1, height) {
+		lines = append(lines, "")
+	}
+	return lines
 }
 
 func messageIndex(messages []types.Message, want types.Message) int {

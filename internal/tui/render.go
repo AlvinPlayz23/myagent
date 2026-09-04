@@ -63,8 +63,8 @@ func (m *model) renderComposer() string {
 
 	// Bottom rule doubles as the info line: the model and flags right-aligned
 	// over the fill, one padding cell from the corner.
-	info := " " + m.promptInfo()
-	infoW := len([]rune(info))
+	info := ansi.Truncate(" "+m.promptInfo(), inner, "")
+	infoW := lipgloss.Width(info)
 	fill := max(0, inner-infoW)
 	rows = append(rows, "╰"+strings.Repeat("─", fill)+rail.Render(info)+"╯")
 	return strings.Join(rows, "\n")
@@ -81,7 +81,7 @@ func (m *model) promptCaption() string {
 // promptInfo is the info inlined in the composer's bottom rule: the active
 // model plus attachment flags, separated the Grok way.
 func (m *model) promptInfo() string {
-	parts := []string{m.modelID}
+	parts := []string{m.modelID, "ctrl+enter newline"}
 	if n := m.attachments.len(); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d image%s attached", n, pluralS(n)))
 	}
@@ -191,7 +191,7 @@ func (m *model) renderScrollbar(height int) []string {
 
 // renderCommandPicker draws the slash-command completion menu.
 func (m *model) renderCommandPicker() string {
-	count := m.panelHeight()
+	count := m.panelContentHeight()
 	if count == 0 {
 		return ""
 	}
@@ -217,18 +217,27 @@ func (m *model) renderCommandPicker() string {
 // renderHelpOverlay draws the commands-and-keys panel, truncating with an
 // indicator when the terminal is too short to show it all.
 func (m *model) renderHelpOverlay() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
+	lines := strings.Split(m.helpContent(), "\n")
+	if len(lines) <= height {
+		return strings.Join(lines, "\n")
+	}
+	if height == 1 {
+		return lines[0]
+	}
+	return strings.Join(append(lines[:height-1], m.th.muted.Render("… (more help below)")), "\n")
+}
+
+// helpContent returns the complete styled help body before its active panel
+// budget clips it. Keeping this independent from panelHeight lets the modal
+// reserve enough rows for its own wrapped text.
+func (m *model) helpContent() string {
 	width := max(1, m.width)
 	lines := []string{m.th.cmdPickerSel.MaxWidth(width).Render("Help — esc close")}
-	body := strings.Split(strings.TrimSpace(helpText), "\n")
-	if len(body) > height-1 {
-		hidden := len(body) - (height - 2)
-		body = append(body[:height-2], fmt.Sprintf("… (%d more lines)", hidden))
-	}
-	for _, line := range body {
+	for _, line := range strings.Split(strings.TrimSpace(helpText), "\n") {
 		lines = append(lines, m.th.cmdPickerItem.MaxWidth(width).Render(line))
 	}
 	return strings.Join(lines, "\n")
@@ -248,7 +257,7 @@ func (m *model) renderExportPicker() string {
 }
 
 func (m *model) renderFilePicker() string {
-	count := m.panelHeight()
+	count := m.panelContentHeight()
 	if count == 0 {
 		return ""
 	}
@@ -277,7 +286,7 @@ func (m *model) renderFilePicker() string {
 // renderCustomizePicker draws the settings grouped under numbered headers. The
 // window scrolls so the cursor stays visible on short terminals.
 func (m *model) renderCustomizePicker() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
@@ -323,7 +332,7 @@ func (m *model) rowIsCurrent(row customizeRow) bool {
 }
 
 func (m *model) renderEffortPicker() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
@@ -351,7 +360,7 @@ func (m *model) renderEffortPicker() string {
 }
 
 func (m *model) renderSessionPicker() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
@@ -418,7 +427,7 @@ func (m *model) renderSessionPicker() string {
 }
 
 func (m *model) renderModelPicker() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
@@ -465,7 +474,7 @@ func (m *model) discoveryLine() string {
 }
 
 func (m *model) renderProviderPicker() string {
-	height := m.panelHeight()
+	height := m.panelContentHeight()
 	if height == 0 {
 		return ""
 	}
@@ -512,7 +521,7 @@ func (m *model) statusLine() string {
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		segments = append(segments, frame+" "+m.th.userText.Render(msg))
+		segments = append(segments, frame+" "+m.th.assistantTxt.Render(msg))
 	} else if m.statusMsg != "" {
 		segments = append(segments, m.th.muted.Render(m.statusMsg))
 	}
@@ -533,26 +542,41 @@ func (m *model) statusLine() string {
 	return left + sep + timer
 }
 
-// footer renders the Grok-style status strip: cwd, model, and usage segments
-// joined by dim ` │ ` separators, with contextual key hints on the right when
-// width allows.
-func (m *model) footer() string {
-	sep := m.th.footerRight.Render(" │ ")
-	left := strings.Join([]string{
-		m.th.footer.Render(collapseHome(m.cwd)),
-		m.th.footer.Render(m.modelID),
-	}, sep)
-	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
-		compact(m.usage.Input), compact(m.usage.Output),
-		compact(m.usage.CacheRead), compact(m.usage.CacheWrite),
-		m.usage.Cost.Total)
-	line1 := left
-	hints := "enter send · esc abort · alt+enter steer · ctrl+o fold · /help"
-	if m.width > 0 && lipgloss.Width(left)+lipgloss.Width(stats)+3 <= m.width {
-		line1 = padBetween(left, m.th.footer.Render(stats), m.width)
-	} else {
-		line1 += sep + m.th.footer.Render(stats)
+// topBar renders the quiet workspace/context line above scrollback. The model
+// stays in the prompt caption, leaving this row a stable orientation aid.
+func (m *model) topBar() string {
+	if m.topBarHeight() == 0 {
+		return ""
 	}
-	line2 := m.th.footerRight.Render(hints)
-	return line1 + "\n" + line2
+	location := collapseHome(m.cwd)
+	if location == "" {
+		location = "new session"
+	}
+	left := m.th.topBar.Render(location)
+	tokens := m.usage.Input + m.usage.Output + m.usage.CacheRead + m.usage.CacheWrite
+	right := m.th.topBar.Render(compact(tokens) + " tokens")
+	if lipgloss.Width(left)+lipgloss.Width(right)+3 > m.width {
+		return ansi.Truncate(left, max(1, m.width), "")
+	}
+	return padBetween(left, right, m.width)
+}
+
+// shortcuts is the compact, single-row command strip beneath the composer.
+// It only advertises keys that the local router actually handles.
+func (m *model) shortcuts() string {
+	if m.shortcutsHeight() == 0 {
+		return ""
+	}
+	pair := func(key, action string) string {
+		return m.th.shortcutKey.Render(key) + m.th.shortcut.Render(":"+action)
+	}
+	sep := m.th.footerRight.Render("  │  ")
+	line := strings.Join([]string{
+		pair("enter", "send"),
+		pair("ctrl+enter", "newline"),
+		pair("alt+enter", "steer"),
+		pair("esc", "cancel"),
+		pair("ctrl+o", "details"),
+	}, sep)
+	return ansi.Truncate(line, max(1, m.width), "…")
 }

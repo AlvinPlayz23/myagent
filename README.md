@@ -274,9 +274,10 @@ neutral grayscale ramp with TokyoNight accents — and Bubble Tea downsamples it
 to the terminal's profile automatically. Tool/thinking state is also encoded
 in glyphs (`•` running, `✓` succeeded, `✗` failed; `◇` streaming thought,
 `◆` finished) so monochrome terminals stay legible; selections use reverse
-video for the same reason. User prompts render as Grok-style `❯` arrows, the
-composer is a rounded panel that brightens on focus, and the status/footer
-rows are ` │ `-separated segments. Mouse selection requires cell-motion mouse
+video for the same reason. A compact workspace/token row orients the screen;
+user prompts are timestamped, full-width Grok-style `❯` cards; and the
+one-row composer grows only after a multiline edit while its rounded panel
+brightens on focus. The shortcuts row uses ` │ `-separated segments. Mouse selection requires cell-motion mouse
 reporting; wheel events over the composer never scroll the transcript. Paste
 uses bracketed paste when available. When the system clipboard is unavailable
 (for example over ssh without an agent), copying falls back to OSC 52 so

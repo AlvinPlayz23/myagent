@@ -5,6 +5,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 )
 
 // theme holds the semantic style roles for the UI. The palette is GrokNight
@@ -14,6 +15,12 @@ import (
 // the terminal's profile automatically; state is additionally encoded in
 // glyphs and markers so monochrome terminals stay legible.
 type theme struct {
+	canvas      lipgloss.Style
+	topBar      lipgloss.Style
+	userMeta    lipgloss.Style
+	shortcutKey lipgloss.Style
+	shortcut    lipgloss.Style
+
 	userPrefix  lipgloss.Style
 	userText    lipgloss.Style
 	queuedLabel lipgloss.Style
@@ -67,14 +74,22 @@ func newTheme() *theme {
 		orange        = "#ff9e64"
 		red           = "#f7768e"
 		yellow        = "#e0af68"
+		canvasBg      = "#0a0a0a"
+		userSurface   = "#242424"
 		borderDim     = "#323237"
 		borderLit     = "#505058"
 		insertBg      = "#063806"
 		deleteBg      = "#420e14"
 	)
 	return &theme{
-		userPrefix:  lipgloss.NewStyle().Foreground(lipgloss.Color(textSecondary)),
-		userText:    lipgloss.NewStyle().Foreground(lipgloss.Color(textPrimary)),
+		canvas:      lipgloss.NewStyle().Background(lipgloss.Color(canvasBg)),
+		topBar:      lipgloss.NewStyle().Foreground(lipgloss.Color(gray)),
+		userMeta:    lipgloss.NewStyle().Foreground(lipgloss.Color(gray)).Background(lipgloss.Color(userSurface)),
+		shortcutKey: lipgloss.NewStyle().Foreground(lipgloss.Color(textSecondary)).Bold(true),
+		shortcut:    lipgloss.NewStyle().Foreground(lipgloss.Color(gray)),
+
+		userPrefix:  lipgloss.NewStyle().Foreground(lipgloss.Color(textPrimary)).Background(lipgloss.Color(userSurface)),
+		userText:    lipgloss.NewStyle().Foreground(lipgloss.Color(textPrimary)).Background(lipgloss.Color(userSurface)),
 		queuedLabel: lipgloss.NewStyle().Foreground(lipgloss.Color(cyan)),
 
 		assistantTxt: lipgloss.NewStyle().Foreground(lipgloss.Color(textPrimary)),
@@ -134,7 +149,9 @@ func (m *mdRenderer) render(md string, width int) string {
 	defer m.mu.Unlock()
 	if m.r == nil || m.width != width {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			// Keep assistant Markdown in the same restrained TokyoNight family as
+			// the frame instead of inheriting a terminal-dependent Glamour theme.
+			glamour.WithStyles(styles.TokyoNightStyleConfig),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {

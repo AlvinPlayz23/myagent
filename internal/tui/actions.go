@@ -137,6 +137,7 @@ func (m *model) composerKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.clipboardBusy = true
 		m.statusMsg = "Reading clipboard."
+		m.updateLayout()
 		return m, readClipboardCmd(m.clipboardRead)
 
 	case "backspace":
@@ -214,7 +215,7 @@ func (m *model) onPaste(text string) (tea.Model, tea.Cmd) {
 // onMouseWheel scrolls the transcript only when the pointer is over the
 // transcript region, so wheel input above the composer never moves scrollback.
 func (m *model) onMouseWheel(wheel tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if wheel.Y < 0 || wheel.Y >= m.viewport.Height() {
+	if y := wheel.Y - m.topBarHeight(); y < 0 || y >= m.viewport.Height() {
 		return m, nil
 	}
 	m.cancelSelection()
@@ -286,8 +287,10 @@ func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 		// The system clipboard is unavailable (headless box, ssh without an
 		// agent): fall back to OSC 52 so capable terminals copy locally.
 		m.statusMsg = fmt.Sprintf("Copied %d characters (terminal clipboard).", len([]rune(text)))
+		m.updateLayout()
 		return m, tea.Batch(tea.SetClipboard(text), clearStatusCmd(m.statusMsg))
 	}
 	m.statusMsg = fmt.Sprintf("Copied %d characters.", len([]rune(text)))
+	m.updateLayout()
 	return m, clearStatusCmd(m.statusMsg)
 }
