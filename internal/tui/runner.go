@@ -128,12 +128,7 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 					return err
 				}
 			}
-			select {
-			case r.events <- runnerEvent{ev: &ev, generation: generation}:
-				return nil
-			case <-sctx.Done():
-				return sctx.Err()
-			}
+			return r.deliver(sctx, runnerEvent{ev: &ev, generation: generation})
 		}
 		loop := agent.New(r.cfg, r.history, sink)
 		err := action(loop)
@@ -142,6 +137,26 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 		done := agentDoneMsg{err: err, generation: generation}
 		r.events <- runnerEvent{done: &done, generation: generation}
 		return nil
+	}
+}
+
+// deliver forwards one event to the UI channel. The non-blocking fast path
+// comes first: a plain select between the send and cancellation picks
+// randomly once the context is done, which dropped the final events of an
+// aborted run half the time and left the transcript without its abort
+// outcome. Blocking sends still yield to cancellation so a stalled UI cannot
+// hang the loop.
+func (r *runner) deliver(ctx context.Context, ev runnerEvent) error {
+	select {
+	case r.events <- ev:
+		return nil
+	default:
+	}
+	select {
+	case r.events <- ev:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

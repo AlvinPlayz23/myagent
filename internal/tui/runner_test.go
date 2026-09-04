@@ -37,3 +37,35 @@ func TestRunnerReturnsOnEventFailure(t *testing.T) {
 	default:
 	}
 }
+
+// TestRunnerDeliversEventsAfterCancellation ensures an aborted run's final
+// events still reach the UI when the channel has room. A plain select would
+// drop them half the time once the context is done, hiding the abort outcome.
+func TestRunnerDeliversEventsAfterCancellation(t *testing.T) {
+	r := newRunner(agent.Config{}, newMsgQueue(), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // aborted before delivery
+
+	ev := types.AgentEvent{Type: types.EventMessageEnd}
+	if err := r.deliver(ctx, runnerEvent{ev: &ev}); err != nil {
+		t.Fatalf("deliver after cancellation = %v, want nil (buffered)", err)
+	}
+	if got := (<-r.events).ev.Type; got != types.EventMessageEnd {
+		t.Fatalf("delivered event = %v, want %v", got, types.EventMessageEnd)
+	}
+}
+
+// TestRunnerDeliverYieldsWhenChannelFull ensures a stalled UI cannot hang the
+// loop: once the buffer is full and the context is done, deliver gives up.
+func TestRunnerDeliverYieldsWhenChannelFull(t *testing.T) {
+	r := newRunner(agent.Config{}, newMsgQueue(), nil)
+	r.events = make(chan runnerEvent, 1)
+	r.events <- runnerEvent{} // fill the buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ev := types.AgentEvent{Type: types.EventAgentEnd}
+	if err := r.deliver(ctx, runnerEvent{ev: &ev}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("deliver on full channel = %v, want context.Canceled", err)
+	}
+}

@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/websocket v1.8.15
+	github.com/creack/pty v1.1.24
 	github.com/muesli/reflow v0.3.0
 	golang.design/x/clipboard v0.8.0
 	golang.org/x/sys v0.46.0
