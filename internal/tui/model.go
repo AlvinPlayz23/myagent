@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
@@ -140,6 +141,13 @@ type model struct {
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
+	// Grok's prompt arrow, colored in the user accent via the textarea's
+	// focused prompt style. defaultPrompt captures it so switching prompt
+	// styles and back restores the arrow.
+	ta.Prompt = "❯ "
+	styles := ta.Styles()
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
+	ta.SetStyles(styles)
 	ta.ShowLineNumbers = false
 	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()

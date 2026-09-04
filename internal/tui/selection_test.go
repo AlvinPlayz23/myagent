@@ -123,8 +123,8 @@ func TestUserRowSelectionSkipsPadding(t *testing.T) {
 		t.Fatalf("user row width = %d, want <= 40", got)
 	}
 	selection := textSelection{
-		anchor:  textPoint{row: 0, col: 1},
-		current: textPoint{row: 0, col: 5},
+		anchor:  textPoint{row: 0, col: 2},
+		current: textPoint{row: 0, col: 6},
 		dragged: true,
 	}
 	if got, want := copyRowsText(rows, selection), "hello"; got != want {

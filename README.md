@@ -269,15 +269,18 @@ go run . "Write a haiku about Go."   # same thing
 
 #### Terminal capabilities
 
-The TUI adapts to what the terminal supports. Bubble Tea downsamples colors
-to the terminal's profile automatically, and tool/thinking state is also
-encoded in glyphs (`•` running, `✓` succeeded, `✕` failed) so monochrome
-terminals stay legible; selections use reverse video for the same reason.
-Mouse selection requires cell-motion mouse reporting; wheel events over the
-composer never scroll the transcript. Paste uses bracketed paste when
-available. When the system clipboard is unavailable (for example over ssh
-without an agent), copying falls back to OSC 52 so capable terminals copy
-locally.
+The TUI adapts to what the terminal supports. The palette is GrokNight — a
+neutral grayscale ramp with TokyoNight accents — and Bubble Tea downsamples it
+to the terminal's profile automatically. Tool/thinking state is also encoded
+in glyphs (`•` running, `✓` succeeded, `✗` failed; `◇` streaming thought,
+`◆` finished) so monochrome terminals stay legible; selections use reverse
+video for the same reason. User prompts render as Grok-style `❯` arrows, the
+composer is a rounded panel that brightens on focus, and the status/footer
+rows are ` │ `-separated segments. Mouse selection requires cell-motion mouse
+reporting; wheel events over the composer never scroll the transcript. Paste
+uses bracketed paste when available. When the system clipboard is unavailable
+(for example over ssh without an agent), copying falls back to OSC 52 so
+capable terminals copy locally.
 
 #### TUI architecture
 

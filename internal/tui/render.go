@@ -13,13 +13,26 @@ import (
 // spinnerFrames is the working-state spinner (pi uses an animated Loader).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// renderComposer draws the textarea with the chrome its prompt style calls for.
+// renderComposer draws the textarea with the chrome its prompt style calls
+// for. The default style is the Grok-style panel: a rounded border, dim while
+// unfocused and brighter when focused, with one cell of side padding. The
+// ruled style keeps its historical rule-above/rule-below frame.
 func (m *model) renderComposer() string {
-	if m.promptStyle != promptRuled {
-		return m.input.View()
+	body := m.input.View()
+	if m.promptStyle == promptRuled {
+		rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
+		return rule + "\n" + body + "\n" + rule
 	}
-	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
-	return rule + "\n" + m.input.View() + "\n" + rule
+	frame := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(m.composerTextWidth())
+	if m.input.Focused() {
+		frame = frame.BorderForeground(lipgloss.Color("#505058"))
+	} else {
+		frame = frame.BorderForeground(lipgloss.Color("#323237"))
+	}
+	return frame.Render(body)
 }
 
 func (m *model) renderQueuedFollowUps() string {
@@ -164,7 +177,7 @@ func (m *model) renderCustomizePicker() string {
 		}
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.customize.sel {
-			marker, style = "> ", m.th.cmdPickerSel
+			marker, style = "› ", m.th.cmdPickerSel
 		}
 		current := ""
 		if m.rowIsCurrent(row) {
@@ -203,7 +216,7 @@ func (m *model) renderEffortPicker() string {
 		choice := effortChoices[i]
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.effort.sel {
-			marker, style = "> ", m.th.cmdPickerSel
+			marker, style = "› ", m.th.cmdPickerSel
 		}
 		selected := ""
 		if choice.effort == current {
@@ -365,14 +378,12 @@ func (m *model) renderProviderKeyEntry() string {
 	return m.th.cmdPickerSel.Render(action+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
-// statusLine shows the working spinner + elapsed time, a transient status,
-// and — when the user has scrolled away from the tail — how many rows of
-// output wait below.
+// statusLine renders the Grok-style segment row: a ` │ `-separated strip
+// carrying the working indicator, transient status, and — when the user has
+// scrolled away from the tail — how many rows of output wait below.
 func (m *model) statusLine() string {
-	indicator := ""
-	if m.unseenRows > 0 {
-		indicator = "  " + m.th.accent.Render(fmt.Sprintf("↓ %d below", m.unseenRows))
-	}
+	sep := m.th.footerRight.Render(" │ ")
+	var segments []string
 	if m.working {
 		frame := m.th.spinner.Render(spinnerFrames[m.spinnerFrame])
 		elapsed := time.Since(m.startedAt).Seconds()
@@ -380,30 +391,41 @@ func (m *model) statusLine() string {
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		return fmt.Sprintf("%s %s%s", frame,
-			m.th.muted.Render(fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)), indicator)
+		segments = append(segments,
+			frame+" "+m.th.userText.Render(msg),
+			m.th.muted.Render(fmt.Sprintf("%.1fs · esc to cancel", elapsed)))
+	} else if m.statusMsg != "" {
+		segments = append(segments, m.th.muted.Render(m.statusMsg))
 	}
-	if m.statusMsg != "" {
-		return m.th.muted.Render(m.statusMsg) + indicator
+	if m.unseenRows > 0 {
+		segments = append(segments, m.th.queuedLabel.Render(fmt.Sprintf("↓ %d below", m.unseenRows)))
 	}
-	return strings.TrimLeft(indicator, " ")
+	if len(segments) == 0 {
+		return ""
+	}
+	return strings.Join(segments, sep)
 }
 
-// footer renders the cwd/model line and the token/cost stats line with
-// contextual key hints on the right when width allows.
+// footer renders the Grok-style status strip: cwd, model, and usage segments
+// joined by dim ` │ ` separators, with contextual key hints on the right when
+// width allows.
 func (m *model) footer() string {
-	left := m.th.footer.Render(collapseHome(m.cwd))
-	right := m.th.footerRight.Render(m.modelID)
-	line1 := padBetween(left, right, m.width)
-
+	sep := m.th.footerRight.Render(" │ ")
+	left := strings.Join([]string{
+		m.th.footer.Render(collapseHome(m.cwd)),
+		m.th.footer.Render(m.modelID),
+	}, sep)
 	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
 		compact(m.usage.Input), compact(m.usage.Output),
 		compact(m.usage.CacheRead), compact(m.usage.CacheWrite),
 		m.usage.Cost.Total)
-	line2 := m.th.footer.Render(stats)
+	line1 := left
 	hints := "enter send · esc abort · alt+enter steer · ctrl+o fold · /help"
-	if m.width > 0 && lipgloss.Width(stats)+lipgloss.Width(hints)+3 <= m.width {
-		line2 = padBetween(line2, m.th.footer.Render(hints), m.width)
+	if m.width > 0 && lipgloss.Width(left)+lipgloss.Width(stats)+3 <= m.width {
+		line1 = padBetween(left, m.th.footer.Render(stats), m.width)
+	} else {
+		line1 += sep + m.th.footer.Render(stats)
 	}
+	line2 := m.th.footerRight.Render(hints)
 	return line1 + "\n" + line2
 }

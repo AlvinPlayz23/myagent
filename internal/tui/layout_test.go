@@ -174,7 +174,7 @@ func TestToolHeaderShowsStateGlyphAndFoldArrow(t *testing.T) {
 			break
 		}
 	}
-	if got := ansi.Strip(failed.render()); got != "✕ $ boom ▸" {
+	if got := ansi.Strip(failed.render()); got != "✗ $ boom ▸" {
 		t.Fatalf("error header = %q", got)
 	}
 }

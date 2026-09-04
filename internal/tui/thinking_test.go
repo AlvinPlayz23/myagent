@@ -90,14 +90,14 @@ func TestThinkingRenderStates(t *testing.T) {
 	tr.beginThinking()
 	tr.appendThinkingDelta("musing")
 	out := tr.render(80)
-	if !strings.Contains(out, "✻ Thinking…") || !strings.Contains(out, "musing") {
+	if !strings.Contains(out, "◇ Thinking…") || !strings.Contains(out, "musing") {
 		t.Fatalf("streaming render = %q", out)
 	}
 	tr.endThinking()
 
 	// Completed state flips the header.
 	out = tr.render(80)
-	if !strings.Contains(out, "✻ Thought") || !strings.Contains(out, "musing") {
+	if !strings.Contains(out, "◆ Thought") || !strings.Contains(out, "musing") {
 		t.Fatalf("completed render = %q", out)
 	}
 
@@ -140,7 +140,7 @@ func TestEndAssistantFinalizesThinkingOnMidReasoningAbort(t *testing.T) {
 	if strings.Contains(out, "Thinking\u2026") {
 		t.Fatalf("transcript still shows streaming header after end:\n%s", out)
 	}
-	if !strings.Contains(out, "\u273b Thought") || !strings.Contains(out, "half-finished reasoning") {
+	if !strings.Contains(out, "\u25c6 Thought") || !strings.Contains(out, "half-finished reasoning") {
 		t.Fatalf("completed thinking content missing:\n%s", out)
 	}
 }
@@ -183,7 +183,7 @@ func TestSeedTranscriptPreservesThinkingOrder(t *testing.T) {
 
 	// Seeded thinking is complete and renders with the Thought header.
 	out := tr.render(80)
-	if !strings.Contains(out, "✻ Thought") {
+	if !strings.Contains(out, "◆ Thought") {
 		t.Fatalf("seeded thinking should be complete:\n%s", out)
 	}
 }

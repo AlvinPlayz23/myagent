@@ -313,26 +313,31 @@ func (t *transcript) layoutBlock(b *block, width int) []layoutRow {
 	return rows
 }
 
-// layoutUser renders a user message as a padded block. Padding is explicit
+// layoutUser renders a user message as a Grok-style prompt: a `❯` arrow in
+// the user accent followed by the message text, with wrapped continuation
+// lines indented to the arrow's width. The arrow and indent are explicit
 // gutter chrome so selection columns line up with rendered cells and copying
-// never picks the padding up.
+// never picks them up.
 func (t *transcript) layoutUser(b *block, width int) []layoutRow {
 	inner := max(1, width-2)
 	body := strings.TrimRight(wordwrap.String(b.text, inner), "\n")
 	lines := strings.Split(body, "\n")
 	rows := make([]layoutRow, 0, len(lines))
-	// Padding is baked into the text on a padding-free derivative of the
-	// style, so the row renders as one contiguous styled string while the
-	// leading gutter column and trailing fill stay excluded from copies.
-	padFree := t.th.userBlock.Padding(0)
 	for i, line := range lines {
+		prefix := "  "
+		if i == 0 {
+			prefix = "❯ "
+		}
 		fill := max(0, width-2-ansi.StringWidth(line))
 		rows = append(rows, layoutRow{
-			kind:       rowUser,
-			blockID:    b.id,
-			lineIdx:    i,
-			spans:      []layoutSpan{{text: " " + line + strings.Repeat(" ", fill), style: padFree}},
-			gutterCols: 1,
+			kind:    rowUser,
+			blockID: b.id,
+			lineIdx: i,
+			spans: []layoutSpan{
+				{text: prefix, style: t.th.userPrefix},
+				{text: line + strings.Repeat(" ", fill), style: t.th.userText},
+			},
+			gutterCols: 2,
 		})
 	}
 	return wrapRows(rows, width)
@@ -378,13 +383,18 @@ func (t *transcript) layoutTool(b *block, width int) []layoutRow {
 		statusStyle = t.th.toolError
 	}
 	// The state glyph and fold arrow are visual-only: status also reads
-	// through the header color, and the fold direction is chrome.
+	// through the header color, and the fold direction is chrome. The title
+	// stays neutral gray; shell commands read in the command yellow.
 	glyph := "✓ " // check: succeeded
 	switch {
 	case !b.toolDone:
 		glyph = "• " // bullet: running
 	case b.toolErr:
-		glyph = "✕ " // cross: failed
+		glyph = "✗ " // ballot x: failed
+	}
+	titleStyle := t.th.toolTitle
+	if strings.HasPrefix(t.toolHeader(b), "$ ") {
+		titleStyle = t.th.toolCommand
 	}
 	body := strings.TrimRight(b.toolOutput, "\n")
 	hasBody := (len(b.toolDiff) > 0 && b.toolDone && !b.toolErr) || body != ""
@@ -397,9 +407,12 @@ func (t *transcript) layoutTool(b *block, width int) []layoutRow {
 		}
 	}
 	rows := []layoutRow{{
-		kind:             rowToolHeader,
-		blockID:          b.id,
-		spans:            []layoutSpan{{text: glyph + t.toolHeader(b) + fold, style: statusStyle}},
+		kind:    rowToolHeader,
+		blockID: b.id,
+		spans: []layoutSpan{
+			{text: glyph, style: statusStyle},
+			{text: t.toolHeader(b) + fold, style: titleStyle},
+		},
 		gutterCols:       2,
 		gutterSuffixCols: len([]rune(fold)),
 		toggle:           true,
@@ -455,10 +468,13 @@ func (t *transcript) renderThinking(b *block, width int) string {
 func (t *transcript) layoutThinking(b *block, width int) []layoutRow {
 	expand := t.effectiveExpand(b)
 	label := "Thought"
-	headerStyle := t.th.toolSuccess
+	// State reads through both glyph and color: hollow diamond while
+	// streaming, filled once complete, in the violet shared with the brand.
+	glyph := "◆"
+	headerStyle := t.th.orbBright
 	if !b.done {
 		label = "Thinking…"
-		headerStyle = t.th.accent
+		glyph = "◇"
 	}
 	body := strings.TrimRight(b.text, "\n")
 	fold := ""
@@ -472,7 +488,7 @@ func (t *transcript) layoutThinking(b *block, width int) []layoutRow {
 	rows := []layoutRow{{
 		kind:             rowThinkingHeader,
 		blockID:          b.id,
-		spans:            []layoutSpan{{text: "✻ " + label + fold, style: headerStyle}},
+		spans:            []layoutSpan{{text: glyph + " " + label + fold, style: headerStyle}},
 		gutterCols:       2, // the marker glyph is visual-only chrome
 		gutterSuffixCols: len([]rune(fold)),
 		toggle:           true,

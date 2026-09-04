@@ -264,9 +264,9 @@ func TestTranscriptDragCopiesDisplayedText(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: 0, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: 0, Button: tea.MouseLeft})
 
 	if copied != "hello" {
 		t.Fatalf("clipboard = %q, want %q", copied, "hello")
@@ -305,9 +305,9 @@ func TestTranscriptCopyFailureFallsBackToTerminalClipboard(t *testing.T) {
 	m.onResize(40, 20)
 	m.clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	_, cmd := m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	_, cmd = m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
+	_, cmd := m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: 0, Button: tea.MouseLeft})
+	_, cmd = m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: 0, Button: tea.MouseLeft})
 
 	if m.statusMsg != "Copied 5 characters (terminal clipboard)." {
 		t.Fatalf("status = %q", m.statusMsg)

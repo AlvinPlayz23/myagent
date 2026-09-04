@@ -37,13 +37,14 @@ type promptChoice struct {
 }
 
 var promptChoices = []promptChoice{
-	{style: promptDefault, label: "Default", description: "(default) tall box with a bar gutter"},
+	{style: promptDefault, label: "Default", description: "(default) framed panel with a ❯ arrow"},
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
-// defaultComposerHeight matches the bubbles textarea default so switching back
-// from a shorter style restores the original composer size.
-const defaultComposerHeight = 6
+// defaultComposerHeight is the framed composer's body height. The panel adds
+// a top and bottom border, so the chrome totals the same six rows the
+// bubbles textarea default occupied — keeping short-terminal layouts intact.
+const defaultComposerHeight = 4
 
 // ruledPrompt is the marker drawn at the start of the ruled composer's line.
 const ruledPrompt = "› "
@@ -51,6 +52,8 @@ const ruledPrompt = "› "
 const (
 	// ruledComposerRules counts the rules drawn above and below the textarea.
 	ruledComposerRules = 2
+	// composerFrameRows counts the rounded panel's top and bottom border.
+	composerFrameRows = 2
 	// The ruled composer opens one line tall and grows with the text, up to
 	// ruledComposerMaxRows, after which it scrolls internally.
 	ruledComposerMinRows = 1
@@ -73,14 +76,26 @@ func normalizePromptStyle(style string) promptStyle {
 	return promptDefault
 }
 
-// composerHeight reports the rows the composer occupies, including the rules the
-// ruled style draws above and below the textarea.
+// composerHeight reports the rows the composer occupies, including the frame
+// the active prompt style draws around the textarea.
 func (m *model) composerHeight() int {
 	height := m.input.Height()
 	if m.promptStyle == promptRuled {
-		height += 2
+		height += ruledComposerRules
+	} else {
+		height += composerFrameRows
 	}
 	return height
+}
+
+// composerTextWidth is the textarea width that fits inside the active
+// style's frame: the ruled rules span the terminal, while the default
+// panel's border and padding take two columns on each side.
+func (m *model) composerTextWidth() int {
+	if m.promptStyle == promptRuled {
+		return max(1, m.width)
+	}
+	return max(1, m.width-4)
 }
 
 // submit starts a run while idle. During a run, Enter queues a follow-up and
@@ -224,7 +239,7 @@ func (m *model) syncComposerStyle() {
 		m.input.MaxContentHeight = 0
 		m.input.SetHeight(defaultComposerHeight)
 	}
-	m.input.SetWidth(max(1, m.width))
+	m.input.SetWidth(m.composerTextWidth())
 }
 
 // ruledGrowthLimit is the tallest the ruled textarea may render on this
