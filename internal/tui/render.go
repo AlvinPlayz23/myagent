@@ -342,8 +342,14 @@ func (m *model) renderProviderKeyEntry() string {
 	return m.th.cmdPickerSel.Render(action+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
-// statusLine shows the working spinner + elapsed time, or a transient status.
+// statusLine shows the working spinner + elapsed time, a transient status,
+// and — when the user has scrolled away from the tail — how many rows of
+// output wait below.
 func (m *model) statusLine() string {
+	indicator := ""
+	if m.unseenRows > 0 {
+		indicator = "  " + m.th.accent.Render(fmt.Sprintf("↓ %d below", m.unseenRows))
+	}
 	if m.working {
 		frame := m.th.spinner.Render(spinnerFrames[m.spinnerFrame])
 		elapsed := time.Since(m.startedAt).Seconds()
@@ -351,12 +357,13 @@ func (m *model) statusLine() string {
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		return fmt.Sprintf("%s %s", frame, m.th.muted.Render(fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)))
+		return fmt.Sprintf("%s %s%s", frame,
+			m.th.muted.Render(fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)), indicator)
 	}
 	if m.statusMsg != "" {
-		return m.th.muted.Render(m.statusMsg)
+		return m.th.muted.Render(m.statusMsg) + indicator
 	}
-	return ""
+	return strings.TrimLeft(indicator, " ")
 }
 
 // footer renders the cwd/model line and the token/cost stats line.

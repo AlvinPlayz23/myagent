@@ -84,6 +84,8 @@ type model struct {
 	startedAt       time.Time
 	statusMsg       string
 	selection       *textSelection
+	rows            []layoutRow
+	unseenRows      int
 	clipboardWrite  func(string) error
 	clipboardRead   func() (clipboardPayload, error)
 	clipboardBusy   bool
@@ -592,31 +594,32 @@ func (m *model) addUsage(u types.Usage) {
 
 // refreshViewport re-renders the transcript into the viewport and sticks to the
 // bottom while working (so streaming text stays visible).
+// refreshViewport re-renders the transcript into the viewport. Output is
+// followed only while the viewport sits at the bottom, so scrolling up during
+// a streaming turn holds position instead of yanking back to the tail; the
+// status line then reports how many rows wait below.
 func (m *model) refreshViewport() {
 	if !m.ready {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	content := m.transcript.render(m.width)
+	m.rows = m.transcript.layout(m.width)
+	var content string
 	if m.showWelcome() {
 		content = m.renderWelcome()
 	} else {
-		content = renderTextSelection(content, m.selection, m.th.selection)
+		content = strings.Join(renderRowsSelection(m.rows, m.selection, m.th.selection), "\n") + "\n"
 	}
 	m.viewport.SetContent(content)
-	if m.selection == nil && (atBottom || m.working) {
+	if m.selection == nil && atBottom {
 		m.viewport.GotoBottom()
 	}
+	if m.viewport.AtBottom() || m.selection != nil {
+		m.unseenRows = 0
+	} else {
+		m.unseenRows = max(0, len(m.rows)-(m.viewport.YOffset()+m.viewport.Height()))
+	}
 }
-
-// Fill shades a letter pixel by how far it sits below the waterline: an unfilled
-// pixel is a faint ghost, the waterline itself is a mid tone, and submerged
-// pixels are solid. Only the shade changes, so the letterform always reads.
-const (
-	fillEmpty     = '░'
-	fillWaterline = '▒'
-	fillSubmerged = '█'
-)
 
 // View composes the transcript viewport, status line, input, and footer.
 func (m *model) View() tea.View {

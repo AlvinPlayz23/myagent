@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/AlvinPlayz23/myagent/internal/types"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -43,11 +45,28 @@ type block struct {
 	// thinking fields
 	done bool // streaming finished (thinking blocks)
 
-	// cache
-	cacheWidth  int
-	cacheExpand bool
-	cached      string
-	cacheValid  bool
+	// identity for hit-testing, and a revision bumped on every change so
+	// the layout cache can skip unchanged blocks.
+	id  int
+	rev uint64
+
+	// per-block fold override for tool and thinking blocks; unset follows
+	// the global ctrl+o state.
+	foldSet bool
+	folded  bool
+
+	// laid-out rows cache, keyed on width, revision, and fold state
+	layoutRows   []layoutRow
+	layoutWidth  int
+	layoutRev    uint64
+	layoutExpand bool
+	layoutValid  bool
+}
+
+// touch invalidates the block after a content or fold change.
+func (b *block) touch() {
+	b.rev++
+	b.layoutValid = false
 }
 
 // transcript is the ordered list of blocks plus render settings.
@@ -65,16 +84,27 @@ type transcript struct {
 	// streamingIdx points at the assistant block currently being streamed, or
 	// -1 when none.
 	streamingIdx int
+
+	// nextID hands out block identities for hit-testing.
+	nextID int
 }
 
 func newTranscript(th *theme, md *mdRenderer) *transcript {
 	return &transcript{th: th, md: md, streamingIdx: -1, showThinking: true}
 }
 
+// add appends a block with a fresh identity.
+func (t *transcript) add(b *block) *block {
+	t.nextID++
+	b.id = t.nextID
+	t.blocks = append(t.blocks, b)
+	return b
+}
+
 // invalidate clears cached renders (e.g. on width change or expand toggle).
 func (t *transcript) invalidate() {
 	for _, b := range t.blocks {
-		b.cacheValid = false
+		b.layoutValid = false
 	}
 }
 
@@ -87,13 +117,7 @@ func (t *transcript) clear() {
 // setShowThinking flips thinking visibility and invalidates caches so the next
 // render reflects the new state.
 func (t *transcript) setShowThinking(show bool) {
-	if t.showThinking == show {
-		return
-	}
 	t.showThinking = show
-	for _, b := range t.blocks {
-		b.cacheValid = false
-	}
 }
 
 // toggleExpand flips the global tool expand state and invalidates tool and
@@ -102,19 +126,20 @@ func (t *transcript) toggleExpand() {
 	t.expanded = !t.expanded
 	for _, b := range t.blocks {
 		if b.kind == blockTool || b.kind == blockThinking {
-			b.cacheValid = false
+			b.foldSet = false
+			b.touch()
 		}
 	}
 }
 
 // addUser appends a user block.
 func (t *transcript) addUser(text string) {
-	t.blocks = append(t.blocks, &block{kind: blockUser, text: text})
+	t.add(&block{kind: blockUser, text: text})
 }
 
 // beginAssistant starts a new (empty) streaming assistant block.
 func (t *transcript) beginAssistant() {
-	t.blocks = append(t.blocks, &block{kind: blockAssistant})
+	t.add(&block{kind: blockAssistant})
 	t.streamingIdx = len(t.blocks) - 1
 }
 
@@ -130,7 +155,7 @@ func (t *transcript) appendAssistantDelta(delta string) {
 	}
 	b := t.blocks[t.streamingIdx]
 	b.text += delta
-	b.cacheValid = false
+	b.touch()
 }
 
 // beginThinking starts a new (empty) streaming thinking block. An empty
@@ -142,7 +167,7 @@ func (t *transcript) beginThinking() {
 			t.blocks = t.blocks[:t.streamingIdx]
 		}
 	}
-	t.blocks = append(t.blocks, &block{kind: blockThinking})
+	t.add(&block{kind: blockThinking})
 	t.streamingIdx = len(t.blocks) - 1
 }
 
@@ -155,7 +180,7 @@ func (t *transcript) appendThinkingDelta(delta string) {
 	}
 	b := t.blocks[t.streamingIdx]
 	b.text += delta
-	b.cacheValid = false
+	b.touch()
 }
 
 // endThinking finalizes the current thinking block, removing it if it never
@@ -166,7 +191,7 @@ func (t *transcript) endThinking() {
 		b := t.blocks[t.streamingIdx]
 		if b.kind == blockThinking {
 			b.done = true
-			b.cacheValid = false
+			b.touch()
 			if strings.TrimSpace(b.text) == "" {
 				t.blocks = append(t.blocks[:t.streamingIdx], t.blocks[t.streamingIdx+1:]...)
 			}
@@ -196,17 +221,17 @@ func (t *transcript) endAssistant() {
 
 // addErrorText appends a standalone error line (e.g. aborted / stop reason).
 func (t *transcript) addErrorText(text string) {
-	t.blocks = append(t.blocks, &block{kind: blockError, text: text})
+	t.add(&block{kind: blockError, text: text})
 }
 
 // addNotice appends a muted system-notice block (e.g. compaction summary).
 func (t *transcript) addNotice(text string) {
-	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text})
+	t.add(&block{kind: blockNotice, text: text})
 }
 
 // startTool appends a tool block in the pending state.
 func (t *transcript) startTool(callID, name string, args map[string]any) {
-	t.blocks = append(t.blocks, &block{
+	t.add(&block{
 		kind:       blockTool,
 		toolCallID: callID,
 		toolName:   name,
@@ -224,7 +249,7 @@ func (t *transcript) endTool(callID string, result *types.ToolResult, isError bo
 	b.toolDone = true
 	b.toolErr = isError
 	b.toolOutput = resultText(result)
-	b.cacheValid = false
+	b.touch()
 }
 
 func (t *transcript) findTool(callID string) *block {
@@ -236,143 +261,222 @@ func (t *transcript) findTool(callID string) *block {
 	return nil
 }
 
-// render produces the full transcript content string wrapped at width. Blocks
-// are separated by a blank line (pi's Spacer(1)). Thinking blocks are omitted
-// entirely when thinking is hidden, so no stray separators remain.
+// render lays out every visible block at width and joins the rows. The
+// trailing newline mirrors the historical block-per-line output.
 func (t *transcript) render(width int) string {
-	var sb strings.Builder
+	rows := t.layout(width)
+	if len(rows) == 0 {
+		return ""
+	}
+	return renderRows(rows) + "\n"
+}
+
+// layout lays out every visible block into terminal rows at width. Rows are
+// cached per block, so streaming deltas re-wrap only the growing block.
+func (t *transcript) layout(width int) []layoutRow {
+	var rows []layoutRow
 	for _, b := range t.blocks {
 		if b.kind == blockThinking && !t.showThinking {
 			continue
 		}
-		if sb.Len() > 0 {
-			sb.WriteByte('\n')
-		}
-		sb.WriteString(t.renderBlock(b, width))
-		sb.WriteByte('\n')
+		rows = append(rows, t.layoutBlock(b, width)...)
 	}
-	return sb.String()
+	return rows
 }
 
-func (t *transcript) renderBlock(b *block, width int) string {
-	if b.cacheValid && b.cacheWidth == width && b.cacheExpand == t.expanded {
-		return b.cached
+// layoutBlock returns one block's cached rows, rebuilding only when its
+// content revision, width, or fold state changed.
+func (t *transcript) layoutBlock(b *block, width int) []layoutRow {
+	expand := t.effectiveExpand(b)
+	if b.layoutValid && b.layoutWidth == width && b.layoutRev == b.rev && b.layoutExpand == expand {
+		return b.layoutRows
 	}
-	var out string
+	var rows []layoutRow
 	switch b.kind {
 	case blockUser:
-		// User messages are plain text, not markdown. Glamour emits ANSI style
-		// resets which can override the userBlock background behind the text.
-		// Give the block an explicit width too, so its neutral background fills
-		// every cell of the transcript row, including wrapped-line padding.
-		body := strings.TrimRight(wordwrap.String(b.text, max(1, width-2)), "\n")
-		out = t.th.userBlock.Width(max(1, width)).Render(body)
+		rows = t.layoutUser(b, width)
 	case blockAssistant:
-		out = strings.TrimRight(t.md.render(b.text, width), "\n")
+		rows = t.layoutAssistant(b, width)
 	case blockError:
-		out = t.th.errorText.Render(b.text)
+		rows = plainRows(b.text, t.th.errorText, rowError, b.id, width)
 	case blockNotice:
-		out = t.th.muted.Render(b.text)
+		rows = plainRows(b.text, t.th.muted, rowNotice, b.id, width)
 	case blockTool:
-		out = t.renderTool(b, width)
+		rows = t.layoutTool(b, width)
 	case blockThinking:
-		out = t.renderThinking(b, width)
+		rows = t.layoutThinking(b, width)
 	}
-	b.cached = out
-	b.cacheWidth = width
-	b.cacheExpand = t.expanded
-	b.cacheValid = true
-	return out
+	b.layoutRows, b.layoutWidth, b.layoutRev, b.layoutExpand, b.layoutValid = rows, width, b.rev, expand, true
+	return rows
 }
 
-// renderTool renders a collapsible tool block: a one-line status header plus an
-// optional preview (collapsed) or full output (expanded). Status is conveyed by
-// the header color (pending/success/error), matching pi.
+// layoutUser renders a user message as a padded block. Padding is explicit
+// gutter chrome so selection columns line up with rendered cells and copying
+// never picks the padding up.
+func (t *transcript) layoutUser(b *block, width int) []layoutRow {
+	inner := max(1, width-2)
+	body := strings.TrimRight(wordwrap.String(b.text, inner), "\n")
+	lines := strings.Split(body, "\n")
+	rows := make([]layoutRow, 0, len(lines))
+	// Padding is baked into the text on a padding-free derivative of the
+	// style, so the row renders as one contiguous styled string while the
+	// leading gutter column and trailing fill stay excluded from copies.
+	padFree := t.th.userBlock.Padding(0)
+	for i, line := range lines {
+		fill := max(0, width-2-ansi.StringWidth(line))
+		rows = append(rows, layoutRow{
+			kind:       rowUser,
+			blockID:    b.id,
+			lineIdx:    i,
+			spans:      []layoutSpan{{text: " " + line + strings.Repeat(" ", fill), style: padFree}},
+			gutterCols: 1,
+		})
+	}
+	return wrapRows(rows, width)
+}
+
+// layoutAssistant renders assistant Markdown. Glamour already wraps to width,
+// so each source line is one row carrying the renderer's ANSI verbatim.
+func (t *transcript) layoutAssistant(b *block, width int) []layoutRow {
+	out := strings.TrimRight(t.md.render(b.text, width), "\n")
+	if out == "" {
+		return nil
+	}
+	lines := strings.Split(out, "\n")
+	rows := make([]layoutRow, 0, len(lines))
+	for i, line := range lines {
+		rows = append(rows, layoutRow{
+			kind:    rowAssistant,
+			blockID: b.id,
+			lineIdx: i,
+			spans:   []layoutSpan{{text: line, raw: true}},
+		})
+	}
+	return rows
+}
+
+// renderTool renders a tool block as a string. The interactive path consumes
+// layout rows directly; this wrapper keeps block rendering easy to test.
 func (t *transcript) renderTool(b *block, width int) string {
-	header := t.toolHeader(b)
-	statusStyle := t.th.toolPending
+	return renderRows(t.layoutTool(b, width))
+}
+
+// layoutTool builds a collapsible tool block: a one-line status header plus a
+// proposal diff (successful edit/write) or folded output. Status is conveyed
+// by the header color (pending/success/error); the header row toggles the
+// block's fold on click.
+func (t *transcript) layoutTool(b *block, width int) []layoutRow {
+	expand := t.effectiveExpand(b)
+	statusStyle := t.th.toolSuccess
 	switch {
 	case !b.toolDone:
 		statusStyle = t.th.toolPending
 	case b.toolErr:
 		statusStyle = t.th.toolError
-	default:
-		statusStyle = t.th.toolSuccess
 	}
-
-	var sb strings.Builder
-	sb.WriteString(statusStyle.Render(header))
+	rows := []layoutRow{{
+		kind:    rowToolHeader,
+		blockID: b.id,
+		spans:   []layoutSpan{{text: t.toolHeader(b), style: statusStyle}},
+		toggle:  true,
+	}}
 
 	// Edit and write calls show their requested change as a Git-style proposal
-	// only after the tool succeeds. Failed calls show their error output instead,
-	// so the transcript never presents an unapplied change as if it landed.
+	// only after the tool succeeds. Failed calls show their error output
+	// instead, so the transcript never presents an unapplied change as if it
+	// landed.
 	if len(b.toolDiff) > 0 && b.toolDone && !b.toolErr {
-		sb.WriteByte('\n')
-		sb.WriteString(t.renderDiff(b.toolDiff))
-		return sb.String()
+		return append(rows, t.diffRows(b, expand, width)...)
 	}
 
 	body := strings.TrimRight(b.toolOutput, "\n")
 	if body == "" {
-		return sb.String()
+		return rows
 	}
 	lines := strings.Split(body, "\n")
 	const previewLines = 8
-	if !t.expanded && len(lines) > previewLines {
-		shown := lines[:previewLines]
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines)))
-	} else {
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(body))
-		if t.expanded && len(lines) > previewLines {
-			sb.WriteByte('\n')
-			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+	if !expand && len(lines) > previewLines {
+		for i, line := range lines[:previewLines] {
+			rows = append(rows, toolRow(b, i, line, t.th.muted))
 		}
+		rows = append(rows, toolRow(b, previewLines,
+			fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines), t.th.muted))
+		return wrapRows(rows, width)
 	}
-	return sb.String()
+	for i, line := range lines {
+		rows = append(rows, toolRow(b, i, line, t.th.muted))
+	}
+	if expand && len(lines) > previewLines {
+		rows = append(rows, toolRow(b, len(lines), "(ctrl+o to collapse)", t.th.muted))
+	}
+	return wrapRows(rows, width)
 }
 
-// renderThinking renders a collapsible thinking block: an accent header that
-// reads "Thinking…" while streaming and "Thought" once complete, plus a muted
-// body preview governed by the global ctrl+o expand toggle.
+func toolRow(b *block, lineIdx int, text string, style lipgloss.Style) layoutRow {
+	return layoutRow{
+		kind:    rowToolOutput,
+		blockID: b.id,
+		lineIdx: lineIdx,
+		spans:   []layoutSpan{{text: text, style: style}},
+	}
+}
+
+// renderThinking renders a thinking block as a string (tests).
 func (t *transcript) renderThinking(b *block, width int) string {
-	header := "✻ Thought"
+	return renderRows(t.layoutThinking(b, width))
+}
+
+// layoutThinking builds a collapsible thinking block: an accent header that
+// reads "Thinking…" while streaming and "Thought" once complete, plus a muted
+// body preview governed by the fold state. The header row toggles the fold.
+func (t *transcript) layoutThinking(b *block, width int) []layoutRow {
+	expand := t.effectiveExpand(b)
+	label := "Thought"
 	headerStyle := t.th.toolSuccess
 	if !b.done {
-		header = "✻ Thinking…"
+		label = "Thinking…"
 		headerStyle = t.th.accent
 	}
-
+	rows := []layoutRow{{
+		kind:       rowThinkingHeader,
+		blockID:    b.id,
+		spans:      []layoutSpan{{text: "✻ " + label, style: headerStyle}},
+		gutterCols: 2, // the marker glyph is visual-only chrome
+		toggle:     true,
+	}}
 	body := strings.TrimRight(b.text, "\n")
 	if body == "" {
-		return headerStyle.Render(header)
+		return rows
 	}
-
 	lines := strings.Split(body, "\n")
-	var sb strings.Builder
-	sb.WriteString(headerStyle.Render(header))
 	const previewLines = 6
-	if !t.expanded && len(lines) > previewLines {
+	if !expand && len(lines) > previewLines {
 		shown := lines[len(lines)-previewLines:]
 		hidden := len(lines) - previewLines
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… %d earlier lines", hidden)))
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", hidden)))
-	} else {
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(body))
-		if t.expanded && len(lines) > previewLines {
-			sb.WriteByte('\n')
-			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+		rows = append(rows, thinkingRow(b, -1, fmt.Sprintf("… %d earlier lines", hidden), t.th.muted))
+		for i, line := range shown {
+			rows = append(rows, thinkingRow(b, len(lines)-previewLines+i, line, t.th.muted))
 		}
+		rows = append(rows, thinkingRow(b, len(lines),
+			fmt.Sprintf("… (%d more lines, ctrl+o to expand)", hidden), t.th.muted))
+		return wrapRows(rows, width)
 	}
-	return sb.String()
+	for i, line := range lines {
+		rows = append(rows, thinkingRow(b, i, line, t.th.muted))
+	}
+	if expand && len(lines) > previewLines {
+		rows = append(rows, thinkingRow(b, len(lines), "(ctrl+o to collapse)", t.th.muted))
+	}
+	return wrapRows(rows, width)
+}
+
+func thinkingRow(b *block, lineIdx int, text string, style lipgloss.Style) layoutRow {
+	return layoutRow{
+		kind:    rowThinking,
+		blockID: b.id,
+		lineIdx: lineIdx,
+		spans:   []layoutSpan{{text: text, style: style}},
+	}
 }
 
 // diffLine is one display line in a proposal-style unified diff.
@@ -451,14 +555,15 @@ func prefixedDiffLines(prefix byte, text string) []diffLine {
 	return lines
 }
 
-// renderDiff applies Git-like line coloring and the transcript's global
-// ctrl+o preview limit. File headers and hunk markers are always retained.
-func (t *transcript) renderDiff(lines []diffLine) string {
-	visible := lines
+// diffRows renders a proposal diff. Prefix characters are gutter spans, so
+// copying selects the changed text without the +/- chrome. File headers and
+// hunk markers are always retained; collapsed previews cap changed lines.
+func (t *transcript) diffRows(b *block, expand bool, width int) []layoutRow {
+	lines := b.toolDiff
 	hidden := 0
-	if !t.expanded {
+	if !expand {
 		changeCount := 0
-		visible = make([]diffLine, 0, len(lines))
+		visible := make([]diffLine, 0, len(lines))
 		for _, line := range lines {
 			if line.prefix != 0 {
 				if changeCount >= diffPreviewLines {
@@ -469,36 +574,79 @@ func (t *transcript) renderDiff(lines []diffLine) string {
 			}
 			visible = append(visible, line)
 		}
+		lines = visible
 	}
-
-	var sb strings.Builder
-	for i, line := range visible {
-		if i > 0 {
-			sb.WriteByte('\n')
-		}
-		text := line.text
-		if line.prefix != 0 {
-			text = string(line.prefix) + text
-		}
+	rows := make([]layoutRow, 0, len(lines)+1)
+	for i, line := range lines {
+		var style lipgloss.Style
+		kind := rowDiffMeta
 		switch {
 		case line.prefix == '+':
-			sb.WriteString(t.th.diffAdd.Render(text))
+			style, kind = t.th.diffAdd, rowDiff
 		case line.prefix == '-':
-			sb.WriteString(t.th.diffRemove.Render(text))
+			style, kind = t.th.diffRemove, rowDiff
 		case strings.HasPrefix(line.text, "@@"):
-			sb.WriteString(t.th.diffHunk.Render(text))
+			style = t.th.diffHunk
 		default:
-			sb.WriteString(t.th.diffMeta.Render(text))
+			style = t.th.diffMeta
 		}
+		text := line.text
+		gutter := 0
+		if line.prefix != 0 {
+			text = string(line.prefix) + text
+			gutter = 1 // the +/- prefix is visual-only chrome
+		}
+		rows = append(rows, layoutRow{
+			kind:       kind,
+			blockID:    b.id,
+			lineIdx:    i,
+			spans:      []layoutSpan{{text: text, style: style}},
+			gutterCols: gutter,
+		})
 	}
 	if hidden > 0 {
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more changed lines, ctrl+o to expand)", hidden)))
-	} else if t.expanded && len(lines) > diffPreviewLines {
-		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+		rows = append(rows, layoutRow{kind: rowDiffMeta, blockID: b.id, lineIdx: len(rows),
+			spans: []layoutSpan{{text: fmt.Sprintf("… (%d more changed lines, ctrl+o to expand)", hidden), style: t.th.muted}}})
+	} else if expand && len(b.toolDiff) > diffPreviewLines {
+		rows = append(rows, layoutRow{kind: rowDiffMeta, blockID: b.id, lineIdx: len(rows),
+			spans: []layoutSpan{{text: "(ctrl+o to collapse)", style: t.th.muted}}})
 	}
-	return sb.String()
+	return wrapRows(rows, width)
+}
+
+// effectiveExpand reports whether a block shows its full content: the global
+// ctrl+o state unless the user folded or unfolded this block directly.
+func (t *transcript) effectiveExpand(b *block) bool {
+	if b.foldSet {
+		return !b.folded
+	}
+	return t.expanded
+}
+
+// toggleBlockFold flips one block's fold, leaving other blocks and the
+// global state alone. Clicking a tool or thinking header routes here.
+func (t *transcript) toggleBlockFold(id int) {
+	b := t.blockByID(id)
+	if b == nil || (b.kind != blockTool && b.kind != blockThinking) {
+		return
+	}
+	if !b.foldSet {
+		b.foldSet = true
+		b.folded = t.effectiveExpand(b) // invert what is currently shown
+	} else {
+		b.folded = !b.folded
+	}
+	b.touch()
+}
+
+// blockByID finds a block by its layout identity.
+func (t *transcript) blockByID(id int) *block {
+	for _, b := range t.blocks {
+		if b.id == id {
+			return b
+		}
+	}
+	return nil
 }
 
 // toolHeader builds the bold one-line summary per tool, echoing pi's forms:

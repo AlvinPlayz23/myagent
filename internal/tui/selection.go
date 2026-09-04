@@ -1,13 +1,12 @@
 package tui
 
 import (
-	"strings"
-
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
-// textPoint identifies a terminal cell in the fully rendered transcript.
+// textPoint identifies a terminal cell in the laid-out transcript: row is an
+// index into the layout rows (which map one-to-one onto viewport lines
+// because wrapping is applied when rows are built), col is a display cell.
 type textPoint struct {
 	row int
 	col int
@@ -26,60 +25,53 @@ func normalizeSelection(s textSelection) (textPoint, textPoint) {
 	return s.anchor, s.current
 }
 
-// renderTextSelection overlays a selection style without disturbing text
-// outside the selected cells. Its coordinates refer to ANSI-stripped rows.
-func renderTextSelection(content string, selection *textSelection, style lipgloss.Style) string {
-	if selection == nil || !selection.dragged {
-		return content
-	}
-	start, end := normalizeSelection(*selection)
-	lines := strings.Split(content, "\n")
-	if start.row < 0 || start.row >= len(lines) {
-		return content
-	}
-	end.row = min(end.row, len(lines)-1)
-	for row := start.row; row <= end.row; row++ {
-		plainWidth := ansi.StringWidth(lines[row])
-		from, to := 0, plainWidth
-		if row == start.row {
-			from = min(max(0, start.col), plainWidth)
+// renderRowsSelection renders every row, overlaying the selection style on
+// the selected cell range of each. Gutter chrome (padding, diff prefixes,
+// markers) is never highlighted, so what looks selected is what gets copied.
+func renderRowsSelection(rows []layoutRow, sel *textSelection, style lipgloss.Style) []string {
+	lines := make([]string, len(rows))
+	if sel == nil || !sel.dragged {
+		for i, r := range rows {
+			lines[i] = r.render()
 		}
-		if row == end.row {
-			to = min(max(0, end.col+1), plainWidth)
-		}
-		if to > from {
-			lines[row] = lipgloss.StyleRanges(lines[row], lipgloss.NewRange(from, to, style))
-		}
+		return lines
 	}
-	return strings.Join(lines, "\n")
+	start, end := normalizeSelection(*sel)
+	end.row = min(end.row, len(rows)-1)
+	for i, r := range rows {
+		if i < start.row || i > end.row || !r.selectable() {
+			lines[i] = r.render()
+			continue
+		}
+		from, to := 0, r.width()
+		if i == start.row {
+			from = max(0, start.col)
+		}
+		if i == end.row {
+			to = min(max(0, end.col+1), r.width())
+		}
+		lines[i] = renderRowSelection(r, from, to, style)
+	}
+	return lines
 }
 
-// selectedRenderedText extracts exactly what the user selected visually,
-// excluding ANSI styling while retaining displayed line breaks and wrapping.
-func selectedRenderedText(content string, selection textSelection) string {
-	if !selection.dragged {
-		return ""
-	}
-	start, end := normalizeSelection(selection)
-	lines := strings.Split(ansi.Strip(content), "\n")
-	if start.row < 0 || start.row >= len(lines) {
-		return ""
-	}
-	end.row = min(end.row, len(lines)-1)
-	selected := make([]string, 0, end.row-start.row+1)
-	for row := start.row; row <= end.row; row++ {
-		width := ansi.StringWidth(lines[row])
-		from, to := 0, width
-		if row == start.row {
-			from = min(max(0, start.col), width)
+// selectedRowsText copies the selection as plain text. Wrapped continuation
+// rows join their parent row without a newline, and gutter chrome is
+// excluded, so copied text reads like the original input.
+func selectedRowsText(rows []layoutRow, sel textSelection) string {
+	return copyRowsText(rows, sel)
+}
+
+// rowsFromLines builds single-span rows from plain lines; a test helper.
+func rowsFromLines(lines ...string) []layoutRow {
+	rows := make([]layoutRow, len(lines))
+	for i, line := range lines {
+		rows[i] = layoutRow{
+			kind:    rowAssistant,
+			blockID: i + 1,
+			lineIdx: i,
+			spans:   []layoutSpan{{text: line, raw: true}},
 		}
-		if row == end.row {
-			to = min(max(0, end.col+1), width)
-		}
-		if to < from {
-			to = from
-		}
-		selected = append(selected, ansi.Cut(lines[row], from, to))
 	}
-	return strings.Join(selected, "\n")
+	return rows
 }

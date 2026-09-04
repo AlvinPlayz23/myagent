@@ -224,7 +224,8 @@ func (m *model) onMouseWheel(wheel tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 }
 
 // onMouseClick starts a transcript selection (or clears one) on left clicks
-// inside the transcript region.
+// inside the transcript region. Clicking a tool or thinking header row
+// toggles that block's fold instead of selecting.
 func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if mouse.Button != tea.MouseLeft {
 		return m, nil
@@ -233,6 +234,19 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if !ok || m.showWelcome() {
 		m.cancelSelection()
 		return m, nil
+	}
+	if point.row < len(m.rows) {
+		row := m.rows[point.row]
+		if row.toggle {
+			m.cancelSelection()
+			m.transcript.toggleBlockFold(row.blockID)
+			m.refreshViewport()
+			return m, nil
+		}
+		if !row.selectable() {
+			m.cancelSelection()
+			return m, nil
+		}
 	}
 	m.selection = &textSelection{anchor: point, current: point}
 	return m, nil
@@ -263,7 +277,7 @@ func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 		m.selection.dragged = m.selection.dragged || point != m.selection.anchor
 	}
 	selection := *m.selection
-	text := selectedRenderedText(m.transcript.render(m.width), selection)
+	text := copyRowsText(m.rows, selection)
 	m.cancelSelection()
 	if text == "" {
 		return m, nil

@@ -271,6 +271,15 @@ func wordmarkScaleFor(width int) int {
 	return 1
 }
 
+// Fill shades a letter pixel by how far it sits below the waterline: an unfilled
+// pixel is a faint ghost, the waterline itself is a mid tone, and submerged
+// pixels are solid. Only the shade changes, so the letterform always reads.
+const (
+	fillEmpty     = '░'
+	fillWaterline = '▒'
+	fillSubmerged = '█'
+)
+
 // renderFill draws the wordmark filling with a rising liquid whose surface
 // ripples, then draining back down. Every letter pixel keeps its cell, so the
 // silhouette — and therefore the layout — never changes.
