@@ -44,7 +44,7 @@ func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "next") {
 		t.Fatalf("queued follow-up has no pending label: %q", queued)
 	}
-	m.onAgentEvent(userMessageStartEvent("run the tests after this"))
+	m.onAgentEvent(messageStartEvent(message))
 	if len(m.queuedFollowUps) != 0 {
 		t.Fatalf("queued follow-ups = %#v, want empty", m.queuedFollowUps)
 	}
@@ -75,7 +75,7 @@ func TestFollowUpConsumptionClearsQueuedStatus(t *testing.T) {
 	message := userMessage("later")
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: message}}
 
-	m.onAgentEvent(userMessageStartEvent("later"))
+	m.onAgentEvent(messageStartEvent(message))
 	if m.statusMsg != "" {
 		t.Fatalf("status = %q, want empty", m.statusMsg)
 	}
@@ -156,7 +156,7 @@ func TestQueuedFollowUpsPromoteInFIFOOrder(t *testing.T) {
 	m.queuedFollowUps = []queuedMessage{{display: "first", message: first}, {display: "second", message: second}}
 	m.updateLayout()
 
-	m.onAgentEvent(userMessageStartEvent("first"))
+	m.onAgentEvent(messageStartEvent(first))
 	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "second" {
 		t.Fatalf("queued follow-ups after first promotion = %#v", m.queuedFollowUps)
 	}
@@ -184,10 +184,11 @@ func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
 
 func TestSteeringEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
-	m.queuedSteering = []types.Message{userMessage("steer")}
+	steer := userMessage("steer")
+	m.queuedSteering = []types.Message{steer}
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
 
-	m.onAgentEvent(userMessageStartEvent("steer"))
+	m.onAgentEvent(messageStartEvent(steer))
 	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "later" {
 		t.Fatalf("steering removed queued follow-up: %#v", m.queuedFollowUps)
 	}
@@ -199,7 +200,7 @@ func TestInitialPromptEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
 	m.activePrompt = &initial
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
 
-	m.onAgentEvent(userMessageStartEvent("initial"))
+	m.onAgentEvent(messageStartEvent(initial))
 	if m.activePrompt != nil {
 		t.Fatal("initial prompt remained active after its event")
 	}
@@ -226,9 +227,11 @@ func TestSubmissionIsRejectedWhileAborting(t *testing.T) {
 	}
 }
 
-func userMessageStartEvent(text string) types.AgentEvent {
-	message := userMessage(text)
-	return types.AgentEvent{Type: types.EventMessageStart, Message: &message}
+// messageStartEvent builds the message_start event for an exact message:
+// the agent loop re-emits the very message it consumed from the queue, so
+// tests must too instead of reconstructing a near-identical one.
+func messageStartEvent(msg types.Message) types.AgentEvent {
+	return types.AgentEvent{Type: types.EventMessageStart, Message: &msg}
 }
 
 func TestTranscriptScrollsWithMouseWheel(t *testing.T) {

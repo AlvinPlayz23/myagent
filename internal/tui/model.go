@@ -533,31 +533,6 @@ func clearStatusCmd(status string) tea.Cmd {
 // Update handles messages: key input, window resize, agent events, and ticks.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.cancelSelection()
-		return m.onResize(msg.Width, msg.Height)
-
-	case tea.KeyPressMsg:
-		return m.onKey(msg)
-
-	case tea.PasteMsg:
-		// Paste messages do not pass through onKey. Route them explicitly so a
-		// provider key never falls through to the main conversation composer.
-		if m.keyFor.ID != "" {
-			var cmd tea.Cmd
-			m.keyInput, cmd = m.keyInput.Update(msg)
-			return m, cmd
-		}
-		previous := m.input.Value()
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		if m.input.Value() != previous {
-			m.historyIndex = -1
-		}
-		m.syncPickers()
-		m.updateLayout()
-		return m, cmd
-
 	case clipboardResultMsg:
 		m.clipboardBusy = false
 		if msg.err != nil {
@@ -582,18 +557,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusMsg = "Clipboard does not contain text or an image."
 		return m, nil
-
-	case tea.MouseWheelMsg:
-		return m.onMouseWheel(msg)
-
-	case tea.MouseClickMsg:
-		return m.onMouseClick(msg)
-
-	case tea.MouseMotionMsg:
-		return m.onMouseMotion(msg)
-
-	case tea.MouseReleaseMsg:
-		return m.onMouseRelease(msg)
 
 	case modelsDiscoveredMsg:
 		if m.discovering == msg.provider {
@@ -701,7 +664,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Delegate other messages to the focused input.
+	// Input-device messages are normalized into semantic actions and routed
+	// overlay-first; everything else (bubbles-internal messages) goes to the
+	// focused input.
+	if act := normalizeMessage(msg); act.kind != actionNone {
+		return m.handleAction(act)
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
@@ -767,33 +735,16 @@ func (m *model) queuedFollowUpHeight() int {
 	return strings.Count(m.renderQueuedFollowUps(), "\n") + 1
 }
 
+// panelHeight reports the rows the topmost active overlay borrows from the
+// transcript, always leaving the transcript at least one row.
 func (m *model) panelHeight() int {
 	available := m.height - m.fixedHeight() - 1
-	desired := m.picker.height()
-	if m.files.active {
-		desired = m.files.height()
-	}
-	if m.sessions.active {
-		desired = m.sessions.height()
-	}
-	if m.models.active {
-		desired = m.models.height()
-		if m.discovering != "" {
-			desired++ // room for the live-discovery indicator line
+	for _, o := range m.overlayRoute() {
+		if o.overlayActive() {
+			return min(o.overlayHeight(), max(0, available))
 		}
 	}
-	if m.effort.active {
-		desired = len(effortChoices) + 1
-	}
-	if m.providers.active || m.keyFor.ID != "" {
-		desired = min(10, max(2, len(m.providers.items)+1))
-	}
-	if m.exportPick.active || m.exportFormat != "" || m.exportOverwrite {
-		desired = 3
-	} else if m.customize.active {
-		desired = len(customizeRows) + 1
-	}
-	return min(desired, max(0, available))
+	return 0
 }
 
 func (m *model) updateLayout() {
@@ -802,282 +753,6 @@ func (m *model) updateLayout() {
 	}
 	m.viewport.SetHeight(m.viewportHeight())
 	m.refreshViewport()
-}
-
-// Keys: enter sends or queues a follow-up; ctrl+enter inserts a newline.
-// ctrl+j is retained as a reliable newline alternative for terminals that do
-// not encode Ctrl+Enter distinctly; alt+enter sends a steering message.
-func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	ks := k.Keystroke()
-	if m.exportPick.active {
-		switch ks {
-		case "up":
-			m.exportPick.move(-1)
-		case "down":
-			m.exportPick.move(1)
-		case "enter":
-			m.exportFormat = m.exportPick.format()
-			m.exportPick.close()
-			m.exportName.SetValue(export.DefaultFilename(m.sessionTitle))
-			m.exportName.Focus()
-			m.statusMsg = "Enter a file name, then press enter to export."
-			m.updateLayout()
-		case "esc":
-			m.exportPick.close()
-			m.statusMsg = "Export cancelled."
-			m.updateLayout()
-		}
-		return m, nil
-	}
-	if m.exportOverwrite {
-		switch ks {
-		case "up", "down":
-			m.exportOverwrite = false
-			m.updateLayout()
-		case "enter":
-			return m.writeExport(true)
-		case "esc":
-			m.exportOverwrite = false
-			m.exportFormat = ""
-			m.statusMsg = "Export cancelled."
-			m.updateLayout()
-		}
-		return m, nil
-	}
-	if m.exportFormat != "" {
-		switch ks {
-		case "esc":
-			m.exportFormat = ""
-			m.exportName.Reset()
-			m.statusMsg = "Export cancelled."
-			m.updateLayout()
-			return m, nil
-		case "enter":
-			return m.writeExport(false)
-		}
-		var cmd tea.Cmd
-		m.exportName, cmd = m.exportName.Update(k)
-		return m, cmd
-	}
-	if m.sessions.active {
-		switch ks {
-		case "up":
-			m.sessions.move(-1)
-			return m, nil
-		case "down":
-			m.sessions.move(1)
-			return m, nil
-		case "enter":
-			return m.resumeSelectedSession()
-		case "esc":
-			m.sessions.close()
-			m.statusMsg = "Resume cancelled."
-			m.updateLayout()
-			return m, nil
-		case "ctrl+c":
-			// Preserve the global quit behavior below.
-		default:
-			return m, nil
-		}
-	}
-	if m.models.active {
-		switch ks {
-		case "up":
-			m.models.move(-1)
-		case "down":
-			m.models.move(1)
-		case "enter":
-			return m.selectPickedModel()
-		case "esc":
-			m.models.close()
-			m.statusMsg = "Model selection cancelled."
-			m.updateLayout()
-		case "backspace":
-			if len(m.models.query) > 0 {
-				m.models.query = m.models.query[:len(m.models.query)-1]
-				m.models.filter()
-				m.updateLayout()
-			}
-		default:
-			if k.Text != "" {
-				m.models.query += k.Text
-				m.models.filter()
-				m.updateLayout()
-			}
-		}
-		return m, nil
-	}
-	if m.effort.active {
-		switch ks {
-		case "up":
-			m.effort.move(-1)
-		case "down":
-			m.effort.move(1)
-		case "enter":
-			return m.applyEffort(m.effort.selected().effort)
-		case "esc":
-			m.effort.close()
-			m.statusMsg = "Effort selection cancelled."
-			m.updateLayout()
-		}
-		return m, nil
-	}
-	if m.customize.active {
-		switch ks {
-		case "up":
-			m.customize.move(-1)
-		case "down":
-			m.customize.move(1)
-		case "enter":
-			return m.applyCustomizeSelection()
-		case "esc":
-			m.customize.close()
-			m.statusMsg = "Customization cancelled."
-			m.updateLayout()
-		}
-		return m, nil
-	}
-	if m.keyFor.ID != "" {
-		switch ks {
-		case "esc":
-			m.keyInput.Reset()
-			m.keyFor = modelcatalog.Provider{}
-			m.providers.active = true
-			m.statusMsg = "Provider edit cancelled."
-			m.updateLayout()
-			return m, nil
-		case "enter":
-			return m.saveProviderKey()
-		}
-		var cmd tea.Cmd
-		m.keyInput, cmd = m.keyInput.Update(k)
-		return m, cmd
-	}
-	if m.providers.active {
-		switch ks {
-		case "up":
-			m.providers.move(-1)
-		case "down":
-			m.providers.move(1)
-		case "enter":
-			return m.openProviderKeyEntry()
-		case "esc":
-			m.providers.close()
-			m.statusMsg = "Provider selection cancelled."
-			m.updateLayout()
-		}
-		return m, nil
-	}
-	if m.files.active {
-		switch ks {
-		case "up":
-			m.files.move(-1)
-			return m, nil
-		case "down":
-			m.files.move(1)
-			return m, nil
-		case "tab", "enter":
-			return m.acceptFilePicker()
-		case "esc":
-			m.files.dismiss(m.input.Value())
-			m.updateLayout()
-			return m, nil
-		}
-	}
-	if m.picker.active {
-		switch ks {
-		case "up":
-			m.picker.move(-1)
-			return m, nil
-		case "down":
-			m.picker.move(1)
-			return m, nil
-		case "tab":
-			return m.acceptCommandPicker(false)
-		case "enter":
-			return m.acceptCommandPicker(true)
-		case "esc":
-			m.picker.dismiss(m.input.Value())
-			m.updateLayout()
-			return m, nil
-		}
-	}
-	switch ks {
-	case "ctrl+c":
-		// Abort a running turn if any; otherwise quit.
-		if m.abortActiveRun() {
-			return m, nil
-		}
-		return m, tea.Quit
-
-	case "ctrl+o":
-		m.cancelSelection()
-		m.transcript.toggleExpand()
-		m.refreshViewport()
-		return m, nil
-
-	case "esc":
-		m.abortActiveRun()
-		return m, nil
-
-	case "ctrl+v":
-		if m.clipboardBusy {
-			return m, nil
-		}
-		m.clipboardBusy = true
-		m.statusMsg = "Reading clipboard."
-		return m, readClipboardCmd(m.clipboardRead)
-
-	case "backspace":
-		if m.input.Value() == "" && m.attachments.removeLast() {
-			m.statusMsg = "Removed the last image attachment."
-			m.updateLayout()
-			return m, nil
-		}
-
-	case "enter":
-		return m.submit(submitFollowUp)
-
-	case "ctrl+enter", "ctrl+j":
-		// Ctrl+Enter is distinct in terminals with keyboard enhancements. Ctrl+J
-		// is retained as the unambiguous fallback for terminals that do not
-		// encode the modifier on Enter.
-		m.input.InsertString("\n")
-		m.historyIndex = -1
-		m.syncPickers()
-		m.updateLayout()
-		return m, nil
-
-	case "alt+enter":
-		return m.submit(submitSteering)
-
-	case "pgup":
-		m.viewport.ScrollUp(m.viewport.Height() / 2)
-		return m, nil
-	case "pgdown":
-		m.viewport.ScrollDown(m.viewport.Height() / 2)
-		return m, nil
-	case "up":
-		if m.input.Value() == "" || m.historyIndex >= 0 {
-			if m.navigatePromptHistory(-1) {
-				return m, nil
-			}
-		}
-	case "down":
-		if m.historyIndex >= 0 && m.navigatePromptHistory(1) {
-			return m, nil
-		}
-	}
-
-	previous := m.input.Value()
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(k)
-	if m.input.Value() != previous {
-		m.historyIndex = -1
-	}
-	m.syncPickers()
-	m.updateLayout()
-	return m, cmd
 }
 
 func (m *model) syncPickers() {
@@ -1152,71 +827,11 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onMouseWheel forwards wheel events over the transcript to its viewport.
-func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if mouse.Y < 0 || mouse.Y >= m.viewport.Height() {
-		return m, nil
-	}
-	m.cancelSelection()
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(mouse)
-	return m, cmd
-}
-
 func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
 	if !m.ready || y < 0 || y >= m.viewport.Height() || x < 0 || x >= m.viewport.Width() {
 		return textPoint{}, false
 	}
 	return textPoint{row: m.viewport.YOffset() + y, col: m.viewport.XOffset() + x}, true
-}
-
-func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
-	if mouse.Button != tea.MouseLeft {
-		return m, nil
-	}
-	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
-	if !ok || m.showWelcome() {
-		m.cancelSelection()
-		return m, nil
-	}
-	m.selection = &textSelection{anchor: point, current: point}
-	return m, nil
-}
-
-func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
-	if m.selection == nil || mouse.Button != tea.MouseLeft {
-		return m, nil
-	}
-	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
-	if !ok {
-		return m, nil
-	}
-	m.selection.current = point
-	m.selection.dragged = point != m.selection.anchor
-	m.refreshViewport()
-	return m, nil
-}
-
-func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
-	if m.selection == nil || (mouse.Button != tea.MouseLeft && mouse.Button != tea.MouseNone) {
-		return m, nil
-	}
-	if point, ok := m.transcriptPoint(mouse.X, mouse.Y); ok {
-		m.selection.current = point
-		m.selection.dragged = m.selection.dragged || point != m.selection.anchor
-	}
-	selection := *m.selection
-	text := selectedRenderedText(m.transcript.render(m.width), selection)
-	m.cancelSelection()
-	if text == "" {
-		return m, nil
-	}
-	if err := m.clipboardWrite(text); err != nil {
-		m.statusMsg = "Could not copy selection: " + err.Error()
-		return m, nil
-	}
-	m.statusMsg = fmt.Sprintf("Copied %d characters.", len([]rune(text)))
-	return m, clearStatusCmd(m.statusMsg)
 }
 
 func (m *model) cancelSelection() {
@@ -2261,37 +1876,18 @@ func sameUserMessage(a, b types.Message) bool {
 	return a.Role == b.Role && a.Timestamp == b.Timestamp && textOf(a) == textOf(b)
 }
 
+// renderPanel draws the topmost active overlay's panel.
 func (m *model) renderPanel() string {
-	if m.exportPick.active {
-		return m.renderExportPicker()
+	for _, o := range m.overlayRoute() {
+		if o.overlayActive() {
+			return o.overlayRender()
+		}
 	}
-	if m.exportOverwrite {
-		return m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("File exists — enter overwrite, ↑/↓ return to name, esc cancel")
-	}
-	if m.exportFormat != "" {
-		return m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Export as " + export.Label(m.exportFormat) + " — " + m.exportName.View() + " · enter export, esc cancel")
-	}
-	if m.sessions.active {
-		return m.renderSessionPicker()
-	}
-	if m.models.active {
-		return m.renderModelPicker()
-	}
-	if m.effort.active {
-		return m.renderEffortPicker()
-	}
-	if m.customize.active {
-		return m.renderCustomizePicker()
-	}
-	if m.keyFor.ID != "" {
-		return m.renderProviderKeyEntry()
-	}
-	if m.providers.active {
-		return m.renderProviderPicker()
-	}
-	if m.files.active {
-		return m.renderFilePicker()
-	}
+	return ""
+}
+
+// renderCommandPicker draws the slash-command completion menu.
+func (m *model) renderCommandPicker() string {
 	count := m.panelHeight()
 	if count == 0 {
 		return ""
