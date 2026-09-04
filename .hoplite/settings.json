@@ -1,0 +1,26 @@
+{
+	"version": 1,
+	"ports": {
+		"preview": 3000,
+		"additional": {}
+	},
+	"scripts": {
+		"setup": {
+			"enabled": true,
+			"command": "mise use -g go@1.26.8 && go mod download"
+		},
+		"run": {
+			"enabled": true,
+			"command": null
+		},
+		"archive": {
+			"enabled": true,
+			"command": null
+		},
+		"check": {
+			"enabled": true,
+			"command": "gofmt -l . && go vet ./... && go test ./..."
+		}
+	},
+	"mcpServers": []
+}

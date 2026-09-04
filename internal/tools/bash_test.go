@@ -9,12 +9,12 @@ import (
 
 func TestShellArgsFor(t *testing.T) {
 	cases := map[string][]string{
-		`C:\Windows\System32\cmd.exe`:  {"/C"},
-		"cmd":                            {"/C"},
-		"powershell.exe":                 {"-Command"},
-		"pwsh":                           {"-Command"},
+		`C:\Windows\System32\cmd.exe`:       {"/C"},
+		"cmd":                               {"/C"},
+		"powershell.exe":                    {"-Command"},
+		"pwsh":                              {"-Command"},
 		`C:\Program Files\Git\bin\bash.exe`: {"-c"},
-		"/bin/sh":                        {"-c"},
+		"/bin/sh":                           {"-c"},
 	}
 	for shell, want := range cases {
 		if got := shellArgsFor(shell); !reflect.DeepEqual(got, want) {

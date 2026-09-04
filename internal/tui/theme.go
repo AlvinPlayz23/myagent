@@ -11,36 +11,36 @@ import (
 // (userMessageBg, toolPending/Success/ErrorBg, muted, accent, error) at a
 // coarse level; we keep a small palette rather than pi's ~50 tokens.
 type theme struct {
-	userBlock       lipgloss.Style
-	queuedLabel     lipgloss.Style
-	assistantTxt    lipgloss.Style
-	toolPending     lipgloss.Style
-	toolSuccess     lipgloss.Style
-	toolError       lipgloss.Style
-	toolTitle       lipgloss.Style
-	diffMeta        lipgloss.Style
-	diffHunk        lipgloss.Style
-	diffAdd         lipgloss.Style
-	diffRemove      lipgloss.Style
-	muted           lipgloss.Style
-	accent          lipgloss.Style
-	errorText       lipgloss.Style
-	footer          lipgloss.Style
-	footerRight     lipgloss.Style
-	spinner         lipgloss.Style
-	selection       lipgloss.Style
-	cmdPickerSel    lipgloss.Style
-	cmdPickerItem   lipgloss.Style
-	pickerGroup     lipgloss.Style
-	composerRule    lipgloss.Style
-	orbDim          lipgloss.Style
-	orbMedium       lipgloss.Style
-	orbBright       lipgloss.Style
+	userBlock     lipgloss.Style
+	queuedLabel   lipgloss.Style
+	assistantTxt  lipgloss.Style
+	toolPending   lipgloss.Style
+	toolSuccess   lipgloss.Style
+	toolError     lipgloss.Style
+	toolTitle     lipgloss.Style
+	diffMeta      lipgloss.Style
+	diffHunk      lipgloss.Style
+	diffAdd       lipgloss.Style
+	diffRemove    lipgloss.Style
+	muted         lipgloss.Style
+	accent        lipgloss.Style
+	errorText     lipgloss.Style
+	footer        lipgloss.Style
+	footerRight   lipgloss.Style
+	spinner       lipgloss.Style
+	selection     lipgloss.Style
+	cmdPickerSel  lipgloss.Style
+	cmdPickerItem lipgloss.Style
+	pickerGroup   lipgloss.Style
+	composerRule  lipgloss.Style
+	orbDim        lipgloss.Style
+	orbMedium     lipgloss.Style
+	orbBright     lipgloss.Style
 }
 
 func newTheme() *theme {
 	return &theme{
-		userBlock: lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		userBlock:     lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		queuedLabel:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
 		assistantTxt:  lipgloss.NewStyle(),
 		toolPending:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),

@@ -19,17 +19,17 @@ const (
 
 // TruncationResult mirrors pi's TruncationResult.
 type TruncationResult struct {
-	Content              string
-	Truncated            bool
-	TruncatedBy          string // "lines" | "bytes" | ""
-	TotalLines           int
-	TotalBytes           int
-	OutputLines          int
-	OutputBytes          int
-	LastLinePartial      bool
+	Content               string
+	Truncated             bool
+	TruncatedBy           string // "lines" | "bytes" | ""
+	TotalLines            int
+	TotalBytes            int
+	OutputLines           int
+	OutputBytes           int
+	LastLinePartial       bool
 	FirstLineExceedsLimit bool
-	MaxLines             int
-	MaxBytes             int
+	MaxLines              int
+	MaxBytes              int
 }
 
 // FormatSize renders bytes as a human-readable size. Ported from pi formatSize.

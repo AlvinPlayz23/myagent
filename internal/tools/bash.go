@@ -254,9 +254,15 @@ func shellConfig() (string, []string) {
 
 // shellArgsFor picks the command-string flag for a shell path: "/C" for
 // cmd.exe, "-Command" for PowerShell, and "-c" for everything else (bash/sh).
+// Windows-style values must parse identically on every platform, so both "/"
+// and "\" are treated as separators.
 func shellArgsFor(shell string) []string {
-	base := strings.ToLower(filepath.Base(shell))
-	base = strings.TrimSuffix(base, ".exe")
+	s := strings.ToLower(shell)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	base := strings.TrimSuffix(s, ".exe")
 	switch base {
 	case "cmd":
 		return []string{"/C"}
@@ -269,8 +275,9 @@ func shellArgsFor(shell string) []string {
 
 // isWSLStub reports whether a bash path is actually the Windows WSL launcher
 // stub (System32\bash.exe) or a WindowsApps alias rather than a real bash.
+// Backslashes are normalized so the check works on every platform.
 func isWSLStub(path string) bool {
-	lower := strings.ToLower(filepath.ToSlash(path))
+	lower := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
 	return strings.Contains(lower, "/system32/") || strings.Contains(lower, "/windowsapps/")
 }
 
