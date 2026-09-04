@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/AlvinPlayz23/myagent/internal/export"
 )
 
@@ -366,7 +368,8 @@ func (m *model) statusLine() string {
 	return strings.TrimLeft(indicator, " ")
 }
 
-// footer renders the cwd/model line and the token/cost stats line.
+// footer renders the cwd/model line and the token/cost stats line with
+// contextual key hints on the right when width allows.
 func (m *model) footer() string {
 	left := m.th.footer.Render(collapseHome(m.cwd))
 	right := m.th.footerRight.Render(m.modelID)
@@ -377,5 +380,9 @@ func (m *model) footer() string {
 		compact(m.usage.CacheRead), compact(m.usage.CacheWrite),
 		m.usage.Cost.Total)
 	line2 := m.th.footer.Render(stats)
+	hints := "enter send · esc abort · alt+enter steer · ctrl+o fold · /help"
+	if m.width > 0 && lipgloss.Width(stats)+lipgloss.Width(hints)+3 <= m.width {
+		line2 = padBetween(line2, m.th.footer.Render(hints), m.width)
+	}
 	return line1 + "\n" + line2
 }

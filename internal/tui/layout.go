@@ -37,18 +37,20 @@ type layoutSpan struct {
 // layoutRow is one terminal row of the transcript. Wrapping is applied while
 // rows are built, so viewport line offsets map one-to-one onto row indexes
 // and hit-testing is exact. wrapped marks a continuation of the previous
-// row's source line: copying joins it without a newline. gutterCols counts
-// leading visual-only cells (padding, markers, diff prefixes) that selection
-// highlights over but never copies. toggle marks rows whose click toggles
-// the owning block's fold.
+// row's source line: copying joins it without a newline. gutterCols and
+// gutterSuffixCols count leading and trailing visual-only cells (padding,
+// markers, diff prefixes, fold indicators) that selection highlights over
+// but never copies. toggle marks rows whose click toggles the owning block's
+// fold.
 type layoutRow struct {
-	kind       rowKind
-	blockID    int
-	lineIdx    int
-	spans      []layoutSpan
-	gutterCols int
-	wrapped    bool
-	toggle     bool
+	kind             rowKind
+	blockID          int
+	lineIdx          int
+	spans            []layoutSpan
+	gutterCols       int
+	gutterSuffixCols int
+	wrapped          bool
+	toggle           bool
 }
 
 // selectable reports whether the row participates in mouse selection.
@@ -171,6 +173,7 @@ func renderRowSelection(r layoutRow, from, to int, selStyle lipgloss.Style) stri
 		return r.render()
 	}
 	from = max(from, r.gutterCols)
+	to = min(to, r.width()-r.gutterSuffixCols)
 	if to <= from {
 		return r.render()
 	}
@@ -202,6 +205,7 @@ func rowSelectedCells(r layoutRow, from, to int) string {
 		return ""
 	}
 	from = max(from, r.gutterCols)
+	to = min(to, r.width()-r.gutterSuffixCols)
 	var sb strings.Builder
 	off := 0
 	for _, s := range r.spans {

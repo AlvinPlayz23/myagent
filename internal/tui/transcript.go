@@ -279,6 +279,9 @@ func (t *transcript) layout(width int) []layoutRow {
 		if b.kind == blockThinking && !t.showThinking {
 			continue
 		}
+		if len(rows) > 0 {
+			rows = append(rows, layoutRow{kind: rowSpacer})
+		}
 		rows = append(rows, t.layoutBlock(b, width)...)
 	}
 	return rows
@@ -374,11 +377,32 @@ func (t *transcript) layoutTool(b *block, width int) []layoutRow {
 	case b.toolErr:
 		statusStyle = t.th.toolError
 	}
+	// The state glyph and fold arrow are visual-only: status also reads
+	// through the header color, and the fold direction is chrome.
+	glyph := "✓ " // check: succeeded
+	switch {
+	case !b.toolDone:
+		glyph = "• " // bullet: running
+	case b.toolErr:
+		glyph = "✕ " // cross: failed
+	}
+	body := strings.TrimRight(b.toolOutput, "\n")
+	hasBody := (len(b.toolDiff) > 0 && b.toolDone && !b.toolErr) || body != ""
+	fold := ""
+	if hasBody {
+		if expand {
+			fold = " ▾" // expanded
+		} else {
+			fold = " ▸" // folded
+		}
+	}
 	rows := []layoutRow{{
-		kind:    rowToolHeader,
-		blockID: b.id,
-		spans:   []layoutSpan{{text: t.toolHeader(b), style: statusStyle}},
-		toggle:  true,
+		kind:             rowToolHeader,
+		blockID:          b.id,
+		spans:            []layoutSpan{{text: glyph + t.toolHeader(b) + fold, style: statusStyle}},
+		gutterCols:       2,
+		gutterSuffixCols: len([]rune(fold)),
+		toggle:           true,
 	}}
 
 	// Edit and write calls show their requested change as a Git-style proposal
@@ -389,7 +413,6 @@ func (t *transcript) layoutTool(b *block, width int) []layoutRow {
 		return append(rows, t.diffRows(b, expand, width)...)
 	}
 
-	body := strings.TrimRight(b.toolOutput, "\n")
 	if body == "" {
 		return rows
 	}
@@ -437,14 +460,23 @@ func (t *transcript) layoutThinking(b *block, width int) []layoutRow {
 		label = "Thinking…"
 		headerStyle = t.th.accent
 	}
-	rows := []layoutRow{{
-		kind:       rowThinkingHeader,
-		blockID:    b.id,
-		spans:      []layoutSpan{{text: "✻ " + label, style: headerStyle}},
-		gutterCols: 2, // the marker glyph is visual-only chrome
-		toggle:     true,
-	}}
 	body := strings.TrimRight(b.text, "\n")
+	fold := ""
+	if body != "" {
+		if expand {
+			fold = " ▾"
+		} else {
+			fold = " ▸"
+		}
+	}
+	rows := []layoutRow{{
+		kind:             rowThinkingHeader,
+		blockID:          b.id,
+		spans:            []layoutSpan{{text: "✻ " + label + fold, style: headerStyle}},
+		gutterCols:       2, // the marker glyph is visual-only chrome
+		gutterSuffixCols: len([]rune(fold)),
+		toggle:           true,
+	}}
 	if body == "" {
 		return rows
 	}
@@ -631,8 +663,12 @@ func (t *transcript) toggleBlockFold(id int) {
 		return
 	}
 	if !b.foldSet {
+		// Capture what is currently shown *before* marking the override:
+		// folded=true means collapsed, so storing the current display state
+		// inverts it.
+		currently := t.effectiveExpand(b)
 		b.foldSet = true
-		b.folded = t.effectiveExpand(b) // invert what is currently shown
+		b.folded = currently
 	} else {
 		b.folded = !b.folded
 	}

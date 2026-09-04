@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -106,8 +108,8 @@ func TestLayoutSkipsHiddenThinking(t *testing.T) {
 		t.Fatalf("hidden thinking still rendered: %d rows", got)
 	}
 	tr.setShowThinking(true)
-	if got := len(tr.layout(60)); got != 3 { // header + body + user row
-		t.Fatalf("revealed thinking layout = %d rows, want 3", got)
+	if got := len(tr.layout(60)); got != 4 { // header + body + spacer + user row
+		t.Fatalf("revealed thinking layout = %d rows, want 4", got)
 	}
 }
 
@@ -128,6 +130,52 @@ func TestDiffRowsCarryGutterPrefixes(t *testing.T) {
 	}
 	if diffRows == 0 {
 		t.Fatal("no diff rows in layout")
+	}
+}
+
+func TestToolHeaderShowsStateGlyphAndFoldArrow(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.startTool("call", "bash", map[string]any{"command": "ls"})
+	pending := tr.layout(80)[0]
+	if got := ansi.Strip(pending.render()); got != "• $ ls" {
+		t.Fatalf("pending header = %q", got)
+	}
+	if pending.gutterCols != 2 || pending.gutterSuffixCols != 0 {
+		t.Fatalf("pending header gutters = %d/%d, want 2/0", pending.gutterCols, pending.gutterSuffixCols)
+	}
+	// Copying a fully selected header excludes both the state glyph and the
+	// fold arrow.
+	copied := copyRowsText([]layoutRow{pending}, textSelection{
+		anchor:  textPoint{row: 0, col: 0},
+		current: textPoint{row: 0, col: pending.width()},
+		dragged: true,
+	})
+	if copied != "$ ls" {
+		t.Fatalf("header copy = %q, want %q", copied, "$ ls")
+	}
+
+	tr.endTool("call", types.TextResult(strings.Repeat("out\n", 20), nil), false)
+	done := tr.layout(80)[0]
+	if got := ansi.Strip(done.render()); got != "✓ $ ls ▸" {
+		t.Fatalf("success header = %q", got)
+	}
+	tr.toggleBlockFold(tr.blocks[0].id)
+	expanded := tr.layout(80)[0]
+	if got := ansi.Strip(expanded.render()); got != "✓ $ ls ▾" {
+		t.Fatalf("expanded header = %q", got)
+	}
+
+	tr.startTool("call2", "bash", map[string]any{"command": "boom"})
+	tr.endTool("call2", types.TextResult("failure", nil), true)
+	var failed layoutRow
+	for _, r := range tr.layout(80) {
+		if r.kind == rowToolHeader && r.blockID == tr.blocks[len(tr.blocks)-1].id {
+			failed = r
+			break
+		}
+	}
+	if got := ansi.Strip(failed.render()); got != "✕ $ boom ▸" {
+		t.Fatalf("error header = %q", got)
 	}
 }
 

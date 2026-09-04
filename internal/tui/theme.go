@@ -7,9 +7,11 @@ import (
 	"github.com/charmbracelet/glamour"
 )
 
-// theme holds the lipgloss styles for the UI. Colors mirror pi's token roles
-// (userMessageBg, toolPending/Success/ErrorBg, muted, accent, error) at a
-// coarse level; we keep a small palette rather than pi's ~50 tokens.
+// theme holds the semantic style roles for the UI. Roles are named for their
+// meaning, not their color, so the palette can change (or degrade) without
+// touching render code. Bubble Tea's renderer downsamples colors to the
+// terminal's profile automatically; state is additionally encoded in glyphs
+// and markers so monochrome terminals stay legible.
 type theme struct {
 	userBlock     lipgloss.Style
 	queuedLabel   lipgloss.Style
@@ -25,6 +27,8 @@ type theme struct {
 	muted         lipgloss.Style
 	accent        lipgloss.Style
 	errorText     lipgloss.Style
+	warning       lipgloss.Style
+	border        lipgloss.Style
 	footer        lipgloss.Style
 	footerRight   lipgloss.Style
 	spinner       lipgloss.Style
@@ -40,24 +44,28 @@ type theme struct {
 
 func newTheme() *theme {
 	return &theme{
-		userBlock:     lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
-		queuedLabel:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		assistantTxt:  lipgloss.NewStyle(),
-		toolPending:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		toolSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
-		toolError:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		toolTitle:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
-		diffMeta:      lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		diffHunk:      lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		diffAdd:       lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
-		diffRemove:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		accent:        lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		errorText:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		footer:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		footerRight:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		spinner:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		selection:     lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("25")),
+		userBlock:    lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		queuedLabel:  lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		assistantTxt: lipgloss.NewStyle(),
+		toolPending:  lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		toolSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
+		toolError:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		toolTitle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+		diffMeta:     lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		diffHunk:     lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		diffAdd:      lipgloss.NewStyle().Foreground(lipgloss.Color("35")),
+		diffRemove:   lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		muted:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		accent:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		errorText:    lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		warning:      lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
+		border:       lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		footer:       lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		footerRight:  lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		spinner:      lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		// Reverse video keeps selections visible even on terminals without
+		// color support.
+		selection:     lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("25")).Reverse(true),
 		cmdPickerSel:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
 		cmdPickerItem: lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		// Group headers are bold but stay neutral so the blue selection still
