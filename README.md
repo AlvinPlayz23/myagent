@@ -255,13 +255,54 @@ go run . "Write a haiku about Go."   # same thing
 | -------------------- | ----------------------------------------------------- |
 | **Enter**            | Send (queue a follow-up if a turn is currently running) |
 | **Alt+Enter**        | Steer the currently running turn                      |
+| **Ctrl+Enter / Ctrl+J** | Insert a newline (multiline prompt)               |
 | **Esc**              | Abort the current turn                                |
-| **Ctrl+C**           | Quit                                                  |
-| **Ctrl+O**           | Expand / collapse all tool blocks                     |
+| **Ctrl+C**           | Abort a running turn; otherwise quit                  |
+| **Ctrl+O**           | Expand / collapse all tool and thinking blocks        |
 | **Up / Down**        | Browse submitted prompts when the input is empty      |
-| **PgUp / PgDn**      | Scroll transcript                                     |
-| **Mouse drag**       | Select displayed transcript text; release to copy     |
-| **Tab**              | Focus the input area                                  |
+| **PgUp / PgDn**      | Scroll transcript (a `↓ N below` hint tracks unseen output) |
+| **Ctrl+V**           | Paste clipboard text or attach a clipboard image      |
+| **Mouse drag**       | Select displayed transcript text; release to copy (wrapped rows join; markers, diff `+/-` prefixes, and padding are excluded) |
+| **Mouse wheel**      | Scroll the transcript only when the pointer is over it |
+| **Click a tool/thinking header** | Toggle that block's fold               |
+| **Tab**              | Complete the top slash-command or `@file` match       |
+
+#### Terminal capabilities
+
+The TUI adapts to what the terminal supports. Bubble Tea downsamples colors
+to the terminal's profile automatically, and tool/thinking state is also
+encoded in glyphs (`•` running, `✓` succeeded, `✕` failed) so monochrome
+terminals stay legible; selections use reverse video for the same reason.
+Mouse selection requires cell-motion mouse reporting; wheel events over the
+composer never scroll the transcript. Paste uses bracketed paste when
+available. When the system clipboard is unavailable (for example over ssh
+without an agent), copying falls back to OSC 52 so capable terminals copy
+locally.
+
+#### TUI architecture
+
+The interactive UI is organized as explicit state domains; see
+`docs/tui-upgrade-plan.md` for the full design.
+
+- `tui.go` — entry point: wires the runner, session persistence, and
+  provider configuration into the root model.
+- `model.go` — root model: Update, layout arithmetic, and the agent-event
+  stream. Input devices are normalized into semantic actions.
+- `actions.go` — action normalization and routing (overlay → composer →
+  global), plus the mouse/selection handlers.
+- `overlay.go` — the overlay stack: one adapter per modal layer (help,
+  export flow, sessions, models, effort, customize, provider keys, providers,
+  `@file`, slash commands) with uniform key routing, height, and rendering.
+- `transcript.go` + `layout.go` — semantic blocks laid out into terminal
+  rows (styled spans, display-width-aware wrapping, gutter tracking,
+  hit-test metadata) with per-block caches so streaming re-wraps only the
+  growing block.
+- `selection.go` — row-based mouse selection and copying.
+- `composer.go` — prompt styles, submit/queue/steer, and prompt history.
+- `pickers.go`, `render.go`, `welcome.go` — picker controllers, panel/status
+ /footer rendering, and the empty-session welcome screen.
+- `ptytest/` — deterministic PTY integration tests against a fake streaming
+  provider.
 
 ### TUI slash commands
 
@@ -496,7 +537,9 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 │   ├── setup/           # first-run setup + provider manager wizard
 │   ├── terminal/        # terminal capability helpers
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
-│   ├── tui/             # bubbletea v2 UI: transcript, input, footer
+│   ├── tui/             # bubbletea v2 UI: action routing, overlay stack,
+│   │   │                #   layout-aware transcript, composer, PTY tests
+│   │   └── ptytest/     # deterministic PTY integration suite
 │   └── types/           # Message / Content / ToolCall / Usage / Event
 ├── desktop/             # Electron desktop client (connects to `myagent serve`)
 ├── scripts/
@@ -513,7 +556,9 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 ```bash
 go build ./...                   # compile everything
 go vet ./...                     # static analysis
-go test ./...                    # unit tests (event bus + session hardening)
+go test ./...                    # unit tests (agent, session, TUI, tools, ...)
+go test ./internal/tui/ptytest/ -v -count 1   # PTY integration suite (~35s, no credentials)
+go test ./internal/tui/ -race                 # race detector on the TUI
 
 # Binary at the project root (Windows→myagent.exe, *nix→myagent)
 go build -o ./myagent.exe .

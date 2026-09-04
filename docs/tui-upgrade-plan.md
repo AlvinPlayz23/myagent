@@ -10,6 +10,10 @@ No Grok source code, branding, logos, or implementation details are copied. Noth
 is ported, so no `THIRD_PARTY_NOTICES` entry is required; if that ever changes, the
 port must be isolated, notices retained, and Apache-2.0 terms verified first.
 
+> Status: implemented. Phases 0–6 landed on the thread branch together with
+> unit, render, and PTY tests; see "Landing order" below for what each commit
+> carries and the README's TUI sections for user-facing behavior.
+
 ## Phase 0 — Baseline audit (recorded 2026-09-04)
 
 Commands and results on this checkout (HEAD `d03cfef`):
