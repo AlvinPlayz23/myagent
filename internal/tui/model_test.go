@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -44,7 +45,7 @@ func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "next") {
 		t.Fatalf("queued follow-up has no pending label: %q", queued)
 	}
-	m.onAgentEvent(userMessageStartEvent("run the tests after this"))
+	m.onAgentEvent(types.AgentEvent{Type: types.EventMessageStart, Message: &message})
 	if len(m.queuedFollowUps) != 0 {
 		t.Fatalf("queued follow-ups = %#v, want empty", m.queuedFollowUps)
 	}
@@ -171,7 +172,7 @@ func TestQueuedFollowUpsPromoteInFIFOOrder(t *testing.T) {
 func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.queuedFollowUps = []queuedMessage{{display: "run the tests after this", message: userMessage("run the tests after this")}}
-	m.onResize(80, 16)
+	m.onResize(80, 20)
 
 	view := m.View()
 	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
@@ -238,13 +239,21 @@ func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 	m.viewport.GotoBottom()
 
 	initialOffset := m.viewport.YOffset()
-	m.onMouseWheel(tea.MouseWheelMsg{Y: 0, Button: tea.MouseWheelUp})
+	m.onMouseWheel(tea.MouseWheelMsg{
+		X:      m.layout.scrollbackContent.X + 1,
+		Y:      m.layout.scrollbackContent.Y,
+		Button: tea.MouseWheelUp,
+	})
 	if m.viewport.YOffset() >= initialOffset {
 		t.Fatalf("wheel up offset = %d, want less than %d", m.viewport.YOffset(), initialOffset)
 	}
 
 	scrolledOffset := m.viewport.YOffset()
-	m.onMouseWheel(tea.MouseWheelMsg{Y: m.viewport.Height(), Button: tea.MouseWheelDown})
+	m.onMouseWheel(tea.MouseWheelMsg{
+		X:      m.layout.scrollbackContent.X + 1,
+		Y:      m.layout.scrollbackContent.Y + m.layout.scrollbackContent.Height,
+		Button: tea.MouseWheelDown,
+	})
 	if m.viewport.YOffset() != scrolledOffset {
 		t.Fatalf("wheel outside transcript offset = %d, want %d", m.viewport.YOffset(), scrolledOffset)
 	}
@@ -261,9 +270,10 @@ func TestTranscriptDragCopiesDisplayedText(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	y := m.layout.scrollbackContent.Y
+	m.onMouseClick(tea.MouseClickMsg{X: m.layout.scrollbackContent.X + 1, Y: y, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: m.layout.scrollbackContent.X + 5, Y: y, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: m.layout.scrollbackContent.X + 5, Y: y, Button: tea.MouseLeft})
 
 	if copied != "hello" {
 		t.Fatalf("clipboard = %q, want %q", copied, "hello")
@@ -287,8 +297,10 @@ func TestTranscriptClickWithoutDragDoesNotCopy(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	y := m.layout.scrollbackContent.Y
+	x := m.layout.scrollbackContent.X + 1
+	m.onMouseClick(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
 
 	if calls != 0 {
 		t.Fatalf("clipboard writes = %d, want 0", calls)
@@ -302,9 +314,10 @@ func TestTranscriptCopyFailureIsReported(t *testing.T) {
 	m.onResize(40, 20)
 	m.clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	y := m.layout.scrollbackContent.Y
+	m.onMouseClick(tea.MouseClickMsg{X: m.layout.scrollbackContent.X + 1, Y: y, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: m.layout.scrollbackContent.X + 5, Y: y, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: m.layout.scrollbackContent.X + 5, Y: y, Button: tea.MouseLeft})
 
 	if m.statusMsg != "Could not copy selection: clipboard unavailable" {
 		t.Fatalf("status = %q", m.statusMsg)
@@ -317,12 +330,166 @@ func TestTranscriptPointIncludesViewportOffset(t *testing.T) {
 	m.viewport.SetContent(strings.Repeat("line\n", m.viewport.Height()*2))
 	m.viewport.GotoBottom()
 
-	point, ok := m.transcriptPoint(3, 1)
+	point, ok := m.transcriptPoint(
+		m.layout.scrollbackContent.X+3,
+		m.layout.scrollbackContent.Y+1,
+	)
 	if !ok {
 		t.Fatal("transcript point was rejected")
 	}
 	if point.row != m.viewport.YOffset()+1 || point.col != m.viewport.XOffset()+3 {
 		t.Fatalf("point = %#v, offsets = (%d,%d)", point, m.viewport.XOffset(), m.viewport.YOffset())
+	}
+}
+
+func TestModalOwnsMouseInput(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("hello")
+	m.onResize(40, 20)
+	m.viewport.SetContent(strings.Repeat("line\n", m.viewport.Height()*2))
+	m.viewport.GotoBottom()
+	before := m.viewport.YOffset()
+	m.sessions.active = true
+
+	m.onMouseWheel(tea.MouseWheelMsg{
+		X:      m.layout.scrollbackContent.X + 1,
+		Y:      m.layout.scrollbackContent.Y,
+		Button: tea.MouseWheelUp,
+	})
+	if got := m.viewport.YOffset(); got != before {
+		t.Fatalf("modal changed viewport offset from %d to %d", before, got)
+	}
+	m.onMouseClick(tea.MouseClickMsg{
+		X:      m.layout.scrollbackContent.X + 1,
+		Y:      m.layout.scrollbackContent.Y,
+		Button: tea.MouseLeft,
+	})
+	if m.selection != nil {
+		t.Fatal("modal allowed transcript selection")
+	}
+}
+
+func TestTimelineTickClickJumpsToTurnStart(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("first")
+	m.transcript.beginAssistant()
+	m.transcript.appendAssistantDelta(strings.Repeat("reply ", 500))
+	m.transcript.endAssistant()
+	m.transcript.addUser("second")
+	m.onResize(80, 24)
+	m.viewport.GotoBottom()
+
+	rail, ok := m.timelineRailFor(m.scrollbackContentWidth())
+	if !ok {
+		t.Fatal("timeline rail was not available")
+	}
+	starts := m.timelineTurnStarts(m.scrollbackContentWidth())
+	if len(starts) != 2 || m.viewport.YOffset() <= starts[0] {
+		t.Fatalf("unexpected starts=%v offset=%d", starts, m.viewport.YOffset())
+	}
+	m.onMouseClick(tea.MouseClickMsg{
+		X:      rail.rect.X,
+		Y:      timelineTickRow(rail, 0),
+		Button: tea.MouseLeft,
+	})
+	if got := m.viewport.YOffset(); got != starts[0] {
+		t.Fatalf("timeline click offset = %d, want %d", got, starts[0])
+	}
+}
+
+func TestFallbackScrollbarRendersAndNavigates(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("only turn")
+	m.transcript.beginAssistant()
+	m.transcript.appendAssistantDelta(strings.Repeat("long reply\n", 30))
+	m.transcript.endAssistant()
+	m.onResize(50, 20)
+	m.viewport.GotoBottom()
+
+	if !m.layout.timeline.empty() || m.layout.scrollbar.empty() {
+		t.Fatalf("one-turn layout should use fallback scrollbar: %#v", m.layout)
+	}
+	if !strings.Contains(m.renderScrollback(), "┃") {
+		t.Fatalf("fallback scrollbar thumb is missing: %q", m.renderScrollback())
+	}
+	m.onMouseClick(tea.MouseClickMsg{
+		X:      m.layout.scrollbar.X,
+		Y:      m.layout.scrollbar.Y,
+		Button: tea.MouseLeft,
+	})
+	if got := m.viewport.YOffset(); got != 0 {
+		t.Fatalf("scrollbar top click offset = %d, want 0", got)
+	}
+}
+
+func TestFallbackScrollbarIsOmittedWhenTranscriptFits(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("short turn")
+	m.onResize(50, 20)
+
+	if !m.layout.scrollbar.empty() {
+		t.Fatalf("fitting transcript reserved a scrollbar lane: %#v", m.layout.scrollbar)
+	}
+	if got, want := m.layout.scrollbackContent.Width, m.layout.scrollback.Width; got != want {
+		t.Fatalf("fitting transcript width = %d, want %d", got, want)
+	}
+	if strings.Contains(m.renderScrollback(), "┃") {
+		t.Fatal("fitting transcript rendered a scrollbar thumb")
+	}
+}
+
+func TestFallbackScrollbarAppearsAsTranscriptGrows(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.hasSessionTitle = true
+	m.transcript.addUser("short turn")
+	m.onResize(50, 20)
+	if !m.layout.scrollbar.empty() {
+		t.Fatal("short transcript unexpectedly reserved a scrollbar")
+	}
+
+	m.transcript.beginAssistant()
+	m.transcript.appendAssistantDelta(strings.Repeat("long reply\n", 30))
+	m.transcript.endAssistant()
+	m.refreshViewport()
+	if m.layout.scrollbar.empty() {
+		t.Fatal("overflowing transcript did not reserve a scrollbar")
+	}
+}
+
+func TestPasteDoesNotEscapeModalOwnership(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(50, 20)
+	m.sessions.active = true
+	m.input.SetValue("draft")
+
+	m.Update(tea.PasteMsg{Content: "pasted"})
+
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("modal paste changed composer to %q", got)
+	}
+}
+
+func TestModalFramePreservesBoundsAtEveryShortHeight(t *testing.T) {
+	for height := 1; height <= 6; height++ {
+		bounds, frame := renderModalFrame(
+			"Sessions",
+			strings.Join([]string{"one", "two", "three", "four", "five"}, "\n"),
+			"enter select · esc cancel",
+			20,
+			height,
+			newTheme(),
+		)
+		rows := strings.Split(frame, "\n")
+		if len(rows) != bounds.Height || bounds.Height != height {
+			t.Fatalf("height %d produced %d rows for bounds %#v", height, len(rows), bounds)
+		}
+		if !strings.Contains(rows[len(rows)-1], "─") {
+			t.Fatalf("height %d lost bottom border: %q", height, frame)
+		}
 	}
 }
 
@@ -392,6 +559,37 @@ func TestWelcomeUsesCompactCopyInNarrowTerminal(t *testing.T) {
 	}
 }
 
+func TestWideWelcomeUsesBoundedHeroCard(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "openai/gpt", "")
+	m.onResize(120, 28)
+
+	content := m.viewport.View()
+	if !strings.Contains(content, "╭") || !strings.Contains(content, "╰") {
+		t.Fatalf("wide welcome has no bounded hero card: %q", content)
+	}
+	if !strings.Contains(content, "new session") || !strings.Contains(content, "openai/gpt") {
+		t.Fatalf("wide welcome hero omitted menu content: %q", content)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if lipgloss.Width(line) > m.width {
+			t.Fatalf("wide welcome row exceeds terminal width: %d > %d: %q", lipgloss.Width(line), m.width, line)
+		}
+	}
+}
+
+func TestWideWelcomeFallsBackToStackedLayoutOnShortTerminal(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(120, 12)
+
+	content := m.viewport.View()
+	if strings.Contains(content, "╭") || strings.Contains(content, "new session") {
+		t.Fatalf("short wide welcome should use stacked fallback: %q", content)
+	}
+	if !strings.Contains(content, "myagent") {
+		t.Fatalf("short wide welcome lost its title: %q", content)
+	}
+}
+
 func TestOrbWelcomeAnimatesWhileSessionIsEmpty(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.welcomeStyle = welcomeOrb
@@ -425,7 +623,7 @@ func TestTypingSlashOpensCommandPicker(t *testing.T) {
 
 func TestCommandPickerFitsTerminalAndBorrowsViewportRows(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
-	m.onResize(80, 12)
+	m.onResize(80, 20)
 	baseHeight := m.viewport.Height()
 	m.input.SetValue("/")
 	m.picker.sync(m.input.Value())
