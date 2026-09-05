@@ -151,20 +151,23 @@ var promptChoices = []promptChoice{
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
-// defaultComposerHeight matches the bubbles textarea default so switching back
-// from a shorter style restores the original composer size.
+// defaultComposerHeight keeps the default composer at its established outer
+// height after the top border and bottom info divider are added.
 const defaultComposerHeight = 6
 
-// ruledPrompt is the marker drawn at the start of the ruled composer's line.
-const ruledPrompt = "› "
-
 const (
-	// ruledComposerRules counts the rules drawn above and below the textarea.
-	ruledComposerRules = 2
+	// composerChromeRows are the top border and bottom model/info divider.
+	composerChromeRows = 2
+	// These widths mirror the reference prompt chrome: an accent rail, two
+	// cells of left padding, and one cell reserved by the right border.
+	composerAccentWidth = 1
+	composerPadLeft     = 2
+	composerPadRight    = 1
+
 	// The ruled composer opens one line tall and grows with the text, up to
 	// ruledComposerMaxRows, after which it scrolls internally.
 	ruledComposerMinRows = 1
-	ruledComposerRules = 2
+	ruledComposerMaxRows = 8
 	// ruledComposerReserve is the transcript rows kept free when the terminal is
 	// too short to give the composer its full growth range.
 	ruledComposerReserve = 4
@@ -373,6 +376,7 @@ type model struct {
 
 	transcript      *transcript
 	viewport        viewport.Model
+	layout          tuiLayout
 	input           textarea.Model
 	picker          commandPicker
 	files           filePicker
@@ -452,8 +456,16 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
+	ta.Prompt = promptGlyph() + " "
+	ta.SetPromptFunc(lipgloss.Width(ta.Prompt), func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return promptGlyph() + " "
+		}
+		return "  "
+	})
 	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
 	ta.ShowLineNumbers = false
+	configureTextareaTheme(&ta, th)
 	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()
 	key := textinput.New()
@@ -547,6 +559,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.keyInput, cmd = m.keyInput.Update(msg)
 			return m, cmd
+		}
+		if m.exportFormat != "" {
+			var cmd tea.Cmd
+			m.exportName, cmd = m.exportName.Update(msg)
+			return m, cmd
+		}
+		if m.modalActive() {
+			return m, nil
 		}
 		previous := m.input.Value()
 		var cmd tea.Cmd
@@ -714,12 +734,15 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	// its wrap width from the terminal width, so refit it before sizing the
 	// viewport around it.
 	m.syncComposerStyle()
-	vpHeight := m.viewportHeight()
+	m.computeLayout()
+	m.syncComposerFocus()
+	vpHeight := m.layout.scrollback.Height
+	vpWidth := max(1, m.layout.scrollbackContent.Width)
 	if !m.ready {
-		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
+		m.viewport = viewport.New(viewport.WithWidth(vpWidth), viewport.WithHeight(vpHeight))
 		m.ready = true
 	} else {
-		m.viewport.SetWidth(w)
+		m.viewport.SetWidth(vpWidth)
 		m.viewport.SetHeight(vpHeight)
 	}
 	m.transcript.invalidate()
@@ -727,20 +750,19 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// chromeHeight is the status row plus the two footer rows. The composer's own
-// height varies with the prompt style, so it is added separately. The blocks in
-// View are joined by newlines rather than separated by blank rows, so the
-// separators cost no extra rows.
-const chromeHeight = 3
+// chromeHeight is the top bar, status, shortcut, and two footer rows. The
+// composer's own height varies with the prompt style, so it is added separately.
+const chromeHeight = 5
 
-// composerHeight reports the rows the composer occupies, including the rules the
-// ruled style draws above and below the textarea.
+// composerHeight reports the rows the composer occupies, including its prompt
+// chrome. The default style keeps its established outer height; the ruled style
+// grows with the textarea and adds the same two chrome rows.
 func (m *model) composerHeight() int {
-	height := m.input.Height()
-	if m.promptStyle == promptRuled {
-		height += 2
+	if m.promptStyle == promptDefault {
+		return defaultComposerHeight
 	}
-	return height
+	height := m.input.Height()
+	return max(1, height) + composerChromeRows
 }
 
 // fixedHeight is the part of the layout the transcript can never use. The
@@ -749,6 +771,9 @@ func (m *model) composerHeight() int {
 func (m *model) fixedHeight() int { return chromeHeight + m.composerHeight() }
 
 func (m *model) viewportHeight() int {
+	if m.layout.scrollback.Height > 0 {
+		return m.layout.scrollback.Height
+	}
 	height := m.height - m.fixedHeight() - m.panelHeight() - m.queuedFollowUpHeight() - m.attachmentHeight()
 	return max(1, height)
 }
@@ -768,7 +793,19 @@ func (m *model) queuedFollowUpHeight() int {
 }
 
 func (m *model) panelHeight() int {
-	available := m.height - m.fixedHeight() - 1
+	if m.ready {
+		if m.modalActive() {
+			return m.desiredPanelRows()
+		}
+		if desired := m.desiredPanelRows(); desired != m.layout.panel.Height {
+			m.computeLayout()
+		}
+		return m.layout.panel.Height
+	}
+	return m.desiredPanelRows()
+}
+
+func (m *model) desiredPanelRows() int {
 	desired := m.picker.height()
 	if m.files.active {
 		desired = m.files.height()
@@ -793,15 +830,78 @@ func (m *model) panelHeight() int {
 	} else if m.customize.active {
 		desired = len(customizeRows) + 1
 	}
-	return min(desired, max(0, available))
+	return max(0, desired)
 }
 
 func (m *model) updateLayout() {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+	m.computeLayout()
+	m.syncComposerFocus()
 	if !m.ready {
 		return
 	}
-	m.viewport.SetHeight(m.viewportHeight())
+	m.viewport.SetWidth(max(1, m.layout.scrollbackContent.Width))
+	m.viewport.SetHeight(m.layout.scrollback.Height)
 	m.refreshViewport()
+}
+
+func (m *model) computeLayout() {
+	timelineWidth := timelineLaneWidth(m.width, m.timelineTurnCount())
+	params := tuiLayoutParams{
+		width:          m.width,
+		height:         m.height,
+		topBarRows:     1,
+		panelRows:      m.layoutPanelRows(),
+		queueRows:      m.queuedFollowUpHeight(),
+		attachmentRows: m.attachmentHeight(),
+		composerRows:   m.composerHeight(),
+		statusRows:     1,
+		shortcutRows:   1,
+		footerRows:     2,
+		timelineWidth:  timelineWidth,
+	}
+	m.layout = computeTUILayout(params)
+	// A two-cell rail needs one chevron row, one tick row, and one chevron
+	// row. Do not reserve it when the terminal cannot render that geometry.
+	if timelineWidth > 0 && m.layout.scrollback.Height < 3 {
+		params.timelineWidth = 0
+		m.layout = computeTUILayout(params)
+	}
+	if params.timelineWidth == 0 && m.transcriptNeedsScrollbar(m.layout) {
+		params.scrollbarWidth = fallbackScrollbarLaneWidth
+		m.layout = computeTUILayout(params)
+	}
+}
+
+func (m *model) transcriptNeedsScrollbar(layout tuiLayout) bool {
+	if m.transcript == nil || len(m.transcript.blocks) == 0 || layout.scrollback.empty() {
+		return false
+	}
+	// Keep the full-width candidate until overflow is known. Reserving the lane
+	// first would make a fitting transcript look narrower for no visual reason.
+	content := m.transcript.render(max(1, layout.scrollback.Width))
+	if content == "" {
+		return false
+	}
+	return strings.Count(content, "\n")+1 > layout.scrollback.Height
+}
+
+func (m *model) layoutPanelRows() int {
+	if m.modalActive() {
+		return 0
+	}
+	return m.desiredPanelRows()
+}
+
+// modalActive identifies the existing picker states that should float above
+// the base agent view. The slash command picker intentionally remains inline:
+// its completion list is part of the prompt's established viewport contract.
+func (m *model) modalActive() bool {
+	return m.exportPick.active || m.exportOverwrite || m.exportFormat != "" ||
+		m.sessions.active || m.models.active || m.effort.active ||
+		m.customize.active || m.keyFor.ID != "" || m.providers.active || m.files.active
 }
 
 // Keys: enter sends or queues a follow-up; ctrl+enter inserts a newline.
@@ -1154,7 +1254,8 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 
 // onMouseWheel forwards wheel events over the transcript to its viewport.
 func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if mouse.Y < 0 || mouse.Y >= m.viewport.Height() {
+	if m.modalActive() || !m.layout.scrollbackContent.contains(mouse.X, mouse.Y) {
+		m.cancelSelection()
 		return m, nil
 	}
 	m.cancelSelection()
@@ -1164,14 +1265,32 @@ func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
-	if !m.ready || y < 0 || y >= m.viewport.Height() || x < 0 || x >= m.viewport.Width() {
+	if !m.ready || m.modalActive() || !m.layout.scrollbackContent.contains(x, y) {
 		return textPoint{}, false
 	}
-	return textPoint{row: m.viewport.YOffset() + y, col: m.viewport.XOffset() + x}, true
+	localX := x - m.layout.scrollbackContent.X
+	localY := y - m.layout.scrollbackContent.Y
+	return textPoint{
+		row: m.viewport.YOffset() + localY,
+		col: m.viewport.XOffset() + localX,
+	}, true
 }
 
 func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if m.modalActive() {
+		m.cancelSelection()
+		return m, nil
+	}
 	if mouse.Button != tea.MouseLeft {
+		return m, nil
+	}
+	if target, handled := m.timelineTargetAt(mouse.X, mouse.Y); handled {
+		if target >= 0 {
+			m.jumpToTimelineTurn(target)
+		}
+		return m, nil
+	}
+	if m.scrollbarTargetAt(mouse.X, mouse.Y) {
 		return m, nil
 	}
 	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
@@ -1184,6 +1303,10 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if m.modalActive() {
+		m.cancelSelection()
+		return m, nil
+	}
 	if m.selection == nil || mouse.Button != tea.MouseLeft {
 		return m, nil
 	}
@@ -1198,15 +1321,22 @@ func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
+	if m.modalActive() {
+		m.cancelSelection()
+		return m, nil
+	}
 	if m.selection == nil || (mouse.Button != tea.MouseLeft && mouse.Button != tea.MouseNone) {
 		return m, nil
 	}
-	if point, ok := m.transcriptPoint(mouse.X, mouse.Y); ok {
-		m.selection.current = point
-		m.selection.dragged = m.selection.dragged || point != m.selection.anchor
+	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
+	if !ok {
+		m.cancelSelection()
+		return m, nil
 	}
+	m.selection.current = point
+	m.selection.dragged = m.selection.dragged || point != m.selection.anchor
 	selection := *m.selection
-	text := selectedRenderedText(m.transcript.render(m.width), selection)
+	text := selectedRenderedText(m.transcript.render(m.scrollbackContentWidth()), selection)
 	m.cancelSelection()
 	if text == "" {
 		return m, nil
@@ -1528,7 +1658,7 @@ func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
 // refits the height to the new bounds.
 func (m *model) syncComposerStyle() {
 	if m.promptStyle == promptRuled {
-		m.input.Prompt = ruledPrompt
+		m.input.Prompt = promptGlyph() + " "
 		m.input.DynamicHeight = true
 		m.input.MinHeight = ruledComposerMinRows
 		m.input.MaxHeight = m.ruledGrowthLimit()
@@ -1539,9 +1669,23 @@ func (m *model) syncComposerStyle() {
 		m.input.MinHeight = 0
 		m.input.MaxHeight = m.defaultMaxHeight
 		m.input.MaxContentHeight = 0
-		m.input.SetHeight(defaultComposerHeight)
+		m.input.SetHeight(max(1, defaultComposerHeight-composerChromeRows))
 	}
-	m.input.SetWidth(max(1, m.width))
+	// Leave room for the Grok-style accent rail, horizontal padding, and the
+	// right border. Textarea.SetWidth accounts for its own prompt gutter.
+	innerWidth := m.width - composerAccentWidth - composerPadLeft - composerPadRight
+	m.input.SetWidth(max(1, innerWidth))
+}
+
+// syncComposerFocus keeps the textarea's visual focus state aligned with the
+// existing modal ownership rules. It does not change which keys are routed to
+// an overlay; it only lets the composer render as inactive behind it.
+func (m *model) syncComposerFocus() {
+	if m.modalActive() {
+		m.input.Blur()
+		return
+	}
+	m.input.Focus()
 }
 
 // ruledGrowthLimit is the tallest the ruled textarea may render on this
@@ -1551,7 +1695,7 @@ func (m *model) ruledGrowthLimit() int {
 	if m.height <= 0 {
 		return ruledComposerMaxRows
 	}
-	budget := m.height - chromeHeight - ruledComposerRules - ruledComposerReserve
+	budget := m.height - chromeHeight - composerChromeRows - ruledComposerReserve
 	return max(ruledComposerMinRows, min(ruledComposerMaxRows, budget))
 }
 
@@ -1845,7 +1989,11 @@ func (m *model) refreshViewport() {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	content := m.transcript.render(m.width)
+	m.computeLayout()
+	m.viewport.SetWidth(max(1, m.layout.scrollbackContent.Width))
+	m.viewport.SetHeight(m.layout.scrollback.Height)
+	contentWidth := m.scrollbackContentWidth()
+	content := m.transcript.render(contentWidth)
 	if m.showWelcome() {
 		content = m.renderWelcome()
 	} else {
@@ -1855,6 +2003,13 @@ func (m *model) refreshViewport() {
 	if m.selection == nil && (atBottom || m.working) {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *model) scrollbackContentWidth() int {
+	if m.layout.scrollbackContent.Width > 0 {
+		return m.layout.scrollbackContent.Width
+	}
+	return max(1, m.width)
 }
 
 func (m *model) showWelcome() bool {
@@ -1875,6 +2030,9 @@ func (m *model) renderWelcome() string {
 		}
 		return title
 	}
+	if m.welcomeStyle == welcomeDefault && m.width >= welcomeHeroMinWidth && m.welcomeViewportRows() >= welcomeHeroMinHeight {
+		return m.renderWelcomeHero()
+	}
 
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
 	hint := "Type a prompt to begin · /help for commands"
@@ -1885,7 +2043,11 @@ func (m *model) renderWelcome() string {
 		hint = "Type a prompt to begin"
 	}
 	hint = centerLine(m.th.muted.Render(hint), m.width)
+	if rows := m.welcomeViewportRows(); rows > 0 && rows < 4 {
+		return title + "\n" + hint
+	}
 	compact := m.viewport.Height() < 14
+	logo := m.renderGrokLogo(compact)
 
 	switch m.welcomeStyle {
 	case welcomeOrb:
@@ -1905,7 +2067,109 @@ func (m *model) renderWelcome() string {
 		// The filling letters are the wordmark; a text title would duplicate it.
 		return m.renderFill() + "\n\n" + hint
 	}
+	if logo != "" {
+		return logo + "\n\n" + title + "\n" + subtitle + "\n\n" + hint
+	}
 	return title + "\n" + subtitle + "\n\n" + hint
+}
+
+const (
+	welcomeHeroMinWidth  = 90
+	welcomeHeroMaxWidth  = 120
+	welcomeHeroMinHeight = 11
+)
+
+func (m *model) welcomeViewportRows() int {
+	if m.layout.scrollback.Height > 0 {
+		return m.layout.scrollback.Height
+	}
+	return m.viewport.Height()
+}
+
+// renderWelcomeHero mirrors the reference's wide welcome composition: a
+// bounded bordered card with the mark on the left and actionable menu content
+// on the right. Custom animated styles keep their existing stacked renderers.
+func (m *model) renderWelcomeHero() string {
+	cardWidth := min(welcomeHeroMaxWidth, max(1, m.width-6))
+	if cardWidth < 3 {
+		return ""
+	}
+	innerWidth := cardWidth - 2
+	leftWidth := min(34, max(28, (innerWidth-3)/2))
+	rightWidth := max(1, innerWidth-leftWidth-3)
+
+	logoLines := strings.Split(grokLogo, "\n")
+	for i, line := range logoLines {
+		logoLines[i] = m.th.assistantTxt.Render(strings.TrimRight(line, " "))
+	}
+	menuLines := []string{
+		m.th.cmdPickerSel.Render("myagent"),
+		m.th.muted.Render("Your terminal coding agent"),
+		"",
+		m.th.promptPrompt.Render("new session") + m.th.footerRight.Render("  enter"),
+		m.th.footer.Render("/help") + m.th.footerRight.Render("  commands"),
+		m.th.footer.Render("/customize") + m.th.footerRight.Render("  appearance"),
+		m.th.footer.Render("model") + m.th.footerRight.Render("  "+m.modelID),
+	}
+	innerHeight := max(len(logoLines), len(menuLines))
+
+	rows := make([]string, 0, innerHeight+2)
+	rows = append(rows, m.th.modalBorder.Render("╭"+strings.Repeat("─", cardWidth-2)+"╮"))
+	for i := 0; i < innerHeight; i++ {
+		left, right := "", ""
+		if i < len(logoLines) {
+			left = logoLines[i]
+		}
+		if i < len(menuLines) {
+			right = menuLines[i]
+		}
+		left = centerWelcomeCell(left, leftWidth)
+		right = padWelcomeCell(right, rightWidth)
+		body := left + strings.Repeat(" ", 3) + right
+		rows = append(rows, m.th.modalBorder.Render("│")+body+m.th.modalBorder.Render("│"))
+	}
+	rows = append(rows, m.th.modalBorder.Render("╰"+strings.Repeat("─", cardWidth-2)+"╯"))
+
+	card := centerLine(strings.Join(rows, "\n"), m.width)
+	available := max(0, m.welcomeViewportRows()-len(rows))
+	return strings.Repeat("\n", available/3) + card
+}
+
+func centerWelcomeCell(content string, width int) string {
+	content = truncateColumns(content, width)
+	padding := max(0, width-lipgloss.Width(content))
+	return strings.Repeat(" ", padding/2) + content + strings.Repeat(" ", padding-padding/2)
+}
+
+func padWelcomeCell(content string, width int) string {
+	content = truncateColumns(content, width)
+	return content + strings.Repeat(" ", max(0, width-lipgloss.Width(content)))
+}
+
+// grokLogo is the compact braille mark used by the reference welcome hero.
+// It stays text-only so terminals without image or truecolor support still get
+// the same silhouette.
+const grokLogo = "⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄\n" +
+	"⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀\n" +
+	"⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀\n" +
+	"⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀\n" +
+	"⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀\n" +
+	"⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀\n" +
+	"⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+
+func (m *model) renderGrokLogo(compact bool) string {
+	if compact || m.width < 32 {
+		return ""
+	}
+	lines := strings.Split(grokLogo, "\n")
+	for i, line := range lines {
+		style := m.th.muted
+		if (i+m.welcomeFrame/8)%5 == 0 {
+			style = m.th.assistantTxt
+		}
+		lines[i] = centerLine(style.Render(line), m.width)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // welcomeFrameCount is the shared animation cycle length for every animated
@@ -2171,34 +2435,47 @@ func (m *model) renderOrb(compact bool) string {
 	return strings.Join(rows, "\n")
 }
 
-// View composes the transcript viewport, status line, input, and footer.
+// View composes the named agent-view regions. Runtime and input handling stay
+// independent of this composition so resizing cannot change event semantics.
 func (m *model) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
 	}
-	var sb strings.Builder
-	sb.WriteString(m.viewport.View())
-	sb.WriteByte('\n')
-	sb.WriteString(m.statusLine())
-	sb.WriteByte('\n')
-	if picker := m.renderPanel(); picker != "" {
-		sb.WriteString(picker)
-		sb.WriteByte('\n')
+	regions := make([]string, 0, 9)
+	if !m.layout.topBar.empty() {
+		regions = append(regions, renderRegion(m.renderTopBar(), m.layout.topBar))
 	}
-	if queued := m.renderQueuedFollowUps(); queued != "" {
-		sb.WriteString(queued)
-		sb.WriteByte('\n')
+	if !m.layout.panel.empty() {
+		regions = append(regions, renderRegion(m.renderPanel(), m.layout.panel))
 	}
-	if attachments := m.attachments.render(m.th, m.width); attachments != "" {
-		sb.WriteString(attachments)
-		sb.WriteByte('\n')
+	regions = append(regions, renderRegion(m.renderScrollback(), m.layout.scrollback))
+	if !m.layout.queue.empty() {
+		regions = append(regions, renderRegion(m.renderQueuedFollowUps(), m.layout.queue))
 	}
-	sb.WriteString(m.renderComposer())
-	sb.WriteByte('\n')
-	sb.WriteString(m.footer())
+	if !m.layout.attachments.empty() {
+		regions = append(regions, renderRegion(m.attachments.render(m.th, m.width), m.layout.attachments))
+	}
+	if !m.layout.statusLine.empty() {
+		regions = append(regions, renderRegion(m.statusLine(), m.layout.statusLine))
+	}
+	if !m.layout.composer.empty() {
+		regions = append(regions, renderRegion(m.renderComposer(), m.layout.composer))
+	}
+	if !m.layout.shortcuts.empty() {
+		regions = append(regions, renderRegion(m.renderShortcutBar(), m.layout.shortcuts))
+	}
+	if !m.layout.footer.empty() {
+		regions = append(regions, renderRegion(m.footer(), m.layout.footer))
+	}
 
-	v := tea.NewView(sb.String())
+	content := strings.Join(regions, "\n")
+	if m.modalActive() {
+		content = m.renderModalOverlay(content)
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
+	v.BackgroundColor = lipgloss.Color(m.th.palette.bg)
+	v.ForegroundColor = lipgloss.Color(m.th.palette.fg)
 	v.MouseMode = tea.MouseModeCellMotion
 	// Ask compatible terminals to encode modifiers on every key. Without this,
 	// terminals that collapse Shift+Enter to Enter make the two actions
@@ -2208,13 +2485,306 @@ func (m *model) View() tea.View {
 	return v
 }
 
-// renderComposer draws the textarea with the chrome its prompt style calls for.
-func (m *model) renderComposer() string {
-	if m.promptStyle != promptRuled {
-		return m.input.View()
+func (m *model) renderModalOverlay(base string) string {
+	title := ""
+	footer := "↑/↓ navigate · enter select · esc cancel"
+	switch {
+	case m.exportPick.active:
+		title = "Export session"
+	case m.exportOverwrite:
+		title = "Confirm export"
+		footer = "enter overwrite · ↑/↓ edit name · esc cancel"
+	case m.exportFormat != "":
+		title = "Export session"
+	case m.sessions.active:
+		title = "Sessions"
+	case m.models.active:
+		title = "Choose model"
+	case m.effort.active:
+		title = "Reasoning effort"
+	case m.customize.active:
+		title = "Customize"
+	case m.keyFor.ID != "":
+		title = "Provider API key"
+		footer = "enter save · esc cancel"
+	case m.providers.active:
+		title = "Providers"
+	case m.files.active:
+		title = "Files"
 	}
-	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
-	return rule + "\n" + m.input.View() + "\n" + rule
+	body := m.renderPanel()
+	bounds, frame := renderModalFrame(title, body, footer, m.width, m.height, m.th)
+	return overlayModal(base, m.width, m.height, bounds, frame)
+}
+
+func (m *model) renderTopBar() string {
+	left := m.th.topBar.Render(formatLocationLine(m.cwd))
+	center := ""
+	if m.hasSessionTitle {
+		center = m.th.topBar.Render(m.sessionTitle)
+	}
+	right := m.th.topBar.Render(m.modelID)
+	return renderStatusTriplet(left, center, right, max(1, m.width))
+}
+
+func (m *model) renderScrollback() string {
+	height := max(1, m.layout.scrollback.Height)
+	width := m.scrollbackContentWidth()
+	rows := strings.Split(strings.TrimSuffix(m.viewport.View(), "\n"), "\n")
+	if len(rows) == 1 && rows[0] == "" {
+		rows = nil
+	}
+	trail, hasTrail := m.timelineRailFor(width)
+	lines := make([]string, height)
+	for i := range lines {
+		line := ""
+		if i < len(rows) {
+			line = truncateColumns(rows[i], width)
+		}
+		line += strings.Repeat(" ", max(0, width-lipgloss.Width(line)))
+		if !m.layout.timeline.empty() {
+			line += m.renderTimelineRow(i, trail, hasTrail)
+		} else if !m.layout.scrollbar.empty() {
+			line += " " // keep the track visually separated from the transcript
+			line += m.renderScrollbarRow(i)
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderTimelineRow(row int, rail timelineRail, hasRail bool) string {
+	width := m.layout.timeline.Width
+	if width <= 0 {
+		return ""
+	}
+	if !hasRail {
+		return strings.Repeat(" ", width)
+	}
+	// The rail geometry uses screen coordinates for hit testing; translate the
+	// viewport-local render row back into that same coordinate system.
+	screenRow := row + m.layout.scrollback.Y
+	if screenRow == rail.upY {
+		style := m.th.timeline
+		if rail.upTarget < 0 {
+			style = m.th.muted
+		}
+		return fitTimelineGlyph(style.Render(" "+timelineChevronUpGlyph()), width)
+	}
+	if screenRow == rail.downY {
+		style := m.th.timeline
+		if rail.downTarget < 0 {
+			style = m.th.muted
+		}
+		return fitTimelineGlyph(style.Render(" "+timelineChevronDownGlyph()), width)
+	}
+	for turn := rail.windowFrom; turn < rail.windowTo; turn++ {
+		if screenRow == timelineTickRow(rail, turn) {
+			style := m.th.timeline
+			if turn == rail.active {
+				style = m.th.assistantTxt
+			}
+			return fitTimelineGlyph(style.Render(timelineTickGlyph(turn == rail.active)), width)
+		}
+	}
+	return strings.Repeat(" ", width)
+}
+
+func (m *model) renderScrollbarRow(row int) string {
+	width := m.layout.scrollbar.Width
+	if width <= 0 {
+		return ""
+	}
+	track := strings.Repeat(" ", width)
+	total := m.viewport.TotalLineCount()
+	viewportHeight := m.layout.scrollback.Height
+	if total <= viewportHeight || viewportHeight <= 0 {
+		return track
+	}
+
+	thumbHeight := max(1, viewportHeight*viewportHeight/total)
+	maxStart := max(0, viewportHeight-thumbHeight)
+	maxOffset := max(1, total-viewportHeight)
+	thumbStart := m.viewport.YOffset() * maxStart / maxOffset
+	if row < thumbStart || row >= thumbStart+thumbHeight {
+		return m.th.timeline.Render(strings.Repeat("│", width))
+	}
+	style := m.th.accent
+	if m.viewport.AtBottom() {
+		style = m.th.muted
+	}
+	return style.Render(strings.Repeat("┃", width))
+}
+
+func fitTimelineGlyph(glyph string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if got := lipgloss.Width(glyph); got < width {
+		return glyph + strings.Repeat(" ", width-got)
+	}
+	return truncateColumns(glyph, width)
+}
+
+func (m *model) renderShortcutBar() string {
+	hints := []shortcutHint{
+		{key: "enter", label: "send", pinned: true},
+		{key: "ctrl+enter", label: "newline"},
+		{key: "alt+enter", label: "steer"},
+		{key: "↑/↓", label: "history"},
+		{key: "ctrl+o", label: "expand"},
+	}
+	return renderShortcuts(hints, max(1, m.width), m.th, m.layout.compact)
+}
+
+// renderComposer draws the textarea with the reference prompt chrome while
+// leaving the textarea responsible for cursor, wrapping, and editing state.
+func (m *model) renderComposer() string {
+	view := m.input.View()
+	lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	rows := max(1, m.layout.composer.Height)
+	if rows == 1 {
+		return m.renderPromptContentLine(lines[0], m.layout.composer.Width)
+	}
+
+	contentRows := max(1, rows-composerChromeRows)
+	if len(lines) > contentRows {
+		lines = lines[:contentRows]
+	}
+	for len(lines) < contentRows {
+		lines = append(lines, "")
+	}
+
+	focused := m.input.Focused()
+	result := make([]string, 0, rows)
+	result = append(result, m.renderPromptDivider(true, focused))
+	for _, line := range lines {
+		result = append(result, m.renderPromptContentLine(line, m.layout.composer.Width))
+	}
+	result = append(result, m.renderPromptDivider(false, focused))
+	return strings.Join(result, "\n")
+}
+
+func (m *model) promptBorderStyle(focused bool) lipgloss.Style {
+	if focused {
+		return m.th.promptBorderActive
+	}
+	return m.th.promptBorder
+}
+
+func (m *model) promptRailStyle(focused bool) lipgloss.Style {
+	if focused {
+		return m.th.promptRailActive
+	}
+	return m.th.promptRail
+}
+
+// promptDividerCells builds a width-safe border one cell at a time so info
+// labels can replace dashes without ever painting over a corner.
+func promptDividerCells(width int, border lipgloss.Style, left, right rune) []string {
+	if width <= 0 {
+		return nil
+	}
+	cells := make([]string, width)
+	for i := range cells {
+		cells[i] = border.Render("─")
+	}
+	cells[0] = border.Render(string(left))
+	if width > 1 {
+		cells[width-1] = border.Render(string(right))
+	}
+	return cells
+}
+
+func placePromptLabel(cells []string, start, limit int, label string, style lipgloss.Style) {
+	if start < 0 {
+		start = 0
+	}
+	if limit > len(cells) {
+		limit = len(cells)
+	}
+	if start >= limit || label == "" {
+		return
+	}
+	label = truncateColumns(label, limit-start)
+	column := start
+	for _, r := range label {
+		glyph := string(r)
+		glyphWidth := lipgloss.Width(glyph)
+		if glyphWidth <= 0 || column+glyphWidth > limit {
+			break
+		}
+		cells[column] = style.Render(glyph)
+		for offset := 1; offset < glyphWidth && column+offset < limit; offset++ {
+			cells[column+offset] = style.Render(" ")
+		}
+		column += glyphWidth
+	}
+}
+
+func (m *model) renderPromptDivider(top, focused bool) string {
+	width := max(1, m.layout.composer.Width)
+	border := m.promptBorderStyle(focused)
+	if width == 1 {
+		return border.Render("│")
+	}
+	if top {
+		cells := promptDividerCells(width, border, '╭', '╮')
+		if m.hasSessionTitle && strings.TrimSpace(m.sessionTitle) != "" {
+			end := width - composerPadRight - 1
+			label := " " + strings.TrimSpace(m.sessionTitle) + " "
+			label = truncateColumns(label, max(1, end-composerAccentWidth))
+			placePromptLabel(cells, max(composerAccentWidth, end-lipgloss.Width(label)), end, label, m.th.promptInfo)
+		}
+		return strings.Join(cells, "")
+	}
+
+	cells := promptDividerCells(width, border, '╰', '╯')
+	modelName := strings.TrimSpace(m.modelID)
+	if modelName == "" {
+		modelName = "unknown"
+	}
+	leftStart := min(width-1, composerAccentWidth+composerPadLeft)
+	rightLimit := max(leftStart, width-composerPadRight-1)
+	leftLabel := " " + modelName + " "
+	rightLabel := ""
+	if strings.Contains(m.input.Value(), "\n") {
+		rightLabel = " multiline "
+	}
+	rightWidth := lipgloss.Width(rightLabel)
+	leftLimit := max(leftStart, rightLimit-rightWidth-1)
+	leftLabel = truncateColumns(leftLabel, max(1, leftLimit-leftStart))
+	placePromptLabel(cells, leftStart, leftLimit, leftLabel, m.th.promptInfo)
+	if rightLabel != "" && rightWidth > 0 {
+		placePromptLabel(cells, max(leftLimit+1, rightLimit-rightWidth), rightLimit, rightLabel, m.th.promptInfoMuted)
+	}
+	return strings.Join(cells, "")
+}
+
+func (m *model) renderPromptContentLine(line string, width int) string {
+	width = max(1, width)
+	if width == 1 {
+		return m.promptRailStyle(m.input.Focused()).Render(accentBarGlyph)
+	}
+	focused := m.input.Focused()
+	border := m.promptBorderStyle(focused)
+	rightBorderWidth := 1
+	leftPad := min(composerPadLeft, max(0, width-composerAccentWidth-rightBorderWidth))
+	contentWidth := width - composerAccentWidth - leftPad - rightBorderWidth
+	if contentWidth > 0 {
+		line = truncateColumns(line, contentWidth)
+		if padding := contentWidth - lipgloss.Width(line); padding > 0 {
+			line += m.th.promptBase.Render(strings.Repeat(" ", padding))
+		}
+	} else {
+		line = ""
+	}
+	left := m.promptRailStyle(focused).Render(accentBarGlyph)
+	left += m.th.promptBase.Render(strings.Repeat(" ", leftPad))
+	return left + line + border.Render("│")
 }
 
 func (m *model) renderQueuedFollowUps() string {
@@ -2582,7 +3152,9 @@ func (m *model) renderProviderKeyEntry() string {
 	return m.th.cmdPickerSel.Render(action+m.keyFor.Name+"\n") + m.keyInput.View()
 }
 
-// statusLine shows the working spinner + elapsed time, or a transient status.
+// statusLine is the compact turn-status strip between scrollback and the
+// composer. Its left and right segments mirror the reference activity/timer
+// split while retaining myagent's existing status messages and usage counters.
 func (m *model) statusLine() string {
 	if m.working {
 		frame := m.th.spinner.Render(spinnerFrames[m.spinnerFrame])
@@ -2591,18 +3163,32 @@ func (m *model) statusLine() string {
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		return fmt.Sprintf("%s %s", frame, m.th.muted.Render(fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)))
+		left := frame + " " + m.th.muted.Render(msg)
+		right := m.th.muted.Render(fmt.Sprintf("%.1fs", elapsed))
+		if m.usage.Output > 0 {
+			right += m.th.muted.Render(" · ↓" + compact(m.usage.Output))
+		}
+		right += "  " + m.th.errorText.Render("[esc stop]")
+		if m.width <= 0 {
+			return left + " " + right
+		}
+		return renderStatusTriplet(left, "", right, max(1, m.width))
 	}
 	if m.statusMsg != "" {
-		return m.th.muted.Render(m.statusMsg)
+		return m.th.muted.Render(truncateColumns(m.statusMsg, max(1, m.width)))
 	}
 	return ""
 }
 
-// footer renders the cwd/model line and the token/cost stats line.
+// footer renders the session label and token/cost stats line. Repository
+// location belongs in the top status bar, so it is not duplicated here.
 func (m *model) footer() string {
-	left := m.th.footer.Render(collapseHome(m.cwd))
-	right := m.th.footerRight.Render(m.modelID)
+	leftText := "new session"
+	if m.hasSessionTitle {
+		leftText = m.sessionTitle
+	}
+	left := m.th.footer.Render(leftText)
+	right := m.th.footerRight.Render("alt+enter steer")
 	line1 := padBetween(left, right, m.width)
 
 	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
@@ -2611,6 +3197,50 @@ func (m *model) footer() string {
 		m.usage.Cost.Total)
 	line2 := m.th.footer.Render(stats)
 	return line1 + "\n" + line2
+}
+
+func renderStatusTriplet(left, center, right string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if center == "" {
+		return truncateColumns(padBetween(left, right, width), width)
+	}
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	centerWidth := lipgloss.Width(center)
+	centerStart := max(leftWidth+1, (width-centerWidth)/2)
+	if centerStart+centerWidth+rightWidth+1 > width {
+		return truncateColumns(padBetween(left, right, width), width)
+	}
+	line := left + strings.Repeat(" ", max(1, centerStart-leftWidth)) + center
+	line += strings.Repeat(" ", max(1, width-lipgloss.Width(line)-rightWidth)) + right
+	return truncateColumns(line, width)
+}
+
+func renderRegion(content string, rect tuiRect) string {
+	if rect.empty() {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	if content == "" {
+		lines = []string{""}
+	}
+	if len(lines) > rect.Height {
+		lines = lines[:rect.Height]
+	}
+	for len(lines) < rect.Height {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		line = truncateColumns(line, rect.Width)
+		padding := rect.Width - lipgloss.Width(line)
+		if padding > 0 {
+			line += strings.Repeat(" ", padding)
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func userMessage(text string) types.Message {

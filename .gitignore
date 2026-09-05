@@ -28,6 +28,7 @@ Thumbs.db
 nul
 
 # ref files
+grok-build/
 pi/
 myagent-plan.md
 compaction-plan.md
