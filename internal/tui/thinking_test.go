@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -68,17 +70,18 @@ func TestThinkingHiddenByToggle(t *testing.T) {
 	tr.endAssistant()
 
 	out := tr.render(80)
-	if strings.Contains(out, "secret reasoning") || strings.Contains(out, "Thought") {
+	plain := ansi.Strip(out)
+	if strings.Contains(plain, "secret reasoning") || strings.Contains(plain, "Thought") {
 		t.Fatalf("rendered thinking while hidden:\n%s", out)
 	}
-	if !strings.Contains(out, "visible answer") {
+	if !strings.Contains(plain, "visible answer") {
 		t.Fatalf("answer missing from render:\n%s", out)
 	}
 
 	// Toggling back on reveals the accumulated text retroactively.
 	tr.setShowThinking(true)
 	out = tr.render(80)
-	if !strings.Contains(out, "secret reasoning") {
+	if !strings.Contains(ansi.Strip(out), "secret reasoning") {
 		t.Fatalf("thinking not revealed after toggle:\n%s", out)
 	}
 }

@@ -261,9 +261,11 @@ func TestTranscriptDragCopiesDisplayedText(t *testing.T) {
 		return nil
 	}
 
-	m.onMouseClick(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
-	m.onMouseMotion(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	m.onMouseRelease(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	// User blocks carry a left accent bar plus padding, so text starts at
+	// column 2 rather than column 1.
+	m.onMouseClick(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
+	m.onMouseMotion(tea.MouseMotionMsg{X: 6, Y: 0, Button: tea.MouseLeft})
+	m.onMouseRelease(tea.MouseReleaseMsg{X: 6, Y: 0, Button: tea.MouseLeft})
 
 	if copied != "hello" {
 		t.Fatalf("clipboard = %q, want %q", copied, "hello")
