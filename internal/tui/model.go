@@ -147,27 +147,28 @@ type promptChoice struct {
 }
 
 var promptChoices = []promptChoice{
-	{style: promptDefault, label: "Default", description: "(default) tall box with a bar gutter"},
+	{style: promptDefault, label: "Default", description: "(default) rounded box that grows with input"},
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
-// defaultComposerHeight matches the bubbles textarea default so switching back
-// from a shorter style restores the original composer size.
+// defaultComposerHeight is the textarea's row count before the first resize
+// fits the composer to the terminal and its prompt style.
 const defaultComposerHeight = 6
 
-// ruledPrompt is the marker drawn at the start of the ruled composer's line.
+// ruledPrompt is the marker drawn at the start of the composer's line.
 const ruledPrompt = "› "
 
 const (
-	// ruledComposerRules counts the rules drawn above and below the textarea.
-	ruledComposerRules = 2
-	// The ruled composer opens one line tall and grows with the text, up to
-	// ruledComposerMaxRows, after which it scrolls internally.
-	ruledComposerMinRows = 1
-	ruledComposerMaxRows = 10
-	// ruledComposerReserve is the transcript rows kept free when the terminal is
+	// composerChromeRows counts the rows around the textarea: the rules in the
+	// ruled style, the rounded border in the boxed default. Both cost two.
+	composerChromeRows = 2
+	// The growing composer opens one line tall and grows with the text, up to
+	// composerMaxRows, after which it scrolls internally.
+	composerMinRows = 1
+	composerMaxRows = 10
+	// composerReserve is the transcript rows kept free when the terminal is
 	// too short to give the composer its full growth range.
-	ruledComposerReserve = 4
+	composerReserve = 4
 	// composerContentRows bounds the text the composer will accept. Setting it at
 	// all is what makes MaxHeight cap only the visible rows instead of blocking
 	// input, so it just has to exceed any realistic prompt.
@@ -409,11 +410,6 @@ type model struct {
 	welcomeStyle    welcomeStyle
 	welcomeFrame    int
 	promptStyle     promptStyle
-	// defaultPrompt is the textarea's stock gutter and defaultMaxHeight its stock
-	// row cap, both captured at construction so switching back from the ruled
-	// style restores them without hardcoding bubbles' defaults.
-	defaultPrompt    string
-	defaultMaxHeight int
 
 	modelID string
 	cwd     string
@@ -452,7 +448,7 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
+	ta.Placeholder = "Ask anything… (enter send · / commands)"
 	ta.ShowLineNumbers = false
 	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()
@@ -483,8 +479,6 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		historyIndex:     -1,
 		welcomeStyle:     welcomeDefault,
 		promptStyle:      promptDefault,
-		defaultPrompt:    ta.Prompt,
-		defaultMaxHeight: ta.MaxHeight,
 		modelID:          modelID,
 		cwd:              cwd,
 		newSession:       createSession,
@@ -733,14 +727,14 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // separators cost no extra rows.
 const chromeHeight = 3
 
-// composerHeight reports the rows the composer occupies, including the rules the
-// ruled style draws above and below the textarea.
+// composerHeight reports the rows the composer occupies, including the chrome
+// around the textarea: the rules in the ruled style, the rounded border in
+// the boxed default.
 func (m *model) composerHeight() int {
-	height := m.input.Height()
 	if m.promptStyle == promptRuled {
-		height += 2
+		return m.input.Height() + composerChromeRows
 	}
-	return height
+	return m.input.Height() + m.th.composerBox.GetVerticalFrameSize()
 }
 
 // fixedHeight is the part of the layout the transcript can never use. The
@@ -1521,38 +1515,35 @@ func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// syncComposerStyle reconfigures the textarea for the active prompt style. The
-// ruled style grows with its content between one row and the terminal's budget;
-// MaxContentHeight is what keeps MaxHeight a display cap rather than an input
-// limit. SetWidth must run last: it re-measures the gutter and, in doing so,
-// refits the height to the new bounds.
+// syncComposerStyle reconfigures the textarea for the active prompt style.
+// Both styles grow with their content between one row and the terminal's
+// budget; MaxContentHeight is what keeps MaxHeight a display cap rather than
+// an input limit. SetWidth must run last: it re-measures the gutter and, in
+// doing so, refits the height to the new bounds. The boxed default renders
+// inside the theme's rounded box, so its textarea is narrowed by the box's
+// own border and padding.
 func (m *model) syncComposerStyle() {
-	if m.promptStyle == promptRuled {
-		m.input.Prompt = ruledPrompt
-		m.input.DynamicHeight = true
-		m.input.MinHeight = ruledComposerMinRows
-		m.input.MaxHeight = m.ruledGrowthLimit()
-		m.input.MaxContentHeight = composerContentRows
-	} else {
-		m.input.Prompt = m.defaultPrompt
-		m.input.DynamicHeight = false
-		m.input.MinHeight = 0
-		m.input.MaxHeight = m.defaultMaxHeight
-		m.input.MaxContentHeight = 0
-		m.input.SetHeight(defaultComposerHeight)
+	m.input.Prompt = ruledPrompt
+	m.input.DynamicHeight = true
+	m.input.MinHeight = composerMinRows
+	m.input.MaxHeight = m.composerGrowthLimit()
+	m.input.MaxContentHeight = composerContentRows
+	width := max(1, m.width)
+	if m.promptStyle != promptRuled {
+		width = max(1, m.width-m.th.composerBox.GetHorizontalFrameSize())
 	}
-	m.input.SetWidth(max(1, m.width))
+	m.input.SetWidth(width)
 }
 
-// ruledGrowthLimit is the tallest the ruled textarea may render on this
-// terminal, leaving room for its rules, the surrounding chrome, and a few
-// transcript rows.
-func (m *model) ruledGrowthLimit() int {
+// composerGrowthLimit is the tallest the textarea may render on this
+// terminal, leaving room for its chrome (rules or box border), the
+// surrounding chrome, and a few transcript rows.
+func (m *model) composerGrowthLimit() int {
 	if m.height <= 0 {
-		return ruledComposerMaxRows
+		return composerMaxRows
 	}
-	budget := m.height - chromeHeight - ruledComposerRules - ruledComposerReserve
-	return max(ruledComposerMinRows, min(ruledComposerMaxRows, budget))
+	budget := m.height - chromeHeight - composerChromeRows - composerReserve
+	return max(composerMinRows, min(composerMaxRows, budget))
 }
 
 func (m *model) openProviderPicker() (tea.Model, tea.Cmd) {
@@ -2208,10 +2199,11 @@ func (m *model) View() tea.View {
 	return v
 }
 
-// renderComposer draws the textarea with the chrome its prompt style calls for.
+// renderComposer draws the textarea with the chrome its prompt style calls for:
+// a rounded box for the default style, framing rules for the ruled style.
 func (m *model) renderComposer() string {
 	if m.promptStyle != promptRuled {
-		return m.input.View()
+		return m.th.composerBox.Width(max(1, m.width)).Render(m.input.View())
 	}
 	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
 	return rule + "\n" + m.input.View() + "\n" + rule

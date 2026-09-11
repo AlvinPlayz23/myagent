@@ -33,6 +33,7 @@ type theme struct {
 	cmdPickerItem   lipgloss.Style
 	pickerGroup     lipgloss.Style
 	composerRule    lipgloss.Style
+	composerBox     lipgloss.Style
 	orbDim          lipgloss.Style
 	orbMedium       lipgloss.Style
 	orbBright       lipgloss.Style
@@ -72,6 +73,12 @@ func newTheme() *theme {
 		// reads as the cursor rather than competing with them.
 		pickerGroup:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")),
 		composerRule: lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		// The boxed composer is a single rounded surface: the border carries
+		// the shape, so it stays muted and padding keeps text off the edges.
+		composerBox: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1),
 		orbDim:       lipgloss.NewStyle().Foreground(lipgloss.Color("24")),
 		orbMedium:    lipgloss.NewStyle().Foreground(lipgloss.Color("31")),
 		orbBright:    lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),

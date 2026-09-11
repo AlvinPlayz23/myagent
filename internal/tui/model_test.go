@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -635,5 +636,83 @@ func TestImageOnlySubmissionAndBackspaceRemoval(t *testing.T) {
 	}
 	if m.queuedFollowUps[0].message.Content[1].Type != types.ContentImage {
 		t.Fatalf("image-only content = %#v", m.queuedFollowUps[0].message.Content)
+	}
+}
+
+func TestBoxedComposerStartsOneLineTall(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+
+	if got := m.composerHeight(); got != 3 {
+		t.Fatalf("composerHeight = %d, want 3 (one text row plus box border)", got)
+	}
+	out := m.renderComposer()
+	plain := ansi.Strip(out)
+	lines := strings.Split(plain, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("boxed composer rows = %d, want 3:\n%s", len(lines), plain)
+	}
+	for _, line := range lines {
+		if got := len([]rune(line)); got != 60 {
+			t.Errorf("composer row width = %d, want 60: %q", got, line)
+		}
+	}
+	for _, want := range []string{"╭", "╮", "╰", "╯", "› ", "Ask anything…"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("boxed composer missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestBoxedComposerGrowsWithInput(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	m.input.SetValue("line1\nline2\nline3")
+
+	if got := m.composerHeight(); got != 5 {
+		t.Fatalf("composerHeight = %d, want 5 (three text rows plus box border)", got)
+	}
+	plain := ansi.Strip(m.renderComposer())
+	lines := strings.Split(plain, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("boxed composer rows = %d, want 5:\n%s", len(lines), plain)
+	}
+	for _, line := range lines {
+		if got := len([]rune(line)); got != 60 {
+			t.Errorf("composer row width = %d, want 60: %q", got, line)
+		}
+	}
+}
+
+func TestBoxedComposerCapsGrowthOnShortTerminals(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	if m.input.MaxHeight != composerMaxRows {
+		t.Fatalf("input MaxHeight = %d, want %d", m.input.MaxHeight, composerMaxRows)
+	}
+	m.onResize(60, 10)
+	// 10 rows minus chrome, box border, and transcript reserve leaves one row.
+	if m.input.MaxHeight != composerMinRows {
+		t.Fatalf("input MaxHeight = %d, want %d on a short terminal", m.input.MaxHeight, composerMinRows)
+	}
+}
+
+func TestRuledComposerKeepsRules(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	m.promptStyle = promptRuled
+	m.syncComposerStyle()
+	m.updateLayout()
+
+	out := m.renderComposer()
+	plain := ansi.Strip(out)
+	if strings.ContainsAny(plain, "╭╮╰╯") {
+		t.Fatalf("ruled composer should not render a box:\n%s", plain)
+	}
+	if !strings.Contains(plain, strings.Repeat("─", 60)) {
+		t.Fatalf("ruled composer lost its rules:\n%s", plain)
+	}
+	if got, want := m.composerHeight(), m.input.Height()+composerChromeRows; got != want {
+		t.Fatalf("composerHeight = %d, want input height plus rules (%d)", got, want)
 	}
 }
