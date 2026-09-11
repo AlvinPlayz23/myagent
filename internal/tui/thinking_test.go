@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -120,6 +121,81 @@ func TestThinkingRenderStates(t *testing.T) {
 	}
 }
 
+func TestThinkingElapsedRendersDuration(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginThinking()
+	tr.appendThinkingDelta("musing")
+	// Backdate the start so endThinking stamps a real duration through the
+	// production path instead of a hand-set field.
+	tr.blocks[len(tr.blocks)-1].thinkStart = time.Now().Add(-12 * time.Second)
+	tr.endThinking()
+
+	b := tr.blocks[0]
+	if !b.thinkTimed || b.thinkDur < 11*time.Second || b.thinkDur > 15*time.Second {
+		t.Fatalf("thinkTimed = %v, thinkDur = %v, want timed ~12s", b.thinkTimed, b.thinkDur)
+	}
+	plain := ansi.Strip(tr.render(80))
+	if !strings.Contains(plain, "✻ Thought for 12s") {
+		t.Fatalf("completed header missing duration:\n%s", plain)
+	}
+}
+
+func TestThinkingUntimedRendersPlainHeader(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginThinking()
+	tr.appendThinkingDelta("musing")
+	tr.endThinking()
+	b := tr.blocks[0]
+	b.thinkTimed = false
+	b.cacheValid = false
+
+	plain := ansi.Strip(tr.render(80))
+	for line := range strings.Lines(plain) {
+		if strings.Contains(line, "✻") && strings.TrimSpace(line) != "✻ Thought" {
+			t.Fatalf("untimed header should be plain, got line %q", line)
+		}
+	}
+}
+
+func TestSeededThinkingRendersWithoutDuration(t *testing.T) {
+	history := []types.Message{
+		userMessage("prompt"),
+		{
+			Role: types.RoleAssistant,
+			Content: []types.ContentBlock{
+				{Type: types.ContentThinking, Thinking: "recalled context"},
+				{Type: types.ContentText, Text: "answer"},
+			},
+			Timestamp: 1,
+		},
+	}
+	tr := newThinkingTestTranscript()
+	seedTranscript(tr, history)
+
+	plain := ansi.Strip(tr.render(80))
+	for line := range strings.Lines(plain) {
+		if strings.Contains(line, "✻") && strings.TrimSpace(line) != "✻ Thought" {
+			t.Fatalf("seeded header should be plain, got line %q", line)
+		}
+	}
+}
+
+func TestFormatThinkDur(t *testing.T) {
+	cases := map[time.Duration]string{
+		-2 * time.Second:   "1s",
+		0:                 "1s",
+		400 * time.Millisecond: "1s",
+		12 * time.Second:   "12s",
+		59 * time.Second:   "59s",
+		90 * time.Second:   "1m30s",
+		5 * time.Minute:     "5m0s",
+	}
+	for d, want := range cases {
+		if got := formatThinkDur(d); got != want {
+			t.Errorf("formatThinkDur(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
 func TestEndAssistantFinalizesThinkingOnMidReasoningAbort(t *testing.T) {
 	tr := newThinkingTestTranscript()
 	tr.beginAssistant()

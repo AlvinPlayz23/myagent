@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 	"github.com/muesli/reflow/wordwrap"
@@ -42,6 +43,12 @@ type block struct {
 
 	// thinking fields
 	done bool // streaming finished (thinking blocks)
+	// thinkStart/thinkDur track elapsed reasoning time for the completed
+	// "✻ Thought for Ns" header. thinkTimed is false when the duration is
+	// unknown (e.g. resumed history), rendering a plain "✻ Thought".
+	thinkStart time.Time
+	thinkDur   time.Duration
+	thinkTimed bool
 
 	// cache
 	cacheWidth  int
@@ -142,7 +149,7 @@ func (t *transcript) beginThinking() {
 			t.blocks = t.blocks[:t.streamingIdx]
 		}
 	}
-	t.blocks = append(t.blocks, &block{kind: blockThinking})
+	t.blocks = append(t.blocks, &block{kind: blockThinking, thinkStart: time.Now(), thinkTimed: true})
 	t.streamingIdx = len(t.blocks) - 1
 }
 
@@ -166,6 +173,9 @@ func (t *transcript) endThinking() {
 		b := t.blocks[t.streamingIdx]
 		if b.kind == blockThinking {
 			b.done = true
+			if b.thinkTimed && !b.thinkStart.IsZero() {
+				b.thinkDur = time.Since(b.thinkStart)
+			}
 			b.cacheValid = false
 			if strings.TrimSpace(b.text) == "" {
 				t.blocks = append(t.blocks[:t.streamingIdx], t.blocks[t.streamingIdx+1:]...)
@@ -308,7 +318,7 @@ func (t *transcript) renderTool(b *block, width int) string {
 	// so the transcript never presents an unapplied change as if it landed.
 	if len(b.toolDiff) > 0 && b.toolDone && !b.toolErr {
 		sb.WriteByte('\n')
-		sb.WriteString(t.renderDiff(b.toolDiff))
+		sb.WriteString(t.renderDiff(b.toolDiff, width))
 		return sb.String()
 	}
 
@@ -336,14 +346,16 @@ func (t *transcript) renderTool(b *block, width int) string {
 }
 
 // renderThinking renders a collapsible thinking block: an accent header that
-// reads "Thinking…" while streaming and "Thought" once complete, plus a muted
-// body preview governed by the global ctrl+o expand toggle.
+// reads "Thinking…" while streaming and "Thought [for Ns]" once complete,
+// plus a muted body preview governed by the global ctrl+o expand toggle.
 func (t *transcript) renderThinking(b *block, width int) string {
 	header := "✻ Thought"
 	headerStyle := t.th.toolSuccess
 	if !b.done {
 		header = "✻ Thinking…"
 		headerStyle = t.th.accent
+	} else if b.thinkTimed {
+		header = "✻ Thought for " + formatThinkDur(b.thinkDur)
 	}
 
 	body := strings.TrimRight(b.text, "\n")
@@ -373,6 +385,22 @@ func (t *transcript) renderThinking(b *block, width int) string {
 		}
 	}
 	return sb.String()
+}
+
+// formatThinkDur renders an elapsed thinking duration for the completed
+// header: whole seconds below a minute, Go duration form ("1m30s") above.
+func formatThinkDur(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	secs := int64(d.Round(time.Second).Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	return (time.Duration(secs) * time.Second).String()
 }
 
 // diffLine is one display line in a proposal-style unified diff.
@@ -453,7 +481,9 @@ func prefixedDiffLines(prefix byte, text string) []diffLine {
 
 // renderDiff applies Git-like line coloring and the transcript's global
 // ctrl+o preview limit. File headers and hunk markers are always retained.
-func (t *transcript) renderDiff(lines []diffLine) string {
+// Added/removed lines get full-row background fills at width so the change
+// reads as a block, matching GitHub/Claude Code diffs.
+func (t *transcript) renderDiff(lines []diffLine, width int) string {
 	visible := lines
 	hidden := 0
 	if !t.expanded {
@@ -482,9 +512,9 @@ func (t *transcript) renderDiff(lines []diffLine) string {
 		}
 		switch {
 		case line.prefix == '+':
-			sb.WriteString(t.th.diffAdd.Render(text))
+			sb.WriteString(t.th.diffAdd.Width(max(1, width)).Render(text))
 		case line.prefix == '-':
-			sb.WriteString(t.th.diffRemove.Render(text))
+			sb.WriteString(t.th.diffRemove.Width(max(1, width)).Render(text))
 		case strings.HasPrefix(line.text, "@@"):
 			sb.WriteString(t.th.diffHunk.Render(text))
 		default:

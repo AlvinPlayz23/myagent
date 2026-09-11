@@ -348,6 +348,15 @@ func seedTranscript(t *transcript, history []types.Message) {
 					t.beginThinking()
 					t.appendThinkingDelta(c.Thinking)
 					t.endThinking()
+					// Resumed history has no timing: begin/end happen
+					// microseconds apart, so drop the stamp and render a
+					// plain "✻ Thought" header.
+					if len(t.blocks) > 0 {
+						if b := t.blocks[len(t.blocks)-1]; b.kind == blockThinking {
+							b.thinkTimed = false
+							b.cacheValid = false
+						}
+					}
 				case types.ContentText:
 					if c.Text == "" {
 						continue

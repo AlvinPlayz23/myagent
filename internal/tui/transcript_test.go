@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -28,6 +30,44 @@ func TestProposalDiffForEdit(t *testing.T) {
 	want := "--- a/file.go\n+++ b/file.go\n-old\n-line\n+new\n+line"
 	if got != want {
 		t.Fatalf("proposal diff = %q, want %q", got, want)
+	}
+}
+
+func TestRenderDiffFillsRowWidth(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	diff := []diffLine{
+		{text: "--- a/file.go"},
+		{text: "+++ b/file.go"},
+		{prefix: '-', text: "old"},
+		{prefix: '+', text: "new"},
+	}
+	const width = 20
+	out := tr.renderDiff(diff, width)
+
+	// Changed rows carry full-row background fills (256-color green/red).
+	if !strings.Contains(out, "48;5;32m") || !strings.Contains(out, "48;5;164m") {
+		t.Fatalf("diff rows missing background fills: %q", out)
+	}
+
+	plain := ansi.Strip(out)
+	lines := strings.Split(plain, "\n")
+	if len(lines) != len(diff) {
+		t.Fatalf("rendered %d lines, want %d:\n%q", len(lines), len(diff), plain)
+	}
+	for i, line := range lines {
+		switch diff[i].prefix {
+		case '+', '-':
+			if len(line) != width {
+				t.Errorf("changed line %q width = %d, want %d", line, len(line), width)
+			}
+			if !strings.HasPrefix(line, string(diff[i].prefix)) {
+				t.Errorf("changed line %q lost its prefix", line)
+			}
+		default:
+			if line != diff[i].text {
+				t.Errorf("meta line = %q, want %q", line, diff[i].text)
+			}
+		}
 	}
 }
 
