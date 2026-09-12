@@ -165,6 +165,36 @@ func TestResolveReasoningDialect(t *testing.T) {
 	}
 }
 
+func TestResolveTransport(t *testing.T) {
+	useTempDir(t)
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"gateway": {Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1", Transport: "responses"},
+		},
+		DefaultModel: "gateway/model",
+	}
+	_, model, err := cfg.Resolve("", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Transport != llm.TransportResponses {
+		t.Fatalf("Transport = %q, want responses", model.Transport)
+	}
+	// Empty transport resolves to auto.
+	cfg.Providers["gateway"] = ProviderConfig{Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1"}
+	_, model, err = cfg.Resolve("", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Transport != llm.TransportAuto {
+		t.Fatalf("Transport = %q, want auto", model.Transport)
+	}
+	cfg.Providers["gateway"] = ProviderConfig{Type: DefaultProviderType, APIKey: "key", BaseURL: "https://gateway.example/v1", Transport: "carrier-pigeon"}
+	if _, _, err := cfg.Resolve("", "", ""); err == nil || !strings.Contains(err.Error(), "invalid transport") {
+		t.Fatalf("invalid transport error = %v", err)
+	}
+}
+
 func TestResolveRejectsInvalidConfiguration(t *testing.T) {
 	useTempDir(t)
 	for _, cfg := range []*Config{

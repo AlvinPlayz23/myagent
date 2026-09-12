@@ -156,7 +156,8 @@ automatically retries with exponential backoff instead of ending the turn.
 Permanent errors (`400`, `401`, `403`, `404`, …) are **not** retried, and an
 aborted turn (Esc / `session.abort`) stops retrying immediately. Each retry is
 surfaced as a `Retrying… (attempt n/N)` notice in the TUI (and a `[retry]` line
-on stderr in print mode).
+on stderr in print mode). Press `Ctrl+O` to expand a retry notice and see the
+underlying provider error.
 
 Defaults are 10 attempts, a 1 s base delay doubling each attempt, capped at
 30 s. Tune or disable it with an optional top-level `retry` block in
@@ -257,7 +258,7 @@ go run . "Write a haiku about Go."   # same thing
 | **Alt+Enter**        | Steer the currently running turn                      |
 | **Esc**              | Abort the current turn                                |
 | **Ctrl+C**           | Quit                                                  |
-| **Ctrl+O**           | Expand / collapse all tool blocks                     |
+| **Ctrl+O**           | Expand / collapse tool blocks and retry error details |
 | **Up / Down**        | Browse submitted prompts when the input is empty      |
 | **PgUp / PgDn**      | Scroll transcript                                     |
 | **Mouse drag**       | Select displayed transcript text; release to copy     |
@@ -404,6 +405,14 @@ with `"reasoningDialect": "openai"`, `"openrouter"`, or `"deepseek"`. Omit it
 or use `"auto"` to detect known provider names and endpoint hostnames. Sending
 all dialects together is intentionally avoided because strict compatible APIs
 may reject fields they do not recognize.
+
+Custom providers can also pick the wire protocol with `"transport":
+"chat-completions"` (default `POST {baseUrl}/chat/completions`) or
+`"transport": "responses"` (`POST {baseUrl}/responses`). Omit it or use
+`"auto"`: `muse-spark*` models use Responses (required on OpenCode Zen, which
+returns 500 for them on chat completions) and everything else uses Chat
+Completions. The provider manager (`myagent auth`) prompts for this field when
+adding or editing a provider.
 
 Error codes: standard JSON-RPC (`-32700` parse, `-32600` invalid request,
 `-32601` method not found, `-32602` invalid params) plus application codes

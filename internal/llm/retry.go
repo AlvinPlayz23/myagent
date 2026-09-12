@@ -75,9 +75,11 @@ func (r *retryProvider) pump(ctx context.Context, model Model, req Request, ch <
 
 		if r.shouldRetry(ctx, first, attempt) {
 			attempt++
-			// Announce the upcoming attempt for UIs.
+			// Announce the upcoming attempt for UIs, carrying the cause so
+			// the transcript can show it on expand (e.g. ctrl+o).
+			retryEv := StreamEvent{Type: "retry", Attempt: attempt, MaxAttempts: r.policy.MaxAttempts, Error: first.Error}
 			select {
-			case out <- StreamEvent{Type: "retry", Attempt: attempt, MaxAttempts: r.policy.MaxAttempts}:
+			case out <- retryEv:
 			case <-ctx.Done():
 				emitAborted(out)
 				return

@@ -107,6 +107,46 @@ func TestFailedEditShowsErrorInsteadOfProposalDiff(t *testing.T) {
 	}
 }
 
+func TestRetryNoticeExpandsWithToggle(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.addRetryNotice("∼ Provider error, retrying… (attempt 2/10)", "429: rate limited")
+
+	collapsed := ansi.Strip(tr.renderBlock(tr.blocks[0], 80))
+	if !strings.Contains(collapsed, "attempt 2/10") {
+		t.Fatalf("collapsed retry missing header: %q", collapsed)
+	}
+	if strings.Contains(collapsed, "rate limited") {
+		t.Fatalf("collapsed retry leaked detail: %q", collapsed)
+	}
+	if !strings.Contains(collapsed, "ctrl+o to expand") {
+		t.Fatalf("collapsed retry missing expand hint: %q", collapsed)
+	}
+
+	tr.toggleExpand()
+	expanded := ansi.Strip(tr.renderBlock(tr.blocks[0], 80))
+	if !strings.Contains(expanded, "rate limited") {
+		t.Fatalf("expanded retry missing detail: %q", expanded)
+	}
+	if !strings.Contains(expanded, "(ctrl+o to collapse)") {
+		t.Fatalf("expanded retry missing collapse hint: %q", expanded)
+	}
+}
+
+func TestPlainNoticeHasNoExpandHint(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.addNotice("∼ Context compacted: 10 → 5 tokens (kept recent history).")
+
+	got := ansi.Strip(tr.renderBlock(tr.blocks[0], 80))
+	if strings.Contains(got, "ctrl+o") {
+		t.Fatalf("plain notice should not mention ctrl+o: %q", got)
+	}
+	tr.toggleExpand()
+	got = ansi.Strip(tr.renderBlock(tr.blocks[0], 80))
+	if strings.Contains(got, "ctrl+o") {
+		t.Fatalf("plain notice should not mention ctrl+o after expand: %q", got)
+	}
+}
+
 func plainDiff(lines []diffLine) string {
 	var out []string
 	for _, line := range lines {

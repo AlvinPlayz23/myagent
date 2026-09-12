@@ -134,10 +134,15 @@ type Model struct {
 	Provider         string // provider label (e.g. "openai", "ollama")
 	BaseURL          string // OpenAI-compatible base URL
 	ReasoningDialect ReasoningDialect
+	Transport        Transport // wire protocol; empty means auto
 	ReasoningKnown   bool
 	Reasoning        bool
 	SupportedEfforts []Effort
 	ProviderOrigin   string
+	// SessionID is a stable per-conversation identifier used only for
+	// provider session-affinity headers (e.g. x-opencode-session on Zen).
+	// It is never sent as a model parameter.
+	SessionID string
 }
 
 // ReasoningDialect selects the provider-specific request shape for effort.
@@ -150,6 +155,48 @@ const (
 	ReasoningDialectOpenRouter ReasoningDialect = "openrouter"
 	ReasoningDialectDeepSeek   ReasoningDialect = "deepseek"
 )
+
+// Transport selects the wire protocol for a provider: Chat Completions
+// (/chat/completions) or the Responses API (/responses). Auto preserves the
+// previous behavior (muse-spark* models use Responses, everything else uses
+// Chat Completions) so existing configurations keep working unchanged.
+type Transport string
+
+const (
+	TransportAuto            Transport = ""
+	TransportChatCompletions Transport = "chat-completions"
+	TransportResponses       Transport = "responses"
+)
+
+// ParseTransport validates a configured transport value. Empty input means
+// auto and is passed through unchanged.
+func ParseTransport(value string) (Transport, error) {
+	transport := Transport(strings.ToLower(strings.TrimSpace(value)))
+	switch transport {
+	case TransportAuto, TransportChatCompletions, TransportResponses:
+		return transport, nil
+	case "auto":
+		return TransportAuto, nil
+	case "chat":
+		return TransportChatCompletions, nil
+	case "response":
+		return TransportResponses, nil
+	default:
+		return "", fmt.Errorf("invalid transport %q: must be one of auto, chat-completions, responses", value)
+	}
+}
+
+// UsesResponses reports whether the Responses API should serve this model:
+// an explicit transport wins, otherwise muse-spark* models use Responses.
+func (m Model) UsesResponses() bool {
+	if m.Transport == TransportResponses {
+		return true
+	}
+	if m.Transport == TransportChatCompletions {
+		return false
+	}
+	return IsMuseSparkModel(m.ID)
+}
 
 // ParseReasoningDialect validates a configured reasoning request dialect.
 func ParseReasoningDialect(value string) (ReasoningDialect, error) {

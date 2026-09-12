@@ -697,6 +697,21 @@ func TestBoxedComposerCapsGrowthOnShortTerminals(t *testing.T) {
 	}
 }
 
+func TestFooterShowsModelAndEffort(t *testing.T) {
+	m := newModel(nil, newRunner(agent.Config{Effort: llm.EffortHigh}, newMsgQueue(), nil), newMsgQueue(), newTheme(), newMDRenderer(), "opencode/muse-spark-1.3-contributor-free", "")
+	m.onResize(80, 20)
+	plain := ansi.Strip(m.footer())
+	if !strings.Contains(plain, "opencode/muse-spark-1.3-contributor-free • high") {
+		t.Fatalf("footer = %q, want model • high", plain)
+	}
+
+	m.runner.setEffort("")
+	plain = ansi.Strip(m.footer())
+	if !strings.Contains(plain, "opencode/muse-spark-1.3-contributor-free • default") {
+		t.Fatalf("footer = %q, want model • default", plain)
+	}
+}
+
 func TestRuledComposerKeepsRules(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(60, 20)

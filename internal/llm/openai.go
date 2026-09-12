@@ -158,6 +158,13 @@ func (p *OpenAIProvider) Stream(ctx context.Context, model Model, req Request) (
 }
 
 func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out chan<- StreamEvent) {
+	// Transport selection: an explicit per-provider transport wins;
+	// otherwise muse-spark* models are served on the Responses API
+	// (/v1/responses) because Zen returns 500 for them on chat completions.
+	if model.UsesResponses() {
+		p.runResponses(ctx, model, req, out)
+		return
+	}
 	// output is the accumulator that IS the final assistant message. Mirrors
 	// pi's `output` object; Partial points at it on every event.
 	output := &types.Message{
@@ -201,6 +208,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 	if p.APIKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
+	setZenHeaders(httpReq, model)
 
 	resp, err := p.Client.Do(httpReq)
 	if err != nil {
@@ -214,7 +222,9 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		buf := new(bytes.Buffer)
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 4000))
-		emitError(fmt.Errorf("%d: %s", resp.StatusCode, strings.TrimSpace(buf.String())), isRetryableStatus(resp.StatusCode))
+		raw := strings.TrimSpace(buf.String())
+		hint := ClassifyZenError(resp.StatusCode, raw, model.ID, "/chat/completions")
+		emitError(fmt.Errorf("%d: %s%s", resp.StatusCode, raw, hint), isRetryableStatus(resp.StatusCode))
 		return
 	}
 

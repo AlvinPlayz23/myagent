@@ -146,6 +146,11 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 }
 
 func (r *runner) setModel(provider llm.Provider, model llm.Model) {
+	// Preserve the conversation's session-affinity ID across model switches:
+	// freshly resolved models never carry one.
+	if model.SessionID == "" {
+		model.SessionID = r.cfg.Model.SessionID
+	}
 	r.cfg.Provider = provider
 	r.cfg.Model = model
 }

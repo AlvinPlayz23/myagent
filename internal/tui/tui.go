@@ -28,6 +28,10 @@ import (
 // session created through /new.
 func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
 	queue := newMsgQueue()
+	// Sync the conversation's session-affinity ID before the runner copies cfg.
+	if sess != nil {
+		cfg.Model.SessionID = sess.ID()
+	}
 	r := newRunner(cfg, queue, history)
 
 	th := newTheme()
@@ -44,6 +48,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 		}
 		sess = newSess
+		r.cfg.Model.SessionID = newSess.ID()
 		r.reset()
 		return nil
 	})
@@ -180,6 +185,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 		}
 		sess = resumed
+		r.cfg.Model.SessionID = resumed.ID()
 		history := resumed.Messages()
 		return history, nil
 	}

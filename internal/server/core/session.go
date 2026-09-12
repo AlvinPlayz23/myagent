@@ -308,6 +308,10 @@ func (s *ServerSession) SetModel(provider llm.Provider, model llm.Model) error {
 		return ErrBusy
 	}
 	s.cfg.Provider = provider
+	// Preserve the session-affinity ID: freshly resolved models never carry one.
+	if model.SessionID == "" {
+		model.SessionID = s.cfg.Model.SessionID
+	}
 	s.cfg.Model = model
 	if effort, err := llm.NormalizeEffort(model, s.cfg.Effort); err == nil {
 		s.cfg.Effort = effort

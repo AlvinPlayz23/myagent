@@ -226,10 +226,16 @@ func (l *Loop) streamAssistant(ctx context.Context) (types.Message, error) {
 		case "retry":
 			// Transient failure; the provider will re-issue the request. Surface
 			// it as a retry event and keep consuming — no message state changes.
+			// The cause is forwarded so UIs can show it on expand.
+			retryErr := ""
+			if ev.Error != nil {
+				retryErr = ev.Error.ErrorMessage
+			}
 			if err := l.emit(ctx, types.AgentEvent{
 				Type:        types.EventRetry,
 				Attempt:     ev.Attempt,
 				MaxAttempts: ev.MaxAttempts,
+				RetryError:  retryErr,
 			}); err != nil {
 				return types.Message{}, err
 			}

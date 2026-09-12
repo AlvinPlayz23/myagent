@@ -135,7 +135,7 @@ type AssistantMessageEvent struct {
 	Delta        string   `json:"delta,omitempty"`
 	Partial      *Message `json:"partial,omitempty"`
 	Message      *Message `json:"message,omitempty"` // done
-	Error        *Message `json:"error,omitempty"`   // error
+	Error        *Message `json:"error,omitempty"`   // error; also the cause on a "retry" event
 	// Retryable marks an "error" event whose failure is transient (network or a
 	// retryable HTTP status), so a retry wrapper may re-issue the request.
 	Retryable bool `json:"retryable,omitempty"`
@@ -192,9 +192,12 @@ type AgentEvent struct {
 	// compaction_start / compaction_end
 	Compaction *CompactionInfo `json:"compaction,omitempty"`
 
-	// retry (Attempt is the upcoming attempt; MaxAttempts is the ceiling)
-	Attempt     int `json:"attempt,omitempty"`
-	MaxAttempts int `json:"maxAttempts,omitempty"`
+	// retry (Attempt is the upcoming attempt; MaxAttempts is the ceiling).
+	// RetryError carries the underlying transient failure message so UIs can
+	// show it on expand (e.g. ctrl+o); empty when unknown.
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"maxAttempts,omitempty"`
+	RetryError  string `json:"retryError,omitempty"`
 }
 
 // CompactionInfo carries the result of an auto-compaction. On compaction_end,

@@ -64,6 +64,7 @@ type ProviderConfig struct {
 	BaseURL          string `json:"baseUrl"`
 	Model            string `json:"model,omitempty"`
 	ReasoningDialect string `json:"reasoningDialect,omitempty"`
+	Transport        string `json:"transport,omitempty"`
 }
 
 // Config is the persisted configuration. DefaultModel must use
@@ -213,11 +214,16 @@ func (c *Config) ResolveWithAuth(authStore *auth.Store, providerName, modelID, b
 	if err != nil {
 		return nil, llm.Model{}, fmt.Errorf("provider %q: %w", providerName, err)
 	}
+	transport, err := llm.ParseTransport(providerCfg.Transport)
+	if err != nil {
+		return nil, llm.Model{}, fmt.Errorf("provider %q: %w", providerName, err)
+	}
 	return llm.NewRetryProvider(base, c.retryPolicy()), llm.Model{
 		ID:               modelID,
 		Provider:         providerName,
 		BaseURL:          providerCfg.BaseURL,
 		ReasoningDialect: reasoningDialect,
+		Transport:        transport,
 	}, nil
 }
 

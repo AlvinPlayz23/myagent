@@ -464,24 +464,24 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		createSession = newSession[0]
 	}
 	return &model{
-		ctx:              ctx,
-		runner:           r,
-		queue:            q,
-		th:               th,
-		md:               md,
-		transcript:       newTranscript(th, md),
-		input:            ta,
-		keyInput:         key,
-		exportName:       exportName,
-		picker:           newCommandPicker(),
-		clipboardWrite:   clipboard.WriteAll,
-		clipboardRead:    readNativeClipboard,
-		historyIndex:     -1,
-		welcomeStyle:     welcomeDefault,
-		promptStyle:      promptDefault,
-		modelID:          modelID,
-		cwd:              cwd,
-		newSession:       createSession,
+		ctx:            ctx,
+		runner:         r,
+		queue:          q,
+		th:             th,
+		md:             md,
+		transcript:     newTranscript(th, md),
+		input:          ta,
+		keyInput:       key,
+		exportName:     exportName,
+		picker:         newCommandPicker(),
+		clipboardWrite: clipboard.WriteAll,
+		clipboardRead:  readNativeClipboard,
+		historyIndex:   -1,
+		welcomeStyle:   welcomeDefault,
+		promptStyle:    promptDefault,
+		modelID:        modelID,
+		cwd:            cwd,
+		newSession:     createSession,
 	}
 }
 
@@ -1812,10 +1812,10 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 			))
 		}
 	case types.EventRetry:
-		m.transcript.addNotice(fmt.Sprintf(
+		m.transcript.addRetryNotice(fmt.Sprintf(
 			"∼ Provider error, retrying… (attempt %d/%d)",
 			ev.Attempt, ev.MaxAttempts,
-		))
+		), ev.RetryError)
 	}
 	m.refreshViewport()
 	return nil
@@ -2592,9 +2592,11 @@ func (m *model) statusLine() string {
 }
 
 // footer renders the cwd/model line and the token/cost stats line.
+// The right side shows "{model-id} • {effort}" so the active reasoning
+// effort is visible at a glance; empty effort renders as "default".
 func (m *model) footer() string {
 	left := m.th.footer.Render(collapseHome(m.cwd))
-	right := m.th.footerRight.Render(m.modelID)
+	right := m.th.footerRight.Render(m.modelID + " • " + m.effortLabel())
 	line1 := padBetween(left, right, m.width)
 
 	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
@@ -2603,6 +2605,15 @@ func (m *model) footer() string {
 		m.usage.Cost.Total)
 	line2 := m.th.footer.Render(stats)
 	return line1 + "\n" + line2
+}
+
+// effortLabel renders the active reasoning effort for the footer.
+// Empty (provider default) renders as "default".
+func (m *model) effortLabel() string {
+	if m.runner == nil || m.runner.cfg.Effort == "" {
+		return "default"
+	}
+	return string(m.runner.cfg.Effort)
 }
 
 func userMessage(text string) types.Message {

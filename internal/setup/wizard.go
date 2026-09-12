@@ -702,6 +702,7 @@ func (m *wizardModel) openEditor(name string) {
 		m.newField(false, "Base URL", "OpenAI-compatible endpoint URL.", provider.BaseURL),
 		m.newField(false, "Model", "Model id. Saving makes this provider the default.", model),
 		m.newField(false, "Reasoning dialect", "Optional: auto, openai, openrouter, or deepseek.", provider.ReasoningDialect),
+		m.newField(false, "Transport", "Optional: auto, chat-completions, or responses.", provider.Transport),
 	}
 	_ = m.fields[0].input.Focus()
 	m.resizeInputs()
@@ -724,6 +725,7 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 	baseURL := strings.TrimSpace(m.fields[2].input.Value())
 	model := strings.TrimSpace(m.fields[3].input.Value())
 	reasoningDialect := strings.TrimSpace(m.fields[4].input.Value())
+	transportValue := strings.TrimSpace(m.fields[5].input.Value())
 	if name == "" || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\n") {
 		m.err = "Name must be non-empty and cannot contain spaces or '/'."
 		return m, nil
@@ -733,6 +735,11 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if _, err := llm.ParseReasoningDialect(reasoningDialect); err != nil {
+		m.err = err.Error()
+		return m, nil
+	}
+	transport, err := llm.ParseTransport(transportValue)
+	if err != nil {
 		m.err = err.Error()
 		return m, nil
 	}
@@ -746,7 +753,7 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 		}
 		delete(m.cfg.Providers, m.editing)
 	}
-	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model, ReasoningDialect: reasoningDialect}
+	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model, ReasoningDialect: reasoningDialect, Transport: string(transport)}
 	m.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(m.cfg); err != nil {
 		m.err = "Failed to write config: " + err.Error()

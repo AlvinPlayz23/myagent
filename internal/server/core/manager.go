@@ -143,6 +143,9 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 // wrap builds the ServerSession over an open session file.
 func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort) *ServerSession {
 	registry := tools.DefaultRegistry(cwd)
+	if sess != nil {
+		model.SessionID = sess.ID()
+	}
 	cfg := agent.Config{
 		Provider:           provider,
 		Model:              model,

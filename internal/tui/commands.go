@@ -215,7 +215,7 @@ func buildHelpText() string {
 		}
 		fmt.Fprintf(&b, "  %-21s %s\n", item.usage, item.description)
 	}
-	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v paste, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand tools, ctrl+c quit")
+	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v paste, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c quit")
 	b.WriteString("\nImages: press ctrl+v for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")
 	return b.String()
 }

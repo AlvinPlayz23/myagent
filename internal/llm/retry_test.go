@@ -121,6 +121,9 @@ func TestRetrySucceedsAfterTransientErrors(t *testing.T) {
 		if ev.MaxAttempts != 10 {
 			t.Fatalf("retry maxAttempts = %d, want 10", ev.MaxAttempts)
 		}
+		if ev.Error == nil || ev.Error.ErrorMessage != "boom" {
+			t.Fatalf("retry event missing cause, got %+v", ev.Error)
+		}
 		wantAttempt++
 	}
 }

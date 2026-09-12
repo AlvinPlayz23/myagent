@@ -10,6 +10,7 @@ type ProviderRecord struct {
 	Source           string        `json:"source"`
 	BaseURL          string        `json:"baseUrl,omitempty"`
 	ReasoningDialect string        `json:"reasoningDialect,omitempty"`
+	Transport        string        `json:"transport,omitempty"`
 	HasAPIKey        bool          `json:"hasApiKey"`
 	Origin           string        `json:"origin,omitempty"`
 	ModelDetails     []ModelRecord `json:"modelDetails,omitempty"`
@@ -42,6 +43,7 @@ type ProviderInput struct {
 	Model            string `json:"model"`
 	APIKey           string `json:"apiKey"`
 	ReasoningDialect string `json:"reasoningDialect,omitempty"`
+	Transport        string `json:"transport,omitempty"`
 	Builtin          bool   `json:"builtin"`
 }
 

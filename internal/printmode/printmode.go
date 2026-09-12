@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/session"
@@ -66,6 +67,9 @@ func Run(ctx context.Context, cfg agent.Config, sess *session.Session, history [
 			}
 		case types.EventRetry:
 			fmt.Fprintf(stderr, "\n[retry] provider error, retrying (attempt %d/%d)...\n", ev.Attempt, ev.MaxAttempts)
+			if strings.TrimSpace(ev.RetryError) != "" {
+				fmt.Fprintf(stderr, "  cause: %s\n", strings.TrimSpace(ev.RetryError))
+			}
 		}
 		return nil
 	}

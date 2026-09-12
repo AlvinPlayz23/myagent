@@ -32,6 +32,10 @@ type block struct {
 	// assistant/user/error text (markdown for user/assistant, plain for error)
 	text string
 
+	// noticeDetail holds expandable extra info for notice blocks (e.g. the
+	// underlying provider error for a retry notice). Empty means no expand.
+	noticeDetail string
+
 	// tool fields
 	toolCallID string
 	toolName   string
@@ -103,12 +107,12 @@ func (t *transcript) setShowThinking(show bool) {
 	}
 }
 
-// toggleExpand flips the global tool expand state and invalidates tool and
-// thinking caches.
+// toggleExpand flips the global tool expand state and invalidates tool,
+// thinking, and expandable-notice caches.
 func (t *transcript) toggleExpand() {
 	t.expanded = !t.expanded
 	for _, b := range t.blocks {
-		if b.kind == blockTool || b.kind == blockThinking {
+		if b.kind == blockTool || b.kind == blockThinking || (b.kind == blockNotice && b.noticeDetail != "") {
 			b.cacheValid = false
 		}
 	}
@@ -214,6 +218,12 @@ func (t *transcript) addNotice(text string) {
 	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text})
 }
 
+// addRetryNotice appends a retry notice whose underlying provider error is
+// revealed with the global ctrl+o expand toggle.
+func (t *transcript) addRetryNotice(text, detail string) {
+	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text, noticeDetail: strings.TrimSpace(detail)})
+}
+
 // startTool appends a tool block in the pending state.
 func (t *transcript) startTool(callID, name string, args map[string]any) {
 	t.blocks = append(t.blocks, &block{
@@ -282,7 +292,7 @@ func (t *transcript) renderBlock(b *block, width int) string {
 	case blockError:
 		out = t.th.errorText.Render(b.text)
 	case blockNotice:
-		out = t.th.muted.Render(b.text)
+		out = t.renderNotice(b, width)
 	case blockTool:
 		out = t.renderTool(b, width)
 	case blockThinking:
@@ -293,6 +303,22 @@ func (t *transcript) renderBlock(b *block, width int) string {
 	b.cacheExpand = t.expanded
 	b.cacheValid = true
 	return out
+}
+
+// renderNotice renders a muted system notice. Retry notices carry the
+// underlying provider error, collapsed behind the global ctrl+o toggle.
+func (t *transcript) renderNotice(b *block, width int) string {
+	if b.noticeDetail == "" {
+		return t.th.muted.Render(b.text)
+	}
+	if !t.expanded {
+		return t.th.muted.Render(b.text) + "\n" +
+			t.th.muted.Render("… (ctrl+o to expand)")
+	}
+	detail := strings.TrimRight(wordwrap.String(b.noticeDetail, max(1, width-2)), "\n")
+	return t.th.muted.Render(b.text) + "\n" +
+		t.th.muted.Render(detail) + "\n" +
+		t.th.muted.Render("(ctrl+o to collapse)")
 }
 
 // renderTool renders a collapsible tool block: a one-line status header plus an

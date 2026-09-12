@@ -68,6 +68,32 @@ func TestFirstRunAddsProvider(t *testing.T) {
 	}
 }
 
+func TestEditorSavesTransport(t *testing.T) {
+	setTempDir(t)
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	m.openEditor("")
+	m.fields[5].input.SetValue("responses")
+	saveProvider(t, m, "zen", "sk-test", "https://opencode.ai/zen/v1", "muse-spark-1.3-contributor-free")
+	if m.err != "" {
+		t.Fatalf("save error = %q", m.err)
+	}
+	if got := m.cfg.Providers["zen"].Transport; got != "responses" {
+		t.Fatalf("Transport = %q, want responses", got)
+	}
+	// Prefill on edit.
+	m.openEditor("zen")
+	if got := m.fields[5].input.Value(); got != "responses" {
+		t.Fatalf("transport field = %q, want responses prefilled", got)
+	}
+	// Invalid transport is rejected.
+	m.fields[5].input.SetValue("carrier-pigeon")
+	_, _ = m.saveProvider()
+	if m.err == "" || !strings.Contains(m.err, "invalid transport") {
+		t.Fatalf("err = %q, want invalid transport", m.err)
+	}
+}
+
 func TestAuthHomeNavigatesWithArrows(t *testing.T) {
 	setTempDir(t)
 	m := newWizardModel()

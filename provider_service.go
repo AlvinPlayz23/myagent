@@ -115,7 +115,7 @@ func (s *providerService) listLocked() ws.ProviderList {
 	seen := map[string]bool{}
 	for name, p := range s.cfg.Providers {
 		ids := sortedModels(models[name])
-		entries = append(entries, ws.ProviderRecord{Name: name, Models: ids, ModelDetails: s.modelDetails(name, ids), Source: "config", Origin: s.providerOrigin(name), BaseURL: p.BaseURL, ReasoningDialect: p.ReasoningDialect, HasAPIKey: p.APIKey != ""})
+		entries = append(entries, ws.ProviderRecord{Name: name, Models: ids, ModelDetails: s.modelDetails(name, ids), Source: "config", Origin: s.providerOrigin(name), BaseURL: p.BaseURL, ReasoningDialect: p.ReasoningDialect, Transport: p.Transport, HasAPIKey: p.APIKey != ""})
 		seen[name] = true
 	}
 	for name, credential := range s.auth.Providers {
@@ -176,6 +176,9 @@ func validateProviderInput(p ws.ProviderInput) error {
 	if _, err := llm.ParseReasoningDialect(p.ReasoningDialect); err != nil {
 		return err
 	}
+	if _, err := llm.ParseTransport(p.Transport); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -233,7 +236,15 @@ func (s *providerService) Save(in ws.ProviderInput) (ws.ProviderList, error) {
 		if dialect == "" {
 			dialect = existing.ReasoningDialect
 		}
-		s.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model, ReasoningDialect: dialect}
+		transportParsed, err := llm.ParseTransport(in.Transport)
+		if err != nil {
+			return ws.ProviderList{}, err
+		}
+		transport := string(transportParsed)
+		if transport == "" {
+			transport = existing.Transport
+		}
+		s.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model, ReasoningDialect: dialect, Transport: transport}
 	}
 	s.cfg.DefaultModel = name + "/" + model
 	if err := config.Save(s.cfg); err != nil {

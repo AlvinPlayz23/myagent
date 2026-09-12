@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
@@ -97,6 +98,56 @@ func (a *accumulator) applyToolCall(tc deltaToolCall) {
 		block.Arguments = parseStreamingJSON(a.partialArgs[idx])
 	}
 	a.emit(StreamEvent{Type: "toolcall_delta", ContentIndex: idx, Delta: tc.Function.Arguments})
+}
+
+// setToolCallArgs replaces the accumulated arguments for a tool call with an
+// authoritative final payload (e.g. Responses
+// response.function_call_arguments.done). It creates the block when the call
+// was never announced via deltas. Deltas are only emitted for newly seen
+// bytes so transcripts never render the same arguments twice.
+func (a *accumulator) setToolCallArgs(streamIndex int, id, name, raw string) {
+	idx, ok := a.byStreamIndex[streamIndex]
+	if !ok && id != "" {
+		idx, ok = a.byID[id]
+	}
+	if !ok {
+		a.output.Content = append(a.output.Content, types.ContentBlock{
+			Type:      types.ContentToolCall,
+			ID:        id,
+			Name:      name,
+			Arguments: map[string]any{},
+		})
+		idx = len(a.output.Content) - 1
+		a.byStreamIndex[streamIndex] = idx
+		if id != "" {
+			a.byID[id] = idx
+		}
+		a.emit(StreamEvent{Type: "toolcall_start", ContentIndex: idx})
+	}
+
+	block := &a.output.Content[idx]
+	if block.ID == "" && id != "" {
+		block.ID = id
+		a.byID[id] = idx
+	}
+	if block.Name == "" && name != "" {
+		block.Name = name
+	}
+	prev := a.partialArgs[idx]
+	if strings.HasPrefix(raw, prev) {
+		delta := raw[len(prev):]
+		if delta == "" {
+			return
+		}
+		a.partialArgs[idx] += delta
+		block.Arguments = parseStreamingJSON(a.partialArgs[idx])
+		a.emit(StreamEvent{Type: "toolcall_delta", ContentIndex: idx, Delta: delta})
+		return
+	}
+	// Diverged (server re-sent a different serialization): replace outright.
+	a.partialArgs[idx] = raw
+	block.Arguments = parseStreamingJSON(raw)
+	a.emit(StreamEvent{Type: "toolcall_delta", ContentIndex: idx, Delta: raw})
 }
 
 // finish emits the *_end events for every open block, doing a final parse of

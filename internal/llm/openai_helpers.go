@@ -10,11 +10,14 @@ import (
 
 // buildRequestBody converts a Request into the OpenAI chat-completions JSON body.
 // Ported from pi buildParams (packages/ai/src/api/openai-completions.ts).
+// Contributor-tier Muse Spark cannot use "max" effort (Standard-tier only),
+// so it is clamped to "xhigh" before encoding.
 func buildRequestBody(model Model, req Request) ([]byte, error) {
 	effort, err := NormalizeEffort(model, req.Effort)
 	if err != nil {
 		return nil, err
 	}
+	effort = ClampContributorEffort(model.ID, effort)
 	req.Effort = effort
 	provider := reasoningProvider(model)
 	cr := chatRequest{

@@ -198,6 +198,11 @@ func run(argv []string) error {
 		CompactionSettings: compaction.DefaultSettings,
 		Effort:             effort,
 	}
+	// Stable per-conversation ID for provider session-affinity headers
+	// (e.g. x-opencode-session on Zen). Sent only to the Zen host.
+	if sess != nil {
+		agentCfg.Model.SessionID = sess.ID()
+	}
 
 	// Prior conversation (empty for a fresh session).
 	var history []types.Message
@@ -221,6 +226,10 @@ func run(argv []string) error {
 		}
 		agentCfg.Model = model
 		agentCfg.Effort = effort
+		// Enrich returns a fresh copy; restore the session-affinity ID.
+		if sess != nil {
+			agentCfg.Model.SessionID = sess.ID()
+		}
 		sess, err = tui.Run(ctx, agentCfg, cfg, authStore, catalog, sess, history, modelID, cwd)
 		if sess != nil {
 			defer sess.Close()
