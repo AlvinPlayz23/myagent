@@ -22,13 +22,13 @@ import (
 
 // Limits from PLUGINS.md §3 / §6 / §10.
 const (
-	maxNameLen        = 32
-	defaultTimeoutMs  = 30000
-	minTimeoutMs      = 1000
-	maxTimeoutMs      = 120000
-	maxBashDeny       = 20
-	maxBashDenyLen    = 200
-	maxInstructions   = 4000
+	maxNameLen       = 32
+	defaultTimeoutMs = 30000
+	minTimeoutMs     = 1000
+	maxTimeoutMs     = 120000
+	maxBashDeny      = 20
+	maxBashDenyLen   = 200
+	maxInstructions  = 4000
 )
 
 // Built-in tool names (internal/tools/default.go).
@@ -381,13 +381,6 @@ func (b *Bundle) mergeCommands(global, project []CommandDef) {
 		}
 		seen[c.Name] = true
 		b.Commands = append(b.Commands, c)
-		if c.TimeoutMs == 0 {
-			b.Commands[len(b.Commands)-1].TimeoutMs = defaultTimeoutMs
-		} else if c.TimeoutMs < minTimeoutMs {
-			b.Commands[len(b.Commands)-1].TimeoutMs = minTimeoutMs
-		} else if c.TimeoutMs > maxTimeoutMs {
-			b.Commands[len(b.Commands)-1].TimeoutMs = maxTimeoutMs
-		}
 	}
 	seenGlobal := map[string]bool{}
 	for _, c := range global {
@@ -407,10 +400,28 @@ func (b *Bundle) mergeCommands(global, project []CommandDef) {
 		seenProject[c.Name] = true
 		add(c, "project")
 	}
+	// Normalize after project overrides so every accepted command has the
+	// documented timeout bounds, regardless of which file defined it.
+	for i := range b.Commands {
+		b.Commands[i].TimeoutMs = clampTimeout(b.Commands[i].TimeoutMs)
+	}
 	b.commandsByName = map[string]*CommandDef{}
 	for i := range b.Commands {
 		b.commandsByName[b.Commands[i].Name] = &b.Commands[i]
 	}
+}
+
+func clampTimeout(timeoutMs int) int {
+	if timeoutMs == 0 {
+		return defaultTimeoutMs
+	}
+	if timeoutMs < minTimeoutMs {
+		return minTimeoutMs
+	}
+	if timeoutMs > maxTimeoutMs {
+		return maxTimeoutMs
+	}
+	return timeoutMs
 }
 
 func (b *Bundle) mergeProfiles(gTools, pTools []ToolDef, global, project []ProfileDef) {
