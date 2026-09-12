@@ -14,6 +14,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
@@ -330,6 +331,35 @@ func (s *ServerSession) SetEffort(effort llm.Effort) error {
 	if s.running {
 		return ErrBusy
 	}
+	s.cfg.Effort = effort
+	return nil
+}
+
+// SetTools swaps the tool registry and system prompt (profile switching).
+// The effort is left unchanged. Fails with ErrBusy while a run is active.
+func (s *ServerSession) SetTools(reg *tools.Registry, systemPrompt string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return ErrBusy
+	}
+	s.cfg.Registry = reg
+	s.cfg.SystemPrompt = systemPrompt
+	return nil
+}
+
+// SetProfile atomically swaps the tool registry, system prompt, and effort
+// (profile switching). A single lock hold guarantees a concurrent Prompt
+// cannot observe a half-applied profile (new tools with old effort or vice
+// versa). Fails with ErrBusy while a run is active.
+func (s *ServerSession) SetProfile(reg *tools.Registry, systemPrompt string, effort llm.Effort) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return ErrBusy
+	}
+	s.cfg.Registry = reg
+	s.cfg.SystemPrompt = systemPrompt
 	s.cfg.Effort = effort
 	return nil
 }

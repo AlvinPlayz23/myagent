@@ -14,6 +14,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/config"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 	"github.com/AlvinPlayz23/myagent/internal/server/ws"
 )
@@ -34,6 +35,8 @@ func runServe(argv []string) error {
 		modelFlag    string
 		baseURLFlag  string
 		effortFlag   string
+		profileFlag  string
+		noPlugins    bool
 	)
 	fs.StringVar(&host, "host", "127.0.0.1", "listen address")
 	fs.IntVar(&port, "port", 8765, "listen port")
@@ -42,6 +45,8 @@ func runServe(argv []string) error {
 	fs.StringVar(&modelFlag, "model", "", "default model id for new sessions")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
 	fs.StringVar(&effortFlag, "effort", "", "default reasoning effort: "+llm.EffortList())
+	fs.StringVar(&profileFlag, "profile", "", "default plugin profile for new sessions")
+	fs.BoolVar(&noPlugins, "no-plugins", false, "disable all plugins")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -102,6 +107,14 @@ func runServe(argv []string) error {
 		fmt.Printf("token: %s\n", token)
 	}
 
+	bundle0 := plugin.Load(cwd, noPlugins)
+	if bundle0.Summary() != "Loaded plugins: none" {
+		fmt.Println(bundle0.Summary())
+	}
+	for _, w := range bundle0.Warnings {
+		fmt.Fprintln(os.Stderr, "plugin warning: "+w)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -120,6 +133,8 @@ func runServe(argv []string) error {
 		DefaultCwd:         cwd,
 		CompactionSettings: compaction.DefaultSettings,
 		DefaultEffort:      effort,
+		NoPlugins:          noPlugins,
+		DefaultProfile:     profileFlag,
 	})
 	defer manager.Shutdown()
 

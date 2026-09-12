@@ -26,7 +26,7 @@ import (
 // config and prior history, persisting every produced message to sess as it
 // completes. It returns the active session when the user quits, which may be a
 // session created through /new.
-func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string) (*session.Session, error) {
+func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string, pluginArgs ...any) (*session.Session, error) {
 	queue := newMsgQueue()
 	// Sync the conversation's session-affinity ID before the runner copies cfg.
 	if sess != nil {
@@ -36,7 +36,8 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 
 	th := newTheme()
 	md := newMDRenderer()
-	m := newModel(ctx, r, queue, th, md, modelID, cwd, func() error {
+	var m *model
+	m = newModel(ctx, r, queue, th, md, modelID, cwd, func() error {
 		newSess, err := session.Create(cwd)
 		if err != nil {
 			return err
@@ -50,6 +51,12 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		sess = newSess
 		r.cfg.Model.SessionID = newSess.ID()
 		r.reset()
+		// /new resets to default unless --profile is pinned (§10.3).
+		if m.defaultProfile != "" {
+			_ = m.applyProfile(m.defaultProfile)
+		} else if m.activeProfile != "" {
+			_ = m.applyProfile("reset")
+		}
 		return nil
 	})
 	m.sessionTitle = ""
@@ -83,8 +90,48 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	m.setTerminalTitle = terminal.SetTitle
 	m.updateTerminalTitle()
 	defer terminal.SetTitle("myagent")
+	// Plugin bundle + pinned profile (variadic to keep existing callers
+	// compiling; main.go passes bundle + profile name).
+	m.pluginBundle, m.defaultProfile = extractPluginArgs(pluginArgs)
+	m.baseRegistry = r.cfg.Registry
+	m.basePrompt = r.cfg.SystemPrompt
+	m.baseEffort = r.cfg.Effort
+	m.refreshPluginCommands()
+	pluginNotice := ""
+	if m.pluginBundle != nil && !m.pluginBundle.Empty() && !m.pluginBundle.Disabled {
+		pluginNotice = m.pluginBundle.Summary()
+	}
+	if m.defaultProfile != "" {
+		if m.pluginBundle == nil || m.pluginBundle.Profile(m.defaultProfile) == nil {
+			avail := ""
+			if m.pluginBundle != nil {
+				avail = strings.Join(m.pluginBundle.ProfileNames(), ", ")
+			}
+			m.statusMsg = fmt.Sprintf("unknown profile %q (available: %s)", m.defaultProfile, avail)
+		} else if err := m.applyProfile(m.defaultProfile); err != nil {
+			m.statusMsg = err.Error()
+		}
+	}
 	if agent.HasRepositoryGuidance(cwd) {
-		m.statusMsg = "Loaded AGENTS.md"
+		if m.statusMsg != "" {
+			m.statusMsg += " · Loaded AGENTS.md"
+		} else {
+			m.statusMsg = "Loaded AGENTS.md"
+		}
+	}
+	if pluginNotice != "" {
+		if m.statusMsg != "" {
+			m.statusMsg += " · " + pluginNotice
+		} else {
+		m.statusMsg = pluginNotice
+		}
+	}
+	if m.pluginBundle != nil {
+		for _, w := range m.pluginBundle.Warnings {
+			if strings.TrimSpace(w) != "" {
+				m.statusMsg += " [plugin warning: " + w + "]"
+			}
+		}
 	}
 	m.availableModels = func() []modelcatalog.Model {
 		return availableModelCandidates(catalog, persistedConfig, authStore)
@@ -178,6 +225,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if err != nil {
 			return nil, err
 		}
+		if m.working {
+			return nil, fmt.Errorf("Cancel the current run before resuming.")
+		}
 		if sess != nil {
 			if err := sess.Close(); err != nil {
 				_ = resumed.Close()
@@ -186,6 +236,15 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		sess = resumed
 		r.cfg.Model.SessionID = resumed.ID()
+		// /new and /resume reset to default unless --profile is pinned (§10.3).
+		if m.defaultProfile != "" {
+			_ = m.applyProfile(m.defaultProfile)
+		} else {
+			r.cfg.Registry = m.baseRegistry
+			r.cfg.SystemPrompt = m.basePrompt
+			r.cfg.Effort = m.baseEffort
+			m.activeProfile = ""
+		}
 		history := resumed.Messages()
 		return history, nil
 	}

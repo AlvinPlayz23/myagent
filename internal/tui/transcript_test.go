@@ -33,7 +33,7 @@ func TestProposalDiffForEdit(t *testing.T) {
 	}
 }
 
-func TestRenderDiffFillsRowWidth(t *testing.T) {
+func TestRenderDiffUsesTextColoring(t *testing.T) {
 	tr := newTranscript(newTheme(), newMDRenderer())
 	diff := []diffLine{
 		{text: "--- a/file.go"},
@@ -44,9 +44,12 @@ func TestRenderDiffFillsRowWidth(t *testing.T) {
 	const width = 20
 	out := tr.renderDiff(diff, width)
 
-	// Changed rows carry full-row background fills (256-color green/red).
-	if !strings.Contains(out, "48;5;32m") || !strings.Contains(out, "48;5;164m") {
-		t.Fatalf("diff rows missing background fills: %q", out)
+	// Changed rows are text-colored only (green/red foreground, no background fills).
+	if strings.Contains(out, "48;5;32m") || strings.Contains(out, "48;5;164m") {
+		t.Fatalf("diff rows should not carry background fills: %q", out)
+	}
+	if !strings.Contains(out, "38;5;35m") || !strings.Contains(out, "38;5;203m") {
+		t.Fatalf("diff rows missing green/red foreground coloring: %q", out)
 	}
 
 	plain := ansi.Strip(out)
@@ -55,18 +58,12 @@ func TestRenderDiffFillsRowWidth(t *testing.T) {
 		t.Fatalf("rendered %d lines, want %d:\n%q", len(lines), len(diff), plain)
 	}
 	for i, line := range lines {
-		switch diff[i].prefix {
-		case '+', '-':
-			if len(line) != width {
-				t.Errorf("changed line %q width = %d, want %d", line, len(line), width)
-			}
-			if !strings.HasPrefix(line, string(diff[i].prefix)) {
-				t.Errorf("changed line %q lost its prefix", line)
-			}
-		default:
-			if line != diff[i].text {
-				t.Errorf("meta line = %q, want %q", line, diff[i].text)
-			}
+		want := diff[i].text
+		if diff[i].prefix != 0 {
+			want = string(diff[i].prefix) + diff[i].text
+		}
+		if line != want {
+			t.Errorf("line %d = %q, want %q", i, line, want)
 		}
 	}
 }

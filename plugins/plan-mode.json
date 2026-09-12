@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "profiles": [
+    {
+      "name": "plan",
+      "description": "Read-only planning mode",
+      "tools": ["read", "bash"],
+      "bashDeny": ["rm\\s+-rf", "git\\s+push"],
+      "instructions": "You are in PLAN MODE. Explore and propose a plan. Do NOT edit/write files. End with a step list.",
+      "effort": "medium"
+    }
+  ]
+}

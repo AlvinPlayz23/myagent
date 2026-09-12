@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "commands": [
+    {
+      "name": "/test",
+      "description": "Show Hellow orld",
+      "run": "echo Hellow orld"
+    }
+  ]
+}

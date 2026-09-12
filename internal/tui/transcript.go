@@ -288,7 +288,9 @@ func (t *transcript) renderBlock(b *block, width int) string {
 		body := strings.TrimRight(wordwrap.String(b.text, max(1, width-2)), "\n")
 		out = t.th.userBlock.Width(max(1, width)).Render(body)
 	case blockAssistant:
-		out = strings.TrimRight(t.md.render(b.text, width), "\n")
+		// Assistant-only clickable URLs: bare links get OSC 8 escapes here so
+		// user, tool, and notice blocks never become clickable.
+		out = makeURLsClickable(strings.TrimRight(t.md.render(b.text, width), "\n"))
 	case blockError:
 		out = t.th.errorText.Render(b.text)
 	case blockNotice:
@@ -507,9 +509,8 @@ func prefixedDiffLines(prefix byte, text string) []diffLine {
 
 // renderDiff applies Git-like line coloring and the transcript's global
 // ctrl+o preview limit. File headers and hunk markers are always retained.
-// Added/removed lines get full-row background fills at width so the change
-// reads as a block, matching GitHub/Claude Code diffs.
 func (t *transcript) renderDiff(lines []diffLine, width int) string {
+	_ = width // retained for call-site compatibility; diff rows are text-colored only.
 	visible := lines
 	hidden := 0
 	if !t.expanded {
@@ -538,9 +539,9 @@ func (t *transcript) renderDiff(lines []diffLine, width int) string {
 		}
 		switch {
 		case line.prefix == '+':
-			sb.WriteString(t.th.diffAdd.Width(max(1, width)).Render(text))
+			sb.WriteString(t.th.diffAdd.Render(text))
 		case line.prefix == '-':
-			sb.WriteString(t.th.diffRemove.Width(max(1, width)).Render(text))
+			sb.WriteString(t.th.diffRemove.Render(text))
 		case strings.HasPrefix(line.text, "@@"):
 			sb.WriteString(t.th.diffHunk.Render(text))
 		default:

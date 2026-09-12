@@ -33,6 +33,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/config"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/printmode"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/setup"
@@ -52,12 +53,15 @@ func main() {
 func run(argv []string) error {
 	// Subcommand routing. `sessions` lists persisted sessions; `auth` opens
 	// provider setup; `serve` runs the WebSocket server; `tui` forces the
-	// interactive UI.
+	// interactive UI; `plugin` inspects plugins.json.
 	if len(argv) > 0 && argv[0] == "sessions" {
 		return runSessions(argv[1:])
 	}
 	if len(argv) > 0 && argv[0] == "auth" {
 		return runAuth(argv[1:])
+	}
+	if len(argv) > 0 && argv[0] == "plugin" {
+		return runPlugin(argv[1:])
 	}
 	if len(argv) > 0 && argv[0] == "serve" {
 		return runServe(argv[1:])
@@ -78,6 +82,8 @@ func run(argv []string) error {
 		modelFlag    string
 		baseURLFlag  string
 		effortFlag   string
+		profileFlag  string
+		noPlugins    bool
 	)
 	fs.StringVar(&printPrompt, "p", "", "run a single prompt non-interactively and print the result")
 	fs.StringVar(&printPrompt, "print", "", "run a single prompt non-interactively and print the result")
@@ -88,6 +94,8 @@ func run(argv []string) error {
 	fs.StringVar(&modelFlag, "model", "", "model id (overrides default_model and MYAGENT_MODEL)")
 	fs.StringVar(&baseURLFlag, "base-url", "", "provider base URL (overrides configured endpoint)")
 	fs.StringVar(&effortFlag, "effort", "", "reasoning effort: "+llm.EffortList())
+	fs.StringVar(&profileFlag, "profile", "", "plugin profile to activate")
+	fs.BoolVar(&noPlugins, "no-plugins", false, "disable all plugins")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -190,11 +198,41 @@ func run(argv []string) error {
 	}
 
 	registry := tools.DefaultRegistry(cwd)
+	// Plugins: merge ShellTools (per-session cwd + session id), then apply
+	// --profile if pinned. Unknown --profile fails fast (§10.3).
+	bundle := plugin.Load(cwd, noPlugins)
+	sessID := ""
+	if sess != nil {
+		sessID = sess.ID()
+	}
+	for _, st := range plugin.ShellTools(bundle.Tools, cwd, sessID) {
+		registry.Add(st)
+	}
+	basePrompt := agent.BuildSystemPrompt(registry, cwd)
+	// Keep the unfiltered base: the interactive TUI applies --profile itself
+	// (so /profile reset can restore the full tool set), while print mode
+	// uses the filtered registry below.
+	baseRegistry := registry
+	baseEffort := effort
+	systemPrompt := basePrompt
+	if profileFlag != "" {
+		applied, perr := plugin.Apply(bundle, registry, basePrompt, cwd, profileFlag)
+		if perr != nil {
+			return perr
+		}
+		if applied.Registry != nil {
+			registry = applied.Registry
+			systemPrompt = applied.SystemPrompt
+		}
+		if applied.Effort != "" {
+			effort = applied.Effort
+		}
+	}
 	agentCfg := agent.Config{
 		Provider:           provider,
 		Model:              model,
 		Registry:           registry,
-		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
+		SystemPrompt:       systemPrompt,
 		CompactionSettings: compaction.DefaultSettings,
 		Effort:             effort,
 	}
@@ -220,17 +258,22 @@ func run(argv []string) error {
 			cancel()
 		}
 		model = catalog.Enrich(model)
-		effort, err = llm.NormalizeEffort(model, effort)
+		effort, err = llm.NormalizeEffort(model, baseEffort)
 		if err != nil {
 			return err
 		}
 		agentCfg.Model = model
+		// Hand the TUI the unfiltered base config: it applies --profile
+		// itself after capturing baseRegistry/basePrompt/baseEffort, so
+		// /profile reset restores the full tools instead of a filtered set.
+		agentCfg.Registry = baseRegistry
+		agentCfg.SystemPrompt = basePrompt
 		agentCfg.Effort = effort
 		// Enrich returns a fresh copy; restore the session-affinity ID.
 		if sess != nil {
 			agentCfg.Model.SessionID = sess.ID()
 		}
-		sess, err = tui.Run(ctx, agentCfg, cfg, authStore, catalog, sess, history, modelID, cwd)
+		sess, err = tui.Run(ctx, agentCfg, cfg, authStore, catalog, sess, history, modelID, cwd, bundle, profileFlag)
 		if sess != nil {
 			defer sess.Close()
 		}
@@ -241,6 +284,12 @@ func run(argv []string) error {
 		return nil
 	}
 	defer sess.Close()
+	if bundle.Summary() != "Loaded plugins: none" {
+		fmt.Fprintln(os.Stderr, bundle.Summary())
+	}
+	for _, w := range bundle.Warnings {
+		fmt.Fprintln(os.Stderr, "plugin warning: "+w)
+	}
 	if len(history) == 0 && sess.Title() == "new" {
 		titleCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		if title, titleErr := titlegen.Generate(titleCtx, provider, model, printPrompt); titleErr == nil {

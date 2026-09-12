@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/AlvinPlayz23/myagent/internal/plugin"
 )
 
 type commandKind int
@@ -21,11 +23,15 @@ const (
 	commandExport
 	commandInit
 	commandThinking
+	commandPluginPrompt
+	commandPluginRun
+	commandProfile
 )
 
 type slashCommand struct {
 	kind commandKind
 	arg  string
+	name string
 }
 
 type commandItem struct {
@@ -151,6 +157,10 @@ func (p *commandPicker) visibleRange(count int) (int, int) {
 // parseSlashCommand parses commands handled by the interactive UI. Local
 // commands never become conversation messages or reach the model.
 func parseSlashCommand(text string) (slashCommand, error) {
+	return parseSlashCommandWithPlugins(text, nil)
+}
+
+func parseSlashCommandWithPlugins(text string, bundle *plugin.Bundle) (slashCommand, error) {
 	fields := strings.Fields(text)
 	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
 		return slashCommand{}, fmt.Errorf("not a slash command")
@@ -166,7 +176,22 @@ func parseSlashCommand(text string) (slashCommand, error) {
 		if (item.requiresArg && arg == "" && !optionalArg) || (!item.requiresArg && arg != "" && !optionalArg) {
 			return slashCommand{}, fmt.Errorf("usage: %s", item.usage)
 		}
-		return slashCommand{kind: item.kind, arg: arg}, nil
+		return slashCommand{kind: item.kind, arg: arg, name: name}, nil
+	}
+	if bundle != nil && !bundle.Disabled {
+		if def := bundle.Command(name); def != nil {
+			kind := commandPluginPrompt
+			if strings.TrimSpace(def.Run) != "" {
+				kind = commandPluginRun
+			}
+			return slashCommand{kind: kind, arg: arg, name: name}, nil
+		}
+		if name == "/profile" && len(bundle.Profiles) > 0 {
+			return slashCommand{kind: commandProfile, arg: arg, name: name}, nil
+		}
+		if name == "/plan" && bundle.Profile("plan") != nil {
+			return slashCommand{kind: commandProfile, arg: arg, name: name}, nil
+		}
 	}
 	return slashCommand{}, fmt.Errorf("unknown command: %s (try /help)", name)
 }
@@ -206,7 +231,7 @@ you were unsure about.`
 
 var helpText = buildHelpText()
 
-func buildHelpText() string {
+func buildHelpText(extra ...string) string {
 	var b strings.Builder
 	b.WriteString("Commands:\n")
 	for _, item := range commandItems {
@@ -214,6 +239,9 @@ func buildHelpText() string {
 			continue
 		}
 		fmt.Fprintf(&b, "  %-21s %s\n", item.usage, item.description)
+	}
+	for _, e := range extra {
+		b.WriteString(e)
 	}
 	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v paste, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c quit")
 	b.WriteString("\nImages: press ctrl+v for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")

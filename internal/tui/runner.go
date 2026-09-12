@@ -8,6 +8,7 @@ import (
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -157,6 +158,13 @@ func (r *runner) setModel(provider llm.Provider, model llm.Model) {
 
 func (r *runner) setEffort(effort llm.Effort) {
 	r.cfg.Effort = effort
+}
+
+// setTools swaps the tool registry and system prompt (profile switching).
+// Callers must refuse while a run is active.
+func (r *runner) setTools(reg *tools.Registry, systemPrompt string) {
+	r.cfg.Registry = reg
+	r.cfg.SystemPrompt = systemPrompt
 }
 
 // discardEvents makes buffered events from earlier operations invisible.

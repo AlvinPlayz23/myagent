@@ -50,6 +50,7 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
 			Effort   string `json:"effort"`
+			Profile  string `json:"profile"`
 		}
 		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
 			return nil, rpcErr
@@ -58,7 +59,7 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		if err != nil {
 			return nil, rpc.NewError(rpc.CodeInvalidParams, "%v", err)
 		}
-		ss, err := c.manager.Create(c.id, core.CreateParams{Cwd: p.Cwd, Provider: p.Provider, Model: p.Model, Effort: effort})
+		ss, err := c.manager.Create(c.id, core.CreateParams{Cwd: p.Cwd, Provider: p.Provider, Model: p.Model, Effort: effort, Profile: p.Profile})
 		if err != nil {
 			return nil, coreError(err)
 		}
@@ -190,6 +191,22 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			return nil, coreError(err)
 		}
 		return map[string]any{"effort": ss.Effort()}, nil
+
+	case "session.setProfile":
+		var pp struct {
+			SessionID string `json:"sessionId"`
+			Profile   string `json:"profile"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &pp); rpcErr != nil {
+			return nil, rpcErr
+		}
+		if pp.SessionID == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		}
+		if err := c.manager.SetProfile(c.id, pp.SessionID, pp.Profile); err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{"profile": pp.Profile}, nil
 
 	case "session.rename":
 		var p sessionRename

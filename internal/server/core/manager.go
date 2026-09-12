@@ -8,8 +8,10 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
+	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
+	"strings"
 )
 
 // ResolveFunc resolves a (provider, model) pair — either may be empty for the
@@ -27,6 +29,10 @@ type Options struct {
 	CompactionSettings compaction.Settings
 	// DefaultEffort is used for sessions created without an explicit effort.
 	DefaultEffort llm.Effort
+	// NoPlugins disables plugins.json loading.
+	NoPlugins bool
+	// DefaultProfile pins a profile for every session (fail-fast unknown).
+	DefaultProfile string
 }
 
 // Manager owns the set of live server sessions. All methods are safe for
@@ -51,6 +57,7 @@ type CreateParams struct {
 	Provider string
 	Model    string
 	Effort   llm.Effort
+	Profile  string
 }
 
 // Create starts a fresh persisted session owned by connID.
@@ -71,11 +78,25 @@ func (m *Manager) Create(connID string, p CreateParams) (*ServerSession, error) 
 	if err != nil {
 		return nil, err
 	}
+	prof := p.Profile
+	if prof == "" {
+		prof = m.opts.DefaultProfile
+	}
+	if prof != "" {
+		b := plugin.Load(cwd, m.opts.NoPlugins)
+		if b.Profile(prof) == nil {
+			return nil, fmt.Errorf("unknown profile %q (available: %s)", prof, strings.Join(b.ProfileNames(), ", "))
+		}
+	}
 	sess, err := session.Create(cwd)
 	if err != nil {
 		return nil, err
 	}
-	ss := m.wrap(sess, provider, model, cwd, effort)
+	ss, err := m.wrap(sess, provider, model, cwd, effort, p.Profile)
+	if err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
 	if err := ss.claim(connID); err != nil { // cannot fail on a fresh session
 		ss.close()
 		return nil, err
@@ -118,7 +139,11 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 	if cwd == "" {
 		cwd = m.opts.DefaultCwd
 	}
-	ss := m.wrap(sess, provider, model, cwd, effort)
+	ss, err := m.wrap(sess, provider, model, cwd, effort)
+	if err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
 
 	m.mu.Lock()
 	// Another connection may have opened the same session concurrently; keep
@@ -140,9 +165,38 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 	return ss, nil
 }
 
-// wrap builds the ServerSession over an open session file.
-func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort) *ServerSession {
+// wrap builds the ServerSession over an open session file. An Apply failure
+// (unknown profile, bad deny regex, invalid effort) is returned so callers
+// fail fast instead of silently starting the session without the profile.
+func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort, profile ...string) (*ServerSession, error) {
 	registry := tools.DefaultRegistry(cwd)
+	bundle := plugin.Load(cwd, m.opts.NoPlugins)
+	sessID := ""
+	if sess != nil {
+		sessID = sess.ID()
+	}
+	for _, st := range plugin.ShellTools(bundle.Tools, cwd, sessID) {
+		registry.Add(st)
+	}
+	basePrompt := agent.BuildSystemPrompt(registry, cwd)
+	systemPrompt := basePrompt
+	want := m.opts.DefaultProfile
+	if len(profile) > 0 && profile[0] != "" {
+		want = profile[0]
+	}
+	if want != "" {
+		applied, err := plugin.Apply(bundle, registry, basePrompt, cwd, want)
+		if err != nil {
+			return nil, err
+		}
+		if applied.Registry != nil {
+			registry = applied.Registry
+			systemPrompt = applied.SystemPrompt
+		}
+		if applied.Effort != "" {
+			effort = applied.Effort
+		}
+	}
 	if sess != nil {
 		model.SessionID = sess.ID()
 	}
@@ -150,11 +204,11 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		Provider:           provider,
 		Model:              model,
 		Registry:           registry,
-		SystemPrompt:       agent.BuildSystemPrompt(registry, cwd),
+		SystemPrompt:       systemPrompt,
 		CompactionSettings: m.opts.CompactionSettings,
 		Effort:             effort,
 	}
-	return newServerSession(m.ctx, sess, cfg, model.Provider+"/"+model.ID, cwd)
+	return newServerSession(m.ctx, sess, cfg, model.Provider+"/"+model.ID, cwd), nil
 }
 
 // SetEffort applies a reasoning effort to subsequent runs on an owned session.
@@ -168,6 +222,49 @@ func (m *Manager) SetEffort(connID, sessionID string, effort llm.Effort) error {
 		return err
 	}
 	return ss.SetEffort(effort)
+}
+
+ 	// SetProfile applies a plugin profile (or resets with "" / "reset") on an
+// owned session: filtered registry + rebuilt prompt + effort override.
+// The switch is atomic (single ServerSession lock hold) so a concurrent
+// Prompt cannot observe a half-applied profile. Reset also restores the
+// manager's default effort; an effort the current model does not support
+// falls back to the provider default ("") like SetModel does.
+func (m *Manager) SetProfile(connID, sessionID, profile string) error {
+	ss, err := m.Get(connID, sessionID)
+	if err != nil {
+		return err
+	}
+	if profile == "" || profile == "reset" {
+		bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
+		base := tools.DefaultRegistry(ss.Cwd())
+		for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
+			base.Add(st)
+		}
+		effort, nerr := llm.NormalizeEffort(ss.Model(), m.opts.DefaultEffort)
+		if nerr != nil {
+			effort = ""
+		}
+		return ss.SetProfile(base, agent.BuildSystemPrompt(base, ss.Cwd()), effort)
+	}
+	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
+	base := tools.DefaultRegistry(ss.Cwd())
+	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
+		base.Add(st)
+	}
+	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile)
+	if err != nil {
+		return err
+	}
+	effort := ss.Effort()
+	if applied.Effort != "" {
+		var nerr error
+		effort, nerr = llm.NormalizeEffort(ss.Model(), applied.Effort)
+		if nerr != nil {
+			effort = ""
+		}
+	}
+	return ss.SetProfile(applied.Registry, applied.SystemPrompt, effort)
 }
 
 // Get returns the live session with the given id if connID may act on it.

@@ -19,6 +19,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/images"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
+	"github.com/AlvinPlayz23/myagent/internal/plugin"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
@@ -441,6 +443,16 @@ type model struct {
 	savePromptStyle    func(promptStyle) error
 	exportSession      func(export.Format, string, bool) (string, error)
 
+	// Plugin system (PLUGINS.md): bundle loaded at startup, active profile,
+	// pinned default profile, and the unfiltered base config for reset.
+	pluginBundle    *plugin.Bundle
+	activeProfile   string
+	defaultProfile  string
+	baseRegistry    *tools.Registry
+	basePrompt      string
+	baseEffort      llm.Effort
+	pluginHelpExtra string
+
 	// usage accumulates across the session for the footer.
 	usage types.Usage
 }
@@ -692,6 +704,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusMsg == msg.status {
 			m.statusMsg = ""
 		}
+		return m, nil
+
+	case pluginRunResultMsg:
+		if msg.isErr {
+			m.transcript.addErrorText(msg.text)
+		} else {
+			m.transcript.addNotice(msg.text)
+		}
+		m.refreshViewport()
 		return m, nil
 	}
 
@@ -1168,6 +1189,19 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if mouse.Button != tea.MouseLeft {
 		return m, nil
 	}
+	// Ctrl+click opens bare URLs in assistant blocks. A Ctrl+click never
+	// starts a text selection, whether or not it lands on a link.
+	if mouse.Mouse().Mod&tea.ModCtrl != 0 {
+		point, ok := m.transcriptPoint(mouse.X, mouse.Y)
+		if !ok || m.showWelcome() {
+			m.cancelSelection()
+			return m, nil
+		}
+		if m.ctrlClickURL(point) {
+			return m, clearStatusCmd(m.statusMsg)
+		}
+		return m, nil
+	}
 	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
 	if !ok || m.showWelcome() {
 		m.cancelSelection()
@@ -1346,7 +1380,7 @@ func (m *model) navigatePromptHistory(direction int) bool {
 }
 
 func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
-	cmd, err := parseSlashCommand(text)
+	cmd, err := parseSlashCommandWithPlugins(text, m.pluginBundle)
 	if err != nil {
 		m.statusMsg = err.Error()
 		return m, nil
@@ -1356,9 +1390,13 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if mod, c, handled := m.dispatchPluginCommand(cmd); handled {
+		return mod, c
+	}
+
 	switch cmd.kind {
 	case commandHelp:
-		m.transcript.addNotice(helpText)
+		m.transcript.addNotice(helpText + m.pluginHelpExtra)
 		m.refreshViewport()
 	case commandClear:
 		m.runner.discardEvents()
@@ -2596,7 +2634,11 @@ func (m *model) statusLine() string {
 // effort is visible at a glance; empty effort renders as "default".
 func (m *model) footer() string {
 	left := m.th.footer.Render(collapseHome(m.cwd))
-	right := m.th.footerRight.Render(m.modelID + " • " + m.effortLabel())
+	label := m.modelID + " • " + m.effortLabel()
+	if m.activeProfile != "" {
+		label += " • profile:" + m.activeProfile
+	}
+	right := m.th.footerRight.Render(label)
 	line1 := padBetween(left, right, m.width)
 
 	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
