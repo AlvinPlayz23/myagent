@@ -209,7 +209,7 @@ func (p *OpenAIProvider) runResponses(ctx context.Context, model Model, req Requ
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 4000))
 		raw := strings.TrimSpace(buf.String())
 		hint := ClassifyZenError(resp.StatusCode, raw, model.ID, "/responses")
-		emitError(fmt.Errorf("%d: %s%s", resp.StatusCode, raw, hint), isRetryableStatus(resp.StatusCode))
+		emitError(fmt.Errorf("%d: %s%s", resp.StatusCode, raw, hint), isRetryableStatus(resp.StatusCode) && !IsZenFreeTierLimit(resp.StatusCode, raw, model.ID, model.BaseURL))
 		return
 	}
 

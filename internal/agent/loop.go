@@ -64,16 +64,33 @@ func (l *Loop) Messages() []types.Message { return l.messages }
 func (l *Loop) Run(ctx context.Context, prompts []types.Message) ([]types.Message, error) {
 	var produced []types.Message
 
-	for i := range prompts {
-		l.messages = append(l.messages, prompts[i])
-		produced = append(produced, prompts[i])
-	}
+	// Heal interruption damage from a prior aborted run before the next
+	// provider request: normalize legacy abort texts and strip unpairable
+	// partial calls in place, and repair non-tail dangling pairs in memory.
+	// Tail repairs (insertion at the end of history) are emitted below so
+	// they persist; middle repairs cannot be represented as append-only
+	// session writes, so they stay in-memory and are re-applied on resume.
+	l.normalizeAbortHistory()
+	l.repairDanglingMiddle()
 
 	if err := l.emit(ctx, types.AgentEvent{Type: types.EventAgentStart}); err != nil {
 		return produced, err
 	}
 	if err := l.emit(ctx, types.AgentEvent{Type: types.EventTurnStart}); err != nil {
 		return produced, err
+	}
+
+	// Synthesize results for tool calls dangling at the tail of history
+	// (abort during streaming, or the emit race). Emitted before the new
+	// prompts so persisted order stays [assistant, results, user] — the
+	// order strict providers require.
+	if err := l.repairDanglingTail(ctx, &produced); err != nil {
+		return produced, err
+	}
+
+	for i := range prompts {
+		l.messages = append(l.messages, prompts[i])
+		produced = append(produced, prompts[i])
 	}
 	for i := range prompts {
 		p := prompts[i]
@@ -298,7 +315,7 @@ func (l *Loop) executeToolCalls(ctx context.Context, toolCalls []types.ContentBl
 		var result *types.ToolResult
 		var isError bool
 		if abortedBeforeStart {
-			result, isError = types.TextResult("Operation aborted before execution", nil), true
+			result, isError = types.TextResult(InterruptedText, nil), true
 		} else {
 			result, isError = l.runTool(ctx, tc)
 		}
@@ -341,7 +358,7 @@ func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (result *type
 		return types.TextResult(fmt.Sprintf("Tool %s not found", tc.Name), nil), true
 	}
 	if ctx.Err() != nil {
-		return types.TextResult("Operation aborted", nil), true
+		return types.TextResult(InterruptedText, nil), true
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -351,6 +368,13 @@ func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (result *type
 	}()
 	result, err := tool.Execute(ctx, tc.ID, tc.Arguments)
 	if err != nil {
+		// Aborted mid-execution: the tool returns the cancelled context
+		// (bash keeps partial output + status, others return the raw ctx
+		// error). Show the model interruption text instead - bash-style
+		// tools keep their partial output with only the status swapped.
+		if ctx.Err() != nil || isAbortText(err.Error()) {
+			return types.TextResult(interruptedTextForError(err.Error()), nil), true
+		}
 		return types.TextResult(err.Error(), nil), true
 	}
 	if result == nil {

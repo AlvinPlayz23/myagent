@@ -224,7 +224,7 @@ func (p *OpenAIProvider) run(ctx context.Context, model Model, req Request, out 
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 4000))
 		raw := strings.TrimSpace(buf.String())
 		hint := ClassifyZenError(resp.StatusCode, raw, model.ID, "/chat/completions")
-		emitError(fmt.Errorf("%d: %s%s", resp.StatusCode, raw, hint), isRetryableStatus(resp.StatusCode))
+		emitError(fmt.Errorf("%d: %s%s", resp.StatusCode, raw, hint), isRetryableStatus(resp.StatusCode) && !IsZenFreeTierLimit(resp.StatusCode, raw, model.ID, model.BaseURL))
 		return
 	}
 

@@ -108,6 +108,16 @@ func TestClassifyZenError(t *testing.T) {
 	}
 }
 
+func TestIsZenFreeTierLimit(t *testing.T) {
+	body := `{"type":"error","error":{"type":"FreeUsageLimitError","message":"requires an OpenCode client session"}}`
+	if !IsZenFreeTierLimit(http.StatusTooManyRequests, body, "muse-spark-1.3-contributor-free", "https://opencode.ai/zen/v1") {
+		t.Fatal("free-tier policy response should not be retried")
+	}
+	if IsZenFreeTierLimit(http.StatusTooManyRequests, `{"error":"temporary rate limit"}`, "muse-spark-1.3-contributor-free", "https://opencode.ai/zen/v1") {
+		t.Fatal("ordinary rate limiting should remain retryable")
+	}
+}
+
 func TestBuildRequestBodyClampsContributorMax(t *testing.T) {
 	body, err := buildRequestBody(Model{ID: "muse-spark-1.3-contributor-free"}, Request{Effort: EffortMax})
 	if err != nil {

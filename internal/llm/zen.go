@@ -7,7 +7,7 @@ import (
 )
 
 // Client identity sent to Zen for routing/attribution. This is an honest
-// client name, never a spoofed OpenCode User-Agent.
+// client name, never a spoofed OpenCode or pi User-Agent.
 const (
 	zenClientName = "myagent"
 	zenUserAgent  = "myagent/0.1.0"
@@ -62,6 +62,19 @@ func ClassifyZenError(status int, body, modelID, endpoint string) string {
 	default:
 		return ""
 	}
+}
+
+// IsZenFreeTierLimit reports a quota/policy rejection that cannot be fixed by
+// immediately repeating the same request. Zen currently uses HTTP 429 for
+// both ordinary throttling and this free-tier policy response.
+func IsZenFreeTierLimit(status int, body, modelID, baseURL string) bool {
+	if status != http.StatusTooManyRequests || !IsZenHost(baseURL) || !IsMuseSparkModel(modelID) {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "freeusagelimiterror") ||
+		strings.Contains(lower, "requires an opencode client session") ||
+		strings.Contains(lower, "can only be used in opencode")
 }
 
 func quoteModel(modelID string) string {

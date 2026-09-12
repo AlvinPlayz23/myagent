@@ -14,7 +14,7 @@ var toolSnippets = map[string]string{
 	"read":  "Read file contents (supports offset/limit for large files)",
 	"write": "Create or overwrite a file",
 	"edit":  "Edit a file using exact text replacement",
-	"bash":  "Execute bash commands (ls, grep, find, etc.)",
+	"bash":  "Execute shell commands (ls, rg, find, etc.). For code search use rg, not bare grep -r.",
 }
 
 // BuildSystemPrompt constructs the system prompt for a session. Adapted from pi
@@ -38,6 +38,9 @@ func BuildSystemPrompt(reg *tools.Registry, cwd string) string {
 
 	guidelines := strings.Join([]string{
 		"- Use bash for file operations like ls, rg, find",
+		"- For code search prefer `rg -n \"pattern\" -g \"*.go\" .` — it respects .gitignore and skips dependency/build/VCS dirs automatically. Example: `rg -ni \"abort|cancel\" -g \"*.go\" .`",
+		"- Never run bare `grep -r <pattern> .`. If you must use grep, always exclude dependency/build/VCS dirs, e.g. `--exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=.git --exclude-dir=out --exclude-dir=dist --exclude-dir=target -I`",
+		"- Scope searches to a subdir + glob where possible, pipe to `head -n 50`, set `timeout` for large trees",
 		"- Be concise in your responses",
 		"- Show file paths clearly when working with files",
 	}, "\n")
