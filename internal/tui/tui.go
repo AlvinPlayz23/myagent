@@ -85,6 +85,18 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 			return nil
 		}
+		if parsed, err := llm.ParseEffort(persistedConfig.DefaultEffort); err == nil {
+			m.defaultEffort = parsed
+		}
+		m.saveDefaultEffort = func(effort llm.Effort) error {
+			previous := persistedConfig.DefaultEffort
+			persistedConfig.DefaultEffort = string(effort)
+			if err := config.Save(persistedConfig); err != nil {
+				persistedConfig.DefaultEffort = previous
+				return err
+			}
+			return nil
+		}
 	}
 	m.syncComposerStyle()
 	m.setTerminalTitle = terminal.SetTitle

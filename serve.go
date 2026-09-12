@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
@@ -54,6 +55,7 @@ func runServe(argv []string) error {
 	if err != nil {
 		return err
 	}
+	fromFlag := effort != ""
 
 	// Serve mode is non-interactive: refuse to run without provider setup,
 	// same policy as print mode.
@@ -67,6 +69,13 @@ func runServe(argv []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	// --effort wins; otherwise use the persisted myagent default from /effort.
+	if !fromFlag && strings.TrimSpace(cfg.DefaultEffort) != "" {
+		effort, err = llm.ParseEffort(cfg.DefaultEffort)
+		if err != nil {
+			return fmt.Errorf("default_effort: %w", err)
+		}
 	}
 	dir, err := config.Dir()
 	if err != nil {

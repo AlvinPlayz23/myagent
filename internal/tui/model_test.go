@@ -69,6 +69,42 @@ func TestEffortPickerKeepsSelectionVisibleOnShortTerminals(t *testing.T) {
 	}
 }
 
+func TestEffortPickerMarksMyagentDefault(t *testing.T) {
+	newPicker := func(current, def llm.Effort) *model {
+		q := newMsgQueue()
+		r := newRunner(agent.Config{Effort: current}, q, nil)
+		m := newModel(nil, r, q, newTheme(), newMDRenderer(), "model", "")
+		m.saveDefaultEffort = func(llm.Effort) error { return nil }
+		m.defaultEffort = def
+		m.onResize(80, 24)
+		m.effort.open(current)
+		return m
+	}
+
+	// Saved default differs from the live effort: both rows marked.
+	m := newPicker(llm.EffortHigh, llm.EffortLow)
+	panel := m.renderEffortPicker()
+	if !strings.Contains(panel, "High") || !strings.Contains(panel, "(current)") {
+		t.Fatalf("picker missing live marker: %q", panel)
+	}
+	lowLine := ""
+	for _, line := range strings.Split(panel, "\n") {
+		if strings.Contains(line, "Low") {
+			lowLine = line
+		}
+	}
+	if !strings.Contains(lowLine, "(myagent default)") || strings.Contains(lowLine, "(current)") {
+		t.Fatalf("Low row = %q, want myagent-default marker only", lowLine)
+	}
+
+	// Saved default equals the live effort: one row carries both markers.
+	m = newPicker(llm.EffortMedium, llm.EffortMedium)
+	panel = m.renderEffortPicker()
+	if !strings.Contains(panel, "(current) · myagent default") {
+		t.Fatalf("picker missing combined marker: %q", panel)
+	}
+}
+
 func TestFollowUpConsumptionClearsQueuedStatus(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.working = true

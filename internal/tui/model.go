@@ -441,6 +441,8 @@ type model struct {
 	configureProvider  func(modelcatalog.Provider, string) error
 	saveWelcomeStyle   func(welcomeStyle) error
 	savePromptStyle    func(promptStyle) error
+	saveDefaultEffort  func(llm.Effort) error
+	defaultEffort     llm.Effort
 	exportSession      func(export.Format, string, bool) (string, error)
 
 	// Plugin system (PLUGINS.md): bundle loaded at startup, active profile,
@@ -1737,7 +1739,7 @@ func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
 		return m.applyEffort(effort)
 	}
 	m.effort.open(m.runner.cfg.Effort)
-	m.statusMsg = "Choose reasoning effort."
+	m.statusMsg = "Choose reasoning effort — saved as the myagent default."
 	m.updateLayout()
 	return m, nil
 }
@@ -1776,10 +1778,22 @@ func (m *model) applyEffort(effort llm.Effort) (tea.Model, tea.Cmd) {
 	}
 	m.runner.setEffort(effort)
 	m.effort.close()
+	// Persist the choice as the myagent default so it survives restarts,
+	// mirroring how /model persists DefaultModel. Selecting the provider
+	// default clears the saved value.
+	if m.saveDefaultEffort != nil {
+		if err := m.saveDefaultEffort(effort); err != nil {
+			m.statusMsg = "Could not save default effort: " + err.Error()
+			m.updateLayout()
+			return m, nil
+		}
+	}
+	m.defaultEffort = effort
+	m.baseEffort = effort
 	if effort == "" {
-		m.statusMsg = "Reasoning effort reset to provider default."
+		m.statusMsg = "Reasoning effort reset to provider default (saved as myagent default)."
 	} else {
-		m.statusMsg = "Reasoning effort set to " + string(effort) + "."
+		m.statusMsg = "Reasoning effort set to " + string(effort) + " (saved as myagent default)."
 	}
 	m.updateLayout()
 	return m, nil
@@ -2437,22 +2451,38 @@ func (m *model) renderEffortPicker() string {
 	if height == 0 {
 		return ""
 	}
-	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Reasoning effort — ↑/↓ select, enter apply, esc cancel")}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Reasoning effort — ↑/↓ select, enter saves as myagent default, esc cancel")}
 	count := min(height-1, len(effortChoices))
 	start := max(0, m.effort.sel-count+1)
 	if maxStart := len(effortChoices) - count; start > maxStart {
 		start = maxStart
 	}
 	current := m.runner.cfg.Effort
+	def := m.defaultEffort
+	// Fall back to the live config when the picker was constructed without
+	// the persisted default wired (e.g. in tests).
+	if m.saveDefaultEffort == nil {
+		def = current
+	}
 	for i := start; i < start+count; i++ {
 		choice := effortChoices[i]
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.effort.sel {
 			marker, style = "> ", m.th.cmdPickerSel
 		}
+		// A row can be the live effort, the saved myagent default, or
+		// both at once (including the "Default" row when nothing is
+		// saved and the provider default is live).
+		isCurrent := choice.effort == current
+		isDefault := choice.effort == def
 		selected := ""
-		if choice.effort == current {
+		switch {
+		case isCurrent && isDefault:
+			selected = "  (current) · myagent default"
+		case isCurrent:
 			selected = "  (current)"
+		case isDefault:
+			selected = "  (myagent default)"
 		}
 		line := fmt.Sprintf("%s%-9s %s%s", marker, choice.label, choice.description, selected)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))

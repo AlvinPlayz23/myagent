@@ -161,10 +161,26 @@ func run(argv []string) error {
 		}
 		catalog = modelcatalog.New(dir)
 	}
+	// --effort wins; otherwise fall back to the persisted myagent default
+	// from /effort so the choice survives restarts.
+	fromFlag := effort != ""
+	if !fromFlag && strings.TrimSpace(cfg.DefaultEffort) != "" {
+		effort, err = llm.ParseEffort(cfg.DefaultEffort)
+		if err != nil {
+			return fmt.Errorf("default_effort: %w", err)
+		}
+	}
 	model = catalog.Enrich(model)
 	effort, err = llm.NormalizeEffort(model, effort)
 	if err != nil {
-		return err
+		if !fromFlag {
+			// Saved default may not suit the current model (e.g. switched
+			// to a non-reasoning model via /model). Fall back to the
+			// provider default instead of refusing to start.
+			effort = ""
+		} else {
+			return err
+		}
 	}
 	modelID := model.Provider + "/" + model.ID
 

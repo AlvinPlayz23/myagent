@@ -266,3 +266,58 @@ func TestSeedTranscriptPreservesThinkingOrder(t *testing.T) {
 		t.Fatalf("seeded thinking should be complete:\n%s", out)
 	}
 }
+
+func TestThinkTokensEstimatesCharsPerToken(t *testing.T) {
+	if got := thinkTokens(""); got != 0 {
+		t.Fatalf("thinkTokens empty got %d want 0", got)
+	}
+	if got := thinkTokens("abcd"); got != 1 {
+		t.Fatalf("thinkTokens 4 chars got %d want 1", got)
+	}
+	if got := thinkTokens("abcde"); got != 2 {
+		t.Fatalf("thinkTokens 5 chars got %d want 2", got)
+	}
+}
+
+func TestThinkingStreamingHeaderShowsTokens(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginThinking()
+	plain := ansi.Strip(tr.render(80))
+	if strings.Contains(plain, "tokens") || strings.Contains(plain, "token") {
+		t.Fatal("empty streaming header should not show tokens")
+	}
+	if !strings.Contains(plain, "✻ Thinking…") {
+		t.Fatal("empty streaming header missing Thinking")
+	}
+	tr.appendThinkingDelta("musing along, reasoning about the task at hand")
+	plain = ansi.Strip(tr.render(80))
+	want := "✻ Thinking… (12 tokens)"
+	if !strings.Contains(plain, want) {
+		t.Fatal("streaming header missing token count")
+	}
+}
+
+func TestThinkingCompletedHeaderHidesTokens(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginThinking()
+	tr.appendThinkingDelta("musing along, reasoning about the task at hand")
+	tr.endThinking()
+	plain := ansi.Strip(tr.render(80))
+	if strings.Contains(plain, "tokens") || strings.Contains(plain, "(1 token)") {
+		t.Fatal("completed header should not show tokens")
+	}
+	if !strings.Contains(plain, "✻ Thought") {
+		t.Fatal("completed header missing Thought")
+	}
+}
+
+func TestThinkingSingularToken(t *testing.T) {
+	tr := newThinkingTestTranscript()
+	tr.beginThinking()
+	tr.appendThinkingDelta("hi")
+	plain := ansi.Strip(tr.render(80))
+	want := "✻ Thinking… (1 token)"
+	if !strings.Contains(plain, want) {
+		t.Fatal("want singular 1 token")
+	}
+}

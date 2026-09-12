@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 	"github.com/muesli/reflow/wordwrap"
@@ -373,15 +374,37 @@ func (t *transcript) renderTool(b *block, width int) string {
 	return sb.String()
 }
 
+// thinkTokens estimates reasoning tokens for the live thinking header using
+// the same chars-per-token heuristic as context estimation (see
+// internal/agent/compaction EstimateMessageTokens). It is display-only:
+// providers do not report per-delta usage while streaming, so we approximate
+// from the accumulated thinking text.
+func thinkTokens(text string) int {
+	n := utf8.RuneCountInString(text)
+	if n == 0 {
+		return 0
+	}
+	return (n + 3) / 4
+}
+
 // renderThinking renders a collapsible thinking block: an accent header that
-// reads "Thinking…" while streaming and "Thought [for Ns]" once complete,
-// plus a muted body preview governed by the global ctrl+o expand toggle.
+// reads "Thinking… (N tokens)" while streaming and "Thought [for Ns]"
+// once complete, plus a muted body preview governed by the global ctrl+o
+// expand toggle. The token count is streaming-only and never shown after
+// completion.
 func (t *transcript) renderThinking(b *block, width int) string {
 	header := "✻ Thought"
 	headerStyle := t.th.toolSuccess
 	if !b.done {
 		header = "✻ Thinking…"
 		headerStyle = t.th.accent
+		if n := thinkTokens(b.text); n > 0 {
+			unit := "tokens"
+			if n == 1 {
+				unit = "token"
+			}
+			header = fmt.Sprintf("%s (%d %s)", header, n, unit)
+		}
 	} else if b.thinkTimed {
 		header = "✻ Thought for " + formatThinkDur(b.thinkDur)
 	}

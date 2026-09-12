@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +16,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-func TestParseSlashCommand(t *testing.T) {
-	tests := []struct {
+func TestParseSlashCommand(t *testing.T) {	tests := []struct {
 		input string
 		kind  commandKind
 		arg   string
@@ -96,6 +96,78 @@ func TestEffortCommandDirectSetAndDefault(t *testing.T) {
 	}
 	if !strings.Contains(m.statusMsg, "provider default") {
 		t.Fatalf("status = %q, want provider default", m.statusMsg)
+	}
+}
+
+// errTestEffortSave stubs a config.Save failure for the persistence tests.
+var errTestEffortSave = errors.New("test save failure")
+
+func TestEffortPersistsAsMyagentDefault(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	var saved llm.Effort
+	saves := 0
+	m.saveDefaultEffort = func(effort llm.Effort) error {
+		saved = effort
+		saves++
+		return nil
+	}
+
+	m.runCommand("/effort high")
+	if r.cfg.Effort != llm.EffortHigh {
+		t.Fatalf("session effort = %q, want high", r.cfg.Effort)
+	}
+	if saves != 1 || saved != llm.EffortHigh {
+		t.Fatalf("persisted effort = %q (%d saves), want high in 1 save", saved, saves)
+	}
+	if m.defaultEffort != llm.EffortHigh || m.baseEffort != llm.EffortHigh {
+		t.Fatalf("default/base effort = %q/%q, want high/high", m.defaultEffort, m.baseEffort)
+	}
+	if !strings.Contains(m.statusMsg, "saved as myagent default") {
+		t.Fatalf("status = %q, want persistence confirmation", m.statusMsg)
+	}
+}
+
+func TestEffortDefaultClearsPersistedDefault(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{Effort: llm.EffortHigh}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.defaultEffort = llm.EffortHigh
+	m.baseEffort = llm.EffortHigh
+	var saved llm.Effort = llm.EffortHigh
+	m.saveDefaultEffort = func(effort llm.Effort) error {
+		saved = effort
+		return nil
+	}
+
+	m.runCommand("/effort default")
+	if r.cfg.Effort != "" {
+		t.Fatalf("session effort = %q, want unspecified", r.cfg.Effort)
+	}
+	if saved != "" {
+		t.Fatalf("persisted effort = %q, want cleared", saved)
+	}
+	if m.defaultEffort != "" || m.baseEffort != "" {
+		t.Fatalf("default/base effort = %q/%q, want cleared", m.defaultEffort, m.baseEffort)
+	}
+}
+
+func TestEffortSaveFailureKeepsSessionEffort(t *testing.T) {
+	q := newMsgQueue()
+	r := newRunner(agent.Config{}, q, nil)
+	m := newModel(context.Background(), r, q, newTheme(), newMDRenderer(), "model", "")
+	m.saveDefaultEffort = func(llm.Effort) error { return errTestEffortSave }
+
+	m.runCommand("/effort low")
+	if r.cfg.Effort != llm.EffortLow {
+		t.Fatalf("session effort = %q, want low despite save failure", r.cfg.Effort)
+	}
+	if m.defaultEffort != "" || m.baseEffort != "" {
+		t.Fatalf("default/base effort = %q/%q, want untouched on save failure", m.defaultEffort, m.baseEffort)
+	}
+	if !strings.Contains(m.statusMsg, "Could not save default effort") {
+		t.Fatalf("status = %q, want save error", m.statusMsg)
 	}
 }
 

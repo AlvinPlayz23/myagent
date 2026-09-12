@@ -49,7 +49,7 @@ var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
 	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
 	{name: "/models", usage: "/models [provider/model-id]", description: "Alias of /model; live-discovered models included", kind: commandModel, requiresArg: true, hidden: true},
-	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort", kind: commandEffort, requiresArg: true},
+	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort (saved as myagent default)", kind: commandEffort, requiresArg: true},
 	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
 	{name: "/customize", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
 	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
