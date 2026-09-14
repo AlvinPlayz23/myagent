@@ -220,7 +220,7 @@ func refreshGitBranch(cwd string) {
 func (m *model) locationText() string {
 	var sb strings.Builder
 	if branch := welcomeGitBranch(m.cwd); branch != "" {
-		sb.WriteString(m.th.accentUser.Render("⎇ "+branch))
+		sb.WriteString(m.th.accentUser.Render("⎇ " + branch))
 		sb.WriteString(" ")
 	}
 	sb.WriteString(m.th.muted.Render(collapseHome(m.cwd)))
@@ -292,7 +292,9 @@ func (m *model) renderWelcomeMenu() string {
 }
 
 // welcomeLayout accumulates content lines while recording the menu's
-// [start, end) row range for click/hover hit-testing.
+// [start, end) row range for click/hover hit-testing. The stored range is in
+// screen coordinates, matching Bubble Tea mouse events; transcriptPoint
+// converts those events back to viewport-content rows when dispatching.
 type welcomeLayout struct {
 	lines        []string
 	menuStart    int
@@ -319,7 +321,8 @@ func (l *welcomeLayout) addMenu(m *model) {
 
 func (l *welcomeLayout) record(m *model) {
 	if l.menuRecorded {
-		m.welcomeMenu[0], m.welcomeMenu[1] = l.menuStart, l.menuEnd
+		m.welcomeMenu[0] = l.menuStart + m.layout.scrollback.Y
+		m.welcomeMenu[1] = l.menuEnd + m.layout.scrollback.Y
 	} else {
 		m.welcomeMenu[0], m.welcomeMenu[1] = -1, -1
 	}
@@ -340,6 +343,14 @@ func (m *model) renderDefaultWelcome() string {
 		return centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
 	}
 	vh := m.welcomeViewportHeight()
+	if m.width >= welcomeHeroMinWidth && vh >= welcomeHeroMinHeight {
+		return m.renderWelcomeHero()
+	}
+	// The full menu needs twelve rows including its location line. Do not let
+	// the viewport scroll the title away when the terminal cannot fit it.
+	if vh < 12 {
+		return m.renderCompactWelcome()
+	}
 	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
 	hint := centerLine(m.th.muted.Render("Type a prompt to begin · /help for commands"), m.width)
@@ -368,6 +379,18 @@ func (m *model) renderDefaultWelcome() string {
 	l.add(location)
 	l.record(m)
 	return strings.Join(l.lines, "\n")
+}
+
+func (m *model) renderCompactWelcome() string {
+	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
+	hint := "Type a prompt to begin · /help for commands"
+	if m.width < 44 {
+		hint = "Type a prompt · /help for commands"
+	}
+	if m.width < 34 {
+		hint = "Type a prompt to begin"
+	}
+	return title + "\n" + centerLine(m.th.muted.Render(hint), m.width)
 }
 
 // --- myagent layout (braille tiers + hero box when wide) ---

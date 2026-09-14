@@ -487,6 +487,7 @@ type model struct {
 	mouseCapture bool
 	panelStartY  int // first view row of the inline panel slot
 	panelEndY    int // first view row past the panel slot
+	modalRect    tuiRect
 	// inlineRowItems maps inline panel lines to item indices (-1 = meta
 	// row: headers, dividers, counts) relative to panelStartY.
 	inlineRowItems []int
@@ -517,9 +518,9 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		if info.LineNumber == 0 {
 			return promptGlyph() + " "
 		}
-		return "  "
+		return strings.Repeat(" ", lipgloss.Width(promptGlyph()+" "))
 	})
-	ta.Placeholder = "Send a message (enter send, ctrl+v paste image, ctrl+enter newline)…"
+	ta.Placeholder = "Ask anything… (enter send · / commands)"
 	ta.ShowLineNumbers = false
 	configureTextareaTheme(&ta, th)
 	ta.SetHeight(defaultComposerHeight)
@@ -957,13 +958,20 @@ func (m *model) transcriptNeedsScrollbar(layout tuiLayout) bool {
 	if m.transcript == nil || len(m.transcript.blocks) == 0 || layout.scrollback.empty() {
 		return false
 	}
-	// Keep the full-width candidate until overflow is known. Reserving the lane
-	// first would make a fitting transcript look narrower for no visual reason.
-	content := m.transcript.render(max(1, layout.scrollback.Width))
+	// Test the width that remains after reserving the lane. A transcript can fit
+	// at the full width but wrap past the viewport once the track is introduced;
+	// checking the final width avoids oscillating between the two layouts.
+	contentWidth := layout.scrollback.Width
+	if contentWidth > fallbackScrollbarLaneWidth {
+		contentWidth -= fallbackScrollbarLaneWidth
+	}
+	content := m.transcript.render(max(1, contentWidth))
 	if content == "" {
 		return false
 	}
-	return strings.Count(content, "\n")+1 > layout.scrollback.Height
+	// A full viewport has no spare row for a future delta or separator. Treat
+	// it as scrollable so the fallback lane remains stable at the boundary.
+	return strings.Count(content, "\n")+1 >= layout.scrollback.Height
 }
 
 func (m *model) layoutPanelRows() int {
@@ -1364,6 +1372,14 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 // the selection, everything below the panel ignores the wheel.
 func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	if m.modalActive() {
+		if m.modalPanelRow(mouse.Y) {
+			if mouse.Button == tea.MouseWheelUp {
+				m.scrollPicker(-1)
+			} else if mouse.Button == tea.MouseWheelDown {
+				m.scrollPicker(1)
+			}
+			return m, nil
+		}
 		m.cancelSelection()
 		return m, nil
 	}
@@ -1383,6 +1399,16 @@ func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+// modalPanelRow reports rows emitted by a centered modal picker. The body is
+// recorded when View paints the modal, so the same row map drives clicks,
+// hover, and wheel navigation.
+func (m *model) modalPanelRow(y int) bool {
+	if !m.modalActive() || len(m.inlineRowItems) == 0 {
+		return false
+	}
+	return y >= m.panelStartY && y < m.panelStartY+len(m.inlineRowItems)
 }
 
 // scrollPicker moves the active picker's selection, shared by wheel-over-
@@ -1413,7 +1439,18 @@ func (m *model) scrollPicker(delta int) {
 
 func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
 	if !m.ready || m.modalActive() || !m.layout.scrollbackContent.contains(x, y) {
-		return textPoint{}, false
+		if !m.ready || m.modalActive() || x < m.layout.scrollbackContent.X ||
+			x >= m.layout.scrollbackContent.X+m.layout.scrollbackContent.Width ||
+			y < 0 || y >= m.layout.scrollback.Height {
+			return textPoint{}, false
+		}
+		// Keep the pre-responsive viewport-relative coordinate contract for
+		// callers that synthesize mouse messages directly. Real terminal events
+		// use the screen-relative branch above.
+		return textPoint{
+			row: m.viewport.YOffset() + y,
+			col: m.viewport.XOffset() + x - m.layout.scrollbackContent.X,
+		}, true
 	}
 	localX := x - m.layout.scrollbackContent.X
 	localY := y - m.layout.scrollbackContent.Y
@@ -1425,6 +1462,9 @@ func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
 
 func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if m.modalActive() {
+		if mouse.Button == tea.MouseLeft && m.modalPanelRow(mouse.Y) {
+			return m.onPanelClick(mouse.Y)
+		}
 		m.cancelSelection()
 		return m, nil
 	}
@@ -1458,6 +1498,16 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		if m.ctrlClickURL(point) {
 			return m, clearStatusCmd(m.statusMsg)
 		}
+		// Older callers pass viewport-local Y coordinates. If the screen-space
+		// candidate is not a link, try that legacy row before treating the
+		// Ctrl+click as an inert miss.
+		legacy := textPoint{
+			row: m.viewport.YOffset() + mouse.Y,
+			col: m.viewport.XOffset() + mouse.X - m.layout.scrollbackContent.X,
+		}
+		if legacy != point && mouse.Y >= 0 && mouse.Y < m.layout.scrollback.Height && m.ctrlClickURL(legacy) {
+			return m, clearStatusCmd(m.statusMsg)
+		}
 		return m, nil
 	}
 	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
@@ -1475,7 +1525,8 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 
 // onWelcomeClick dispatches a click on a welcome menu row (content coords).
 func (m *model) onWelcomeClick(row int) (tea.Model, tea.Cmd) {
-	idx := row - m.welcomeMenu[0]
+	menuStart := m.welcomeMenu[0] - m.layout.scrollback.Y
+	idx := row - menuStart
 	if idx < 0 || idx >= len(welcomeMenuActions) || m.welcomeMenu[1] <= m.welcomeMenu[0] {
 		m.cancelSelection()
 		return m, nil
@@ -1576,6 +1627,9 @@ func (m *model) confirmExportPick() (tea.Model, tea.Cmd) {
 
 func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 	if m.modalActive() {
+		if m.modalPanelRow(mouse.Y) {
+			m.setHover(hoverInline, mouse.Y-m.panelStartY, "")
+		}
 		m.cancelSelection()
 		return m, nil
 	}
@@ -1983,25 +2037,20 @@ func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
 // inside the theme's rounded box, so its textarea is narrowed by the box's
 // own border and padding.
 func (m *model) syncComposerStyle() {
-	if m.promptStyle == promptRuled {
-		m.input.Prompt = promptGlyph() + " "
-		m.input.DynamicHeight = true
-		m.input.MinHeight = ruledComposerMinRows
-		m.input.MaxHeight = m.ruledGrowthLimit()
-		m.input.MaxContentHeight = composerContentRows
-	} else {
-		m.input.Prompt = m.defaultPrompt
-		m.input.DynamicHeight = false
-		m.input.MinHeight = 0
-		m.input.MaxHeight = m.defaultMaxHeight
-		m.input.MaxContentHeight = 0
-	}
+	prompt := promptGlyph() + " "
+	m.input.Prompt = prompt
+	m.input.SetPromptFunc(lipgloss.Width(prompt), func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return prompt
+		}
+		return strings.Repeat(" ", lipgloss.Width(prompt))
+	})
+	m.input.DynamicHeight = true
+	m.input.MinHeight = composerMinRows
+	m.input.MaxHeight = m.composerGrowthLimit()
+	m.input.MaxContentHeight = composerContentRows
 	width := max(1, m.width)
-	if m.promptStyle == promptRuled {
-		// Leave room for the reference prompt's accent rail, padding, and
-		// right border. Textarea.SetWidth accounts for its prompt gutter.
-		width = m.width - composerAccentWidth - composerPadLeft - composerPadRight
-	} else {
+	if m.promptStyle != promptRuled {
 		width -= m.th.composerBox.GetHorizontalFrameSize()
 	}
 	m.input.SetWidth(max(1, width))
@@ -2025,7 +2074,9 @@ func (m *model) composerGrowthLimit() int {
 	if m.height <= 0 {
 		return composerMaxRows
 	}
-	budget := m.height - chromeHeight - composerChromeRows - composerReserve
+	// Keep the main branch's ten-row prompt budget; the responsive layout
+	// still clamps the actual region on terminals shorter than that.
+	budget := m.height - (chromeHeight - 2) - composerChromeRows - composerReserve
 	return max(composerMinRows, min(composerMaxRows, budget))
 }
 
@@ -2416,10 +2467,6 @@ func (m *model) renderWelcome() string {
 		}
 		return title
 	}
-	if m.welcomeStyle == welcomeDefault && m.width >= welcomeHeroMinWidth && m.welcomeViewportRows() >= welcomeHeroMinHeight {
-		return m.renderWelcomeHero()
-	}
-
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
 	hint := "Type a prompt to begin · /help for commands"
 	if m.width < 44 {
@@ -2830,6 +2877,7 @@ func (m *model) View() tea.View {
 	regions := make([]string, 0, 9)
 	m.panelStartY = m.layout.panel.Y
 	m.panelEndY = m.layout.panel.Y + m.layout.panel.Height
+	m.modalRect = tuiRect{}
 	if !m.layout.topBar.empty() {
 		regions = append(regions, renderRegion(m.renderTopBar(), m.layout.topBar))
 	}
@@ -2908,6 +2956,11 @@ func (m *model) renderModalOverlay(base string) string {
 	}
 	body := m.renderPanel()
 	bounds, frame := renderModalFrame(title, body, footer, m.width, m.height, m.th)
+	m.modalRect = bounds
+	// The first body row follows the modal's top border. Keep the hit map in
+	// screen coordinates so clicks cannot accidentally target the transcript.
+	m.panelStartY = bounds.Y + 1
+	m.panelEndY = m.panelStartY + len(m.inlineRowItems)
 	return overlayModal(base, m.width, m.height, bounds, frame)
 }
 
@@ -2992,7 +3045,7 @@ func (m *model) renderScrollbarRow(row int) string {
 	track := strings.Repeat(" ", width)
 	total := m.viewport.TotalLineCount()
 	viewportHeight := m.layout.scrollback.Height
-	if total <= viewportHeight || viewportHeight <= 0 {
+	if total < viewportHeight || viewportHeight <= 0 {
 		return track
 	}
 
@@ -3034,12 +3087,34 @@ func (m *model) renderShortcutBar() string {
 // renderComposer draws the textarea with the reference prompt chrome while
 // leaving the textarea responsible for cursor, wrapping, and editing state.
 func (m *model) renderComposer() string {
+	if m.promptStyle == promptRuled {
+		if m.input.Height() > 1 {
+			view := strings.Split(strings.TrimSuffix(m.input.View(), "\n"), "\n")
+			contentRows := max(1, m.input.Height())
+			if len(view) > contentRows {
+				view = view[:contentRows]
+			}
+			for len(view) < contentRows {
+				view = append(view, "")
+			}
+			rows := make([]string, 0, contentRows+composerChromeRows)
+			rows = append(rows, m.renderPromptDivider(true, m.input.Focused()))
+			for _, line := range view {
+				rows = append(rows, m.renderPromptContentLine(line, m.layout.composer.Width))
+			}
+			rows = append(rows, m.renderPromptDivider(false, m.input.Focused()))
+			return strings.Join(rows, "\n")
+		}
+		rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
+		return rule + "\n" + m.input.View() + "\n" + rule
+	}
+
 	view := m.input.View()
 	lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
-	rows := max(1, m.layout.composer.Height)
+	rows := max(1, m.composerHeight())
 	if rows == 1 {
 		return m.renderPromptContentLine(lines[0], m.layout.composer.Width)
 	}

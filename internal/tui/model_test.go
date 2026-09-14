@@ -1069,7 +1069,7 @@ func TestBoxedComposerStartsOneLineTall(t *testing.T) {
 			t.Errorf("composer row width = %d, want 60: %q", got, line)
 		}
 	}
-	for _, want := range []string{"╭", "╮", "╰", "╯", "› ", "Ask anything…"} {
+	for _, want := range []string{"╭", "╮", "╰", "╯", promptGlyph(), "Ask anything…"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("boxed composer missing %q:\n%s", want, plain)
 		}

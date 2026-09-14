@@ -51,10 +51,10 @@ type pendingTimeoutMsg struct{ key string }
 // routeViewY maps a View Y coordinate to viewport, panel slot, or below.
 // Panel bounds are recorded by View on every frame.
 func (m *model) routeViewY(y int) hitRegion {
-	if y < m.viewport.Height() {
+	if m.layout.scrollbackContent.contains(0, y) {
 		return hitViewport
 	}
-	if y >= m.panelStartY && y < m.panelEndY {
+	if m.layout.panel.contains(0, y) || m.modalPanelRow(y) {
 		return hitPanel
 	}
 	return hitBelow
@@ -84,8 +84,9 @@ func (m *model) updateHover(x, y int) {
 			break
 		}
 		if m.showWelcome() {
-			if point.row >= m.welcomeMenu[0] && point.row < m.welcomeMenu[1] {
-				kind, idx = hoverWelcome, point.row-m.welcomeMenu[0]
+			screenRow := point.row + m.layout.scrollback.Y
+			if screenRow >= m.welcomeMenu[0] && screenRow < m.welcomeMenu[1] {
+				kind, idx = hoverWelcome, screenRow-m.welcomeMenu[0]
 			}
 			break
 		}
