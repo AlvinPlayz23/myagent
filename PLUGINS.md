@@ -156,7 +156,7 @@ Pick **exactly one** of `prompt` or `run`:
 
 | Field | Required | Rules |
 | ----- | -------- | ----- |
-| `name` | yes | Must start with `/`, then the same charset as tools, max 32 chars *including* the `/` (e.g. `/poem`, `/log`). Can't collide with built-ins: `/help`, `/model`, `/models`, `/effort`, `/providers`, `/customize`, `/compact`, `/clear`, `/new`, `/resume`, `/rename`, `/export`, `/init`, `/thinking`. |
+| `name` | yes | Must start with `/`, then the same charset as tools, max 32 chars *including* the `/` (e.g. `/poem`, `/log`). Can't collide with built-ins: `/help`, `/models`, `/effort`, `/providers`, `/customize`, `/compact`, `/clear`, `/new`, `/resume`, `/rename`, `/export`, `/init`, `/thinking`. |
 | `description` | yes | Shown in `/help` and the command picker. |
 | `prompt` | either | Sent to the model as a normal user message. Can use all tools, including your plugin tools. |
 | `run` | either | Run locally, stdout shown as a local transcript block (never sent to the model). Non-zero exit shows as a red/error block. |

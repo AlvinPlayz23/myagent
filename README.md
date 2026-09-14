@@ -79,7 +79,7 @@ Run `myagent auth` to choose between two provider-management modes:
 Each custom provider stores its endpoint, API key, and preferred model; API keys
 may be left blank for local servers such as Ollama. Models discovered from a
 custom provider's `GET /models` endpoint, along with manually entered model IDs,
-are saved locally and appear in `/model` beside built-in catalog models.
+are saved locally and appear in `/models` beside built-in catalog models.
 
 ```text
 Enter default | a add | e edit | d delete | q quit
@@ -276,8 +276,8 @@ to run, or **Esc** to dismiss it.
 | -------------------- | ------------------------------------------------------- |
 | `/help`              | Show available commands and keybindings                 |
 | `/init`              | Analyse the repository and write an `AGENTS.md`         |
-| `/model`             | Open the searchable model selector for configured providers |
-| `/model <provider/model-id>` | Select an exact model immediately |
+| `/models`            | Open the searchable model selector for configured providers |
+| `/models <provider/model-id>` | Select an exact model immediately |
 | `/effort`            | Open the reasoning-effort selector |
 | `/effort <level>`    | Set `default`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `/providers`         | Add API keys for compatible catalog providers |
@@ -288,7 +288,7 @@ to run, or **Esc** to dismiss it.
 | `/resume`            | Open the session selector and resume a previous conversation |
 | `/rename <title>`    | Rename the current session                              |
 
-`/model` searches tool-capable models from [models.dev](https://models.dev) for
+`/models` searches tool-capable models from [models.dev](https://models.dev) for
 all configured compatible providers. The normalized catalog is cached at
 `$MYAGENT_DIR/models.json`, refreshed at most every four hours, and remains
 usable offline. Choosing a model changes the active provider/model and persists

@@ -175,7 +175,7 @@ func run(argv []string) error {
 	if err != nil {
 		if !fromFlag {
 			// Saved default may not suit the current model (e.g. switched
-			// to a non-reasoning model via /model). Fall back to the
+			// to a non-reasoning model via /models). Fall back to the
 			// provider default instead of refusing to start.
 			effort = ""
 		} else {

@@ -37,6 +37,27 @@ type theme struct {
 	orbDim          lipgloss.Style
 	orbMedium       lipgloss.Style
 	orbBright       lipgloss.Style
+	// Grok-parity token kit (Phase 0): extra roles aliased onto the
+	// existing palette so old and new render paths share one theme.
+	// textPrimary is the main content fg; gray tiers carry secondary
+	// info; accentUser highlights interactive elements; bgBase/Highlight
+	// back selected rows and modal chrome.
+	textPrimary  lipgloss.Style
+	grayBright   lipgloss.Style
+	grayDim      lipgloss.Style
+	accentUser   lipgloss.Style
+	bgBase       lipgloss.Style
+	bgHighlight  lipgloss.Style
+	modalBorder  lipgloss.Style
+	modalTitle   lipgloss.Style
+	modalHint    lipgloss.Style
+	rowDesc      lipgloss.Style
+	rowDescSel   lipgloss.Style
+	scrollTrack  lipgloss.Style
+	scrollThumb  lipgloss.Style
+	// rowHover backs hovered (not selected) picker/menu rows. The cursor
+	// keeps bold + accent so hover never reads as selection (grok menu.rs).
+	rowHover lipgloss.Style
 }
 
 func newTheme() *theme {
@@ -82,6 +103,22 @@ func newTheme() *theme {
 		orbDim:       lipgloss.NewStyle().Foreground(lipgloss.Color("24")),
 		orbMedium:    lipgloss.NewStyle().Foreground(lipgloss.Color("31")),
 		orbBright:    lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
+		// Grok-parity aliases (tokyonight-leaning defaults on the existing
+		// 256-color numbers so nothing visual changes until callers opt in).
+		textPrimary:  lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
+		grayBright:   lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
+		grayDim:      lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		accentUser:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		bgBase:       lipgloss.NewStyle().Background(lipgloss.Color("235")),
+		bgHighlight:  lipgloss.NewStyle().Background(lipgloss.Color("25")),
+		modalBorder:  lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		modalTitle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")),
+		modalHint:    lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		rowDesc:      lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		rowDescSel:   lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
+		scrollTrack:  lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		scrollThumb:  lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		rowHover:     lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("237")),
 	}
 }
 

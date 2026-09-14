@@ -34,10 +34,9 @@ const (
 // Built-in tool names (internal/tools/default.go).
 var builtinTools = map[string]bool{"read": true, "write": true, "edit": true, "bash": true}
 
-// Built-in slash commands (internal/tui/commands.go commandItems, including
-// the hidden /models alias).
+// Built-in slash commands (internal/tui/commands.go commandItems).
 var builtinCommands = map[string]bool{
-	"/help": true, "/model": true, "/models": true, "/effort": true,
+	"/help": true, "/models": true, "/effort": true,
 	"/providers": true, "/customize": true, "/compact": true, "/clear": true,
 	"/new": true, "/resume": true, "/rename": true, "/export": true,
 	"/init": true, "/thinking": true,

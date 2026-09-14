@@ -29,8 +29,9 @@ func TestParseSlashCommand(t *testing.T) {	tests := []struct {
 		{input: "/resume", kind: commandResume},
 		{input: "/rename a better title", kind: commandRename, arg: "a better title"},
 		{input: "/rename", want: "usage: /rename <title>"},
-		{input: "/model", kind: commandModel},
-		{input: "/model openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
+		{input: "/models", kind: commandModel},
+		{input: "/models openrouter/openai/gpt-4.1", kind: commandModel, arg: "openrouter/openai/gpt-4.1"},
+		{input: "/model", want: "unknown command: /model"},
 		{input: "/effort", kind: commandEffort},
 		{input: "/effort xhigh", kind: commandEffort, arg: "xhigh"},
 		{input: "/providers", kind: commandProviders},
@@ -40,6 +41,7 @@ func TestParseSlashCommand(t *testing.T) {	tests := []struct {
 		{input: "/thinking on", kind: commandThinking, arg: "on"},
 		{input: "/thinking off", kind: commandThinking, arg: "off"},
 		{input: "/thinking banana", kind: commandThinking, arg: "banana"}, // rejected later by applyShowThinking
+		{input: "/paste", kind: commandPaste},
 		{input: "/unknown", want: "unknown command: /unknown"},
 	}
 	for _, tt := range tests {
@@ -428,8 +430,8 @@ func TestCommandPickerFilteringAndSelection(t *testing.T) {
 	p.sync("/")
 	p.move(1)
 	item, _ = p.selected()
-	if item.name != "/model" {
-		t.Fatalf("selected after down = %q, want /model", item.name)
+	if item.name != "/models" {
+		t.Fatalf("selected after down = %q, want /models", item.name)
 	}
 	p.move(-1)
 	item, _ = p.selected()
@@ -467,8 +469,8 @@ func TestCommandPickerAcceptsArgumentCommandWithoutSubmitting(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("argument command should not submit")
 	}
-	if got := m.input.Value(); got != "/model " {
-		t.Fatalf("input = %q, want %q", got, "/model ")
+	if got := m.input.Value(); got != "/models " {
+		t.Fatalf("input = %q, want %q", got, "/models ")
 	}
 	if m.picker.active {
 		t.Fatal("picker remained open after accepting a command")
@@ -531,7 +533,7 @@ func TestLocalCommandsDoNotBecomeMessages(t *testing.T) {
 	m.selectModel = func(provider, id string) (llm.Provider, llm.Model, error) {
 		return r.cfg.Provider, llm.Model{Provider: provider, ID: id}, nil
 	}
-	m.input.SetValue("/model local/new-model")
+	m.input.SetValue("/models local/new-model")
 	m.submit(submitFollowUp)
 	if r.cfg.Model.ID != "new-model" || m.modelID != "local/new-model" {
 		t.Fatalf("model ids = %q/%q, want local/new-model", r.cfg.Model.ID, m.modelID)

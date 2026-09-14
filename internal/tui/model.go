@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/export"
 	"github.com/AlvinPlayz23/myagent/internal/images"
@@ -117,6 +118,7 @@ const (
 	welcomeWave    welcomeStyle = "wave"
 	welcomeRain    welcomeStyle = "rain"
 	welcomeFill    welcomeStyle = "fill"
+	welcomeMyagent welcomeStyle = "myagent"
 )
 
 type welcomeChoice struct {
@@ -132,6 +134,7 @@ var welcomeChoices = []welcomeChoice{
 	{style: welcomeWave, label: "Wave", description: "flowing ripple under the title"},
 	{style: welcomeRain, label: "Rain", description: "drifting dots behind the title"},
 	{style: welcomeFill, label: "Fill", description: "block letters filling with liquid"},
+	{style: welcomeMyagent, label: "Myagent", description: "chrome diamond mark with hero layout and menu"},
 }
 
 // promptStyle selects the composer chrome drawn around the textarea.
@@ -289,6 +292,11 @@ func (p *customizePicker) selected() customizeRow {
 }
 
 func normalizeWelcomeStyle(style string) welcomeStyle {
+	// Legacy alias: the "myagent" startup style was previously named "grok".
+	// Persisted configs may still carry the old value.
+	if style == "grok" {
+		return welcomeMyagent
+	}
 	for _, choice := range welcomeChoices {
 		if choice.style == welcomeStyle(style) {
 			return choice.style
@@ -457,6 +465,32 @@ type model struct {
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
+
+	// Mouse interaction (hit.go): capture toggle, recorded hit layouts,
+	// hover state, multi-click tracking, pending-confirm, toast queue.
+	mouseCapture bool
+	panelStartY  int // first view row of the inline panel slot
+	panelEndY    int // first view row past the panel slot
+	// inlineRowItems maps inline panel lines to item indices (-1 = meta
+	// row: headers, dividers, counts) relative to panelStartY.
+	inlineRowItems []int
+	// welcomeMenu is the [start, end) content-row range of the welcome
+	// menu, recorded by the welcome renderers on every render.
+	welcomeMenu  [2]int
+	hoverKind    int
+	hoverIdx     int
+	hoverHint    string
+	lastClickAt  time.Time
+	lastClickRow int
+	clickCount   int
+	// keepSelection preserves the highlight after a multi-click copy until
+	// the next click, scroll, resize, or esc.
+	keepSelection bool
+	pendingKey    string
+	pendingLabel  string
+	pendingStatus string
+	pendingUntil  time.Time
+	toastQueue    []string
 }
 
 // newModel constructs the root model.
@@ -496,6 +530,8 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		modelID:        modelID,
 		cwd:            cwd,
 		newSession:     createSession,
+		mouseCapture:   true,
+		hoverIdx:       -1,
 	}
 }
 
@@ -705,6 +741,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearStatusMsg:
 		if m.statusMsg == msg.status {
 			m.statusMsg = ""
+			return m, m.nextToast()
+		}
+		return m, nil
+
+	case pendingTimeoutMsg:
+		if m.pendingKey == msg.key {
+			text := m.pendingStatus
+			m.disarmPending()
+			if m.statusMsg == text {
+				m.statusMsg = ""
+				return m, m.nextToast()
+			}
 		}
 		return m, nil
 
@@ -826,6 +874,10 @@ func (m *model) updateLayout() {
 // not encode Ctrl+Enter distinctly; alt+enter sends a steering message.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	ks := k.Keystroke()
+	// Keyboard takes the cursor back from the mouse: a stale hover highlight
+	// next to the keyboard cursor reads as two cursors. Hover returns on the
+	// next motion event.
+	m.clearHover()
 	if m.exportPick.active {
 		switch ks {
 		case "up":
@@ -833,12 +885,7 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "down":
 			m.exportPick.move(1)
 		case "enter":
-			m.exportFormat = m.exportPick.format()
-			m.exportPick.close()
-			m.exportName.SetValue(export.DefaultFilename(m.sessionTitle))
-			m.exportName.Focus()
-			m.statusMsg = "Enter a file name, then press enter to export."
-			m.updateLayout()
+			return m.confirmExportPick()
 		case "esc":
 			m.exportPick.close()
 			m.statusMsg = "Export cancelled."
@@ -1019,13 +1066,18 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	// Any key besides the armed one (or esc, which cancels it) disarms a
+	// pending-confirm so stale arms never fire after the user moved on.
+	if m.pendingKey != "" && ks != m.pendingKey && ks != "esc" {
+		m.disarmPending()
+	}
 	switch ks {
 	case "ctrl+c":
-		// Abort a running turn if any; otherwise quit.
+		// Abort a running turn if any; otherwise quit (via confirm).
 		if m.abortActiveRun() {
 			return m, nil
 		}
-		return m, tea.Quit
+		return m.requestQuit()
 
 	case "ctrl+o":
 		m.cancelSelection()
@@ -1034,16 +1086,20 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
+		// Esc yields to sticky UI first: persistent selections, hover, and
+		// pending-confirms clear before the run aborts.
+		if m.selection != nil || m.hoverKind != hoverNone || m.pendingKey != "" {
+			m.cancelSelection()
+			m.clearHover()
+			m.disarmPending()
+			m.statusMsg = ""
+			return m, nil
+		}
 		m.abortActiveRun()
 		return m, nil
 
-	case "ctrl+v":
-		if m.clipboardBusy {
-			return m, nil
-		}
-		m.clipboardBusy = true
-		m.statusMsg = "Reading clipboard."
-		return m, readClipboardCmd(m.clipboardRead)
+	case "ctrl+v", "alt+v":
+		return m.startClipboardRead()
 
 	case "backspace":
 		if m.input.Value() == "" && m.attachments.removeLast() {
@@ -1169,15 +1225,57 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onMouseWheel forwards wheel events over the transcript to its viewport.
+// onMouseWheel routes by region: the transcript scrolls, picker slots move
+// the selection, everything below the panel ignores the wheel.
 func (m *model) onMouseWheel(mouse tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if mouse.Y < 0 || mouse.Y >= m.viewport.Height() {
+	if mouse.Y < 0 {
 		return m, nil
 	}
-	m.cancelSelection()
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(mouse)
-	return m, cmd
+	switch m.routeViewY(mouse.Y) {
+	case hitViewport:
+		m.cancelSelection()
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(mouse)
+		return m, cmd
+	case hitPanel:
+		delta := 1
+		if mouse.Button == tea.MouseWheelUp {
+			delta = -1
+		}
+		if mouse.Button != tea.MouseWheelUp && mouse.Button != tea.MouseWheelDown {
+			return m, nil
+		}
+		m.scrollPicker(delta)
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+// scrollPicker moves the active picker's selection, shared by wheel-over-
+// panel and (via onKey) keyboard handling stays untouched.
+func (m *model) scrollPicker(delta int) {
+	switch {
+	case m.models.active:
+		m.models.move(delta)
+	case m.sessions.active:
+		m.sessions.move(delta)
+	case m.effort.active:
+		m.effort.move(delta)
+	case m.customize.active:
+		m.customize.move(delta)
+	case m.providers.active:
+		m.providers.move(delta)
+	case m.exportPick.active:
+		m.exportPick.move(delta)
+	case m.files.active:
+		m.files.move(delta)
+	case m.picker.active:
+		m.picker.move(delta)
+	default:
+		return
+	}
+	m.clearHover()
 }
 
 func (m *model) transcriptPoint(x, y int) (textPoint, bool) {
@@ -1191,6 +1289,10 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if mouse.Button != tea.MouseLeft {
 		return m, nil
 	}
+	// A fresh press clears sticky state: persistent selections, hover, and
+	// pending-confirms all yield to the new gesture.
+	m.keepSelection = false
+	m.clearHover()
 	// Ctrl+click opens bare URLs in assistant blocks. A Ctrl+click never
 	// starts a text selection, whether or not it lands on a link.
 	if mouse.Mouse().Mod&tea.ModCtrl != 0 {
@@ -1204,26 +1306,143 @@ func (m *model) onMouseClick(mouse tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
-	if !ok || m.showWelcome() {
-		m.cancelSelection()
-		return m, nil
-	}
-	m.selection = &textSelection{anchor: point, current: point}
-	return m, nil
-}
-
-func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
-	if m.selection == nil || mouse.Button != tea.MouseLeft {
+	switch m.routeViewY(mouse.Y) {
+	case hitPanel:
+		return m.onPanelClick(mouse.Y)
+	case hitBelow:
+		// Composer is always focused; footer is display-only.
 		return m, nil
 	}
 	point, ok := m.transcriptPoint(mouse.X, mouse.Y)
 	if !ok {
+		m.cancelSelection()
 		return m, nil
 	}
-	m.selection.current = point
-	m.selection.dragged = point != m.selection.anchor
-	m.refreshViewport()
+	if m.showWelcome() {
+		return m.onWelcomeClick(point.row)
+	}
+	m.trackClick(point.row)
+	m.selection = &textSelection{anchor: point, current: point}
+	return m, nil
+}
+
+// onWelcomeClick dispatches a click on a welcome menu row (content coords).
+func (m *model) onWelcomeClick(row int) (tea.Model, tea.Cmd) {
+	idx := row - m.welcomeMenu[0]
+	if idx < 0 || idx >= len(welcomeMenuActions) || m.welcomeMenu[1] <= m.welcomeMenu[0] {
+		m.cancelSelection()
+		return m, nil
+	}
+	switch welcomeMenuActions[idx] {
+	case "focus":
+		m.cancelSelection()
+		return m, nil
+	case "quit":
+		return m.requestQuit()
+	default:
+		// Slash command rows type the command and submit, exactly as if
+		// the user typed it and pressed enter.
+		m.input.SetValue(welcomeMenuActions[idx])
+		m.syncPickers()
+		return m.submit(submitFollowUp)
+	}
+}
+
+// onPanelClick previews on first click and confirms on second click of the
+// selected row.
+func (m *model) onPanelClick(y int) (tea.Model, tea.Cmd) {
+	idx := y - m.panelStartY
+	if idx < 0 || idx >= len(m.inlineRowItems) || m.inlineRowItems[idx] < 0 {
+		return m, nil
+	}
+	return m.confirmInlineRow(m.inlineRowItems[idx])
+}
+
+// confirmInlineRow previews on first click, confirms when the row is already
+// selected. Each arm mirrors its onKey enter behavior.
+func (m *model) confirmInlineRow(item int) (tea.Model, tea.Cmd) {
+	switch {
+	case m.models.active:
+		if m.models.sel == item {
+			return m.selectPickedModel()
+		}
+		m.models.sel = item
+		return m, nil
+	case m.sessions.active:
+		if m.sessions.sel == item {
+			return m.resumeSelectedSession()
+		}
+		m.sessions.sel = item
+		return m, nil
+	case m.providers.active:
+		if m.providers.sel == item {
+			return m.openProviderKeyEntry()
+		}
+		m.providers.sel = item
+		return m, nil
+	case m.effort.active:
+		if m.effort.sel == item {
+			return m.applyEffort(m.effort.selected().effort)
+		}
+		m.effort.sel = item
+		return m, nil
+	case m.customize.active:
+		if m.customize.sel == item {
+			return m.applyCustomizeSelection()
+		}
+		m.customize.sel = item
+		return m, nil
+	case m.exportPick.active:
+		if m.exportPick.sel == item {
+			return m.confirmExportPick()
+		}
+		m.exportPick.sel = item
+		return m, nil
+	case m.files.active:
+		if m.files.sel == item {
+			return m.acceptFilePicker()
+		}
+		m.files.sel = item
+		return m, nil
+	case m.picker.active:
+		if m.picker.sel == item {
+			return m.acceptCommandPicker(true)
+		}
+		m.picker.sel = item
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+// confirmExportPick runs the export picker's enter behavior, shared by
+// keyboard and second-click confirm.
+func (m *model) confirmExportPick() (tea.Model, tea.Cmd) {
+	m.exportFormat = m.exportPick.format()
+	m.exportPick.close()
+	m.exportName.SetValue(export.DefaultFilename(m.sessionTitle))
+	m.exportName.Focus()
+	m.statusMsg = "Enter a file name, then press enter to export."
+	m.updateLayout()
+	return m, nil
+}
+
+func (m *model) onMouseMotion(mouse tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	// Button-held motion extends a drag selection; anything else is hover.
+	if mouse.Button == tea.MouseLeft {
+		if m.selection == nil {
+			return m, nil
+		}
+		point, ok := m.transcriptPoint(mouse.X, mouse.Y)
+		if !ok {
+			return m, nil
+		}
+		m.selection.current = point
+		m.selection.dragged = point != m.selection.anchor
+		m.refreshViewport()
+		return m, nil
+	}
+	m.updateHover(mouse.X, mouse.Y)
 	return m, nil
 }
 
@@ -1235,26 +1454,65 @@ func (m *model) onMouseRelease(mouse tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 		m.selection.current = point
 		m.selection.dragged = m.selection.dragged || point != m.selection.anchor
 	}
+	content := m.transcript.render(m.width)
 	selection := *m.selection
-	text := selectedRenderedText(m.transcript.render(m.width), selection)
-	m.cancelSelection()
+	if !selection.dragged {
+		// No drag: multi-click expands the press (word/paragraph) and the
+		// highlight persists until the next click, scroll, or esc.
+		lines := strings.Split(ansi.Strip(content), "\n")
+		switch {
+		case m.clickCount >= 3:
+			selection.anchor, selection.current = expandParagraph(lines, selection.anchor.row)
+			selection.dragged = true
+		case m.clickCount == 2:
+			selection.anchor, selection.current = expandWord(lines, selection.anchor.row, selection.anchor.col)
+			selection.dragged = selection.current != selection.anchor
+		}
+	}
+	text := selectedRenderedText(content, selection)
 	if text == "" {
+		m.cancelSelection()
 		return m, nil
 	}
 	if err := m.clipboardWrite(text); err != nil {
 		m.statusMsg = "Could not copy selection: " + err.Error()
 		return m, nil
 	}
-	m.statusMsg = fmt.Sprintf("Copied %d characters.", len([]rune(text)))
-	return m, clearStatusCmd(m.statusMsg)
+	if !selection.dragged {
+		m.cancelSelection()
+		return m, nil
+	}
+	if m.clickCount >= 2 {
+		// Multi-click copy keeps the highlight so the user sees what was
+		// copied; the next press clears it.
+		m.keepSelection = true
+		m.selection = &selection
+		m.refreshViewport()
+		return m, m.pushToast(fmt.Sprintf("Copied %d characters (selection kept).", len([]rune(text))))
+	}
+	m.cancelSelection()
+	return m, m.pushToast(fmt.Sprintf("Copied %d characters.", len([]rune(text))))
 }
 
 func (m *model) cancelSelection() {
+	m.keepSelection = false
 	if m.selection == nil {
 		return
 	}
 	m.selection = nil
 	m.refreshViewport()
+}
+
+// startClipboardRead begins an asynchronous native clipboard read, shared by
+// the paste keybindings and the /paste fallback command. It is a no-op
+// while a read is already in flight so rapid repeats never stack reads.
+func (m *model) startClipboardRead() (tea.Model, tea.Cmd) {
+	if m.clipboardBusy {
+		return m, nil
+	}
+	m.clipboardBusy = true
+	m.statusMsg = "Reading clipboard."
+	return m, readClipboardCmd(m.clipboardRead)
 }
 
 // submit starts a run while idle. During a run, Enter queues a follow-up and
@@ -1387,7 +1645,7 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = err.Error()
 		return m, nil
 	}
-	if m.working && cmd.kind != commandThinking {
+	if m.working && cmd.kind != commandThinking && cmd.kind != commandPaste {
 		m.statusMsg = "Cancel the current run before using slash commands."
 		return m, nil
 	}
@@ -1425,6 +1683,10 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		return m.startRun("/init", userMessage(initPrompt))
 	case commandThinking:
 		return m.applyShowThinking(cmd.arg), nil
+	case commandMouse:
+		return m.applyMouseToggle(cmd.arg), nil
+	case commandPaste:
+		return m.startClipboardRead()
 	case commandModel:
 		return m.openModelPicker(cmd.arg)
 	case commandEffort:
@@ -1770,6 +2032,32 @@ func (m *model) applyShowThinking(arg string) tea.Model {
 	return m
 }
 
+// applyMouseToggle flips mouse reporting: on means clicks, wheel, drag
+// selection, and hover; off restores native terminal selection (grok's
+// ToggleMouseCapture). The View's MouseMode applies on the next frame.
+func (m *model) applyMouseToggle(arg string) tea.Model {
+	on := !m.mouseCapture
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "":
+	case "on", "true", "yes", "1":
+		on = true
+	case "off", "false", "no", "0":
+		on = false
+	default:
+		m.statusMsg = "usage: /mouse [on|off]"
+		return m
+	}
+	m.mouseCapture = on
+	m.clearHover()
+	m.cancelSelection()
+	if on {
+		m.statusMsg = "Mouse reporting on: clicks, wheel, and hover."
+	} else {
+		m.statusMsg = "Mouse reporting off: native terminal selection."
+	}
+	return m
+}
+
 func (m *model) applyEffort(effort llm.Effort) (tea.Model, tea.Cmd) {
 	effort, err := llm.NormalizeEffort(m.runner.cfg.Model, effort)
 	if err != nil {
@@ -1779,7 +2067,7 @@ func (m *model) applyEffort(effort llm.Effort) (tea.Model, tea.Cmd) {
 	m.runner.setEffort(effort)
 	m.effort.close()
 	// Persist the choice as the myagent default so it survives restarts,
-	// mirroring how /model persists DefaultModel. Selecting the provider
+	// mirroring how /models persists DefaultModel. Selecting the provider
 	// default clears the saved value.
 	if m.saveDefaultEffort != nil {
 		if err := m.saveDefaultEffort(effort); err != nil {
@@ -1908,6 +2196,14 @@ func (m *model) showWelcome() bool {
 // lives outside the transcript so it is never persisted as conversation
 // history and disappears as soon as the first prompt gives the session a title.
 func (m *model) renderWelcome() string {
+	// V2 surfaces (welcome.go): stacked text layout for Default, braille
+	// tiers + hero box for Myagent. Animated styles keep their old renderer.
+	if m.welcomeStyle == welcomeMyagent {
+		return m.renderMyagentWelcome()
+	}
+	if m.welcomeStyle == welcomeDefault {
+		return m.renderDefaultWelcome()
+	}
 	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
 	if m.welcomeStyle == welcomeBanner && m.width >= bannerMinWidth {
 		title = m.renderBanner()
@@ -1960,7 +2256,7 @@ const welcomeFrameCount = 96
 // color only; the silhouette never changes, so the layout cannot jitter.
 var bannerRows = [2]string{
 	"█▀▄▀█ █ █ ▄▀█ █▀▀ █▀▀ █▄ █ ▀█▀",
-	"█ ▀ █ ▀▄█ █▀█ █▄█ ██▄ █ ▀█  █ ",
+	"█ ▀ █ ▀█▀ █▀█ █▄█ ██▄ █ ▀█  █ ",
 }
 
 // bannerMinWidth is the terminal width below which the banner falls back to the
@@ -2215,6 +2511,8 @@ func (m *model) renderOrb(compact bool) string {
 }
 
 // View composes the transcript viewport, status line, input, and footer.
+// It records the inline panel's view-Y bounds on every frame so mouse
+// clicks map to exactly what's drawn.
 func (m *model) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
@@ -2224,9 +2522,12 @@ func (m *model) View() tea.View {
 	sb.WriteByte('\n')
 	sb.WriteString(m.statusLine())
 	sb.WriteByte('\n')
+	y := m.viewport.Height() + 1 // status row consumed
+	m.panelStartY, m.panelEndY = y, y
 	if picker := m.renderPanel(); picker != "" {
 		sb.WriteString(picker)
 		sb.WriteByte('\n')
+		m.panelEndY = y + strings.Count(picker, "\n") + 1
 	}
 	if queued := m.renderQueuedFollowUps(); queued != "" {
 		sb.WriteString(queued)
@@ -2242,7 +2543,13 @@ func (m *model) View() tea.View {
 
 	v := tea.NewView(sb.String())
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	// AllMotion feeds hover; /mouse (or a toggle) drops to None for native
+	// terminal selection. Replies to mode changes apply on the next frame.
+	if m.mouseCapture {
+		v.MouseMode = tea.MouseModeAllMotion
+	} else {
+		v.MouseMode = tea.MouseModeNone
+	}
 	// Ask compatible terminals to encode modifiers on every key. Without this,
 	// terminals that collapse Shift+Enter to Enter make the two actions
 	// indistinguishable.
@@ -2306,6 +2613,8 @@ func sameUserMessage(a, b types.Message) bool {
 }
 
 func (m *model) renderPanel() string {
+	// inlineRowItems records one entry per emitted line for click mapping.
+	m.inlineRowItems = m.inlineRowItems[:0]
 	if m.exportPick.active {
 		return m.renderExportPicker()
 	}
@@ -2349,24 +2658,31 @@ func (m *model) renderPanel() string {
 		if i == m.picker.sel {
 			marker = "› "
 			style = m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		line := fmt.Sprintf("%s%-18s %s", marker, item.usage, item.description)
 		if len(m.picker.matched) > count && i == end-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.picker.sel+1, len(m.picker.matched)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m *model) renderExportPicker() string {
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Export session as — ↑/↓ select, enter continue, esc cancel")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	for i, format := range []export.Format{export.Markdown, export.HTML} {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.exportPick.sel {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		lines = append(lines, style.Render(marker+export.Label(format)))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2378,6 +2694,7 @@ func (m *model) renderFilePicker() string {
 	}
 	start, end := m.files.visibleRange(count)
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Files — ↑/↓ select, enter or tab insert, esc cancel")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	count = min(count-1, end-start)
 	if count <= 0 {
 		return strings.Join(lines, "\n")
@@ -2388,12 +2705,15 @@ func (m *model) renderFilePicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.files.sel {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		line := marker + path
 		if len(m.files.matched) > count && i == end-1 {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.files.sel+1, len(m.files.matched)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2406,6 +2726,7 @@ func (m *model) renderCustomizePicker() string {
 		return ""
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Customize — ↑/↓ select, enter save, esc cancel")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	count := min(height-1, len(customizeRows))
 	if count <= 0 {
 		return strings.Join(lines, "\n")
@@ -2419,11 +2740,14 @@ func (m *model) renderCustomizePicker() string {
 		if row.header {
 			line := fmt.Sprintf("%s  %s", row.label, m.th.muted.Render(row.description))
 			lines = append(lines, m.th.pickerGroup.MaxWidth(max(1, m.width)).Render(line))
+			m.inlineRowItems = append(m.inlineRowItems, -1)
 			continue
 		}
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.customize.sel {
 			marker, style = "> ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		current := ""
 		if m.rowIsCurrent(row) {
@@ -2431,6 +2755,7 @@ func (m *model) renderCustomizePicker() string {
 		}
 		line := fmt.Sprintf("  %s%-10s %s%s", marker, row.label, row.description, current)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2452,6 +2777,7 @@ func (m *model) renderEffortPicker() string {
 		return ""
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Reasoning effort — ↑/↓ select, enter saves as myagent default, esc cancel")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	count := min(height-1, len(effortChoices))
 	start := max(0, m.effort.sel-count+1)
 	if maxStart := len(effortChoices) - count; start > maxStart {
@@ -2469,6 +2795,8 @@ func (m *model) renderEffortPicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.effort.sel {
 			marker, style = "> ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		// A row can be the live effort, the saved myagent default, or
 		// both at once (including the "Default" row when nothing is
@@ -2486,6 +2814,7 @@ func (m *model) renderEffortPicker() string {
 		}
 		line := fmt.Sprintf("%s%-9s %s%s", marker, choice.label, choice.description, selected)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2496,6 +2825,7 @@ func (m *model) renderSessionPicker() string {
 		return ""
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Resume session — ↑/↓ select, enter resume, esc cancel")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	current := len(m.sessions.items) > 0 && m.sessions.currentID != "" && m.sessions.items[0].ID == m.sessions.currentID
 	first, fixedRows := 0, 1
 	if current {
@@ -2503,6 +2833,8 @@ func (m *model) renderSessionPicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if m.sessions.sel == 0 {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		id := info.ID
 		if len(id) > 8 {
@@ -2517,7 +2849,9 @@ func (m *model) renderSessionPicker() string {
 		}
 		line := fmt.Sprintf("%s● CURRENT  %s  %s  %s", marker, info.Modified.Local().Format("Jan 02 15:04"), id, title)
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, 0)
 		lines = append(lines, m.th.muted.MaxWidth(max(1, m.width)).Render(strings.Repeat("─", max(1, m.width))))
+		m.inlineRowItems = append(m.inlineRowItems, -1)
 		first, fixedRows = 1, 3
 	}
 	count := min(height-fixedRows, len(m.sessions.items)-first)
@@ -2536,6 +2870,8 @@ func (m *model) renderSessionPicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.sessions.sel {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		id := info.ID
 		if len(id) > 8 {
@@ -2553,6 +2889,7 @@ func (m *model) renderSessionPicker() string {
 			line = padBetween(line, fmt.Sprintf("%d/%d", m.sessions.sel+1, len(m.sessions.items)), m.width)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2570,6 +2907,7 @@ func (m *model) renderModelPicker() string {
 		extra = 1
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Model: " + m.models.query)}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	count := max(0, min(height-1-extra, len(m.models.matched)))
 	if count == 0 {
 		if extra > 0 {
@@ -2586,15 +2924,19 @@ func (m *model) renderModelPicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.models.sel {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		limit := ""
 		if item.ContextWindow > 0 {
 			limit = fmt.Sprintf("  %dk", item.ContextWindow/1000)
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Ref()+limit))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	if extra > 0 {
 		lines = append(lines, m.discoveryLine())
+		m.inlineRowItems = append(m.inlineRowItems, -1)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2612,6 +2954,7 @@ func (m *model) renderProviderPicker() string {
 		return ""
 	}
 	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Providers: [x] configured, enter edits key")}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
 	count := min(height-1, len(m.providers.items))
 	start := max(0, m.providers.sel-count+1)
 	if maxStart := len(m.providers.items) - count; start > maxStart {
@@ -2622,6 +2965,8 @@ func (m *model) renderProviderPicker() string {
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.providers.sel {
 			marker, style = "› ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
 		locked := ""
 		if m.providerIsCustom != nil && m.providerIsCustom(item.ID) {
@@ -2630,6 +2975,7 @@ func (m *model) renderProviderPicker() string {
 			locked = "  [x]"
 		}
 		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(marker+item.Name+locked))
+		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2656,20 +3002,23 @@ func (m *model) statusLine() string {
 	if m.statusMsg != "" {
 		return m.th.muted.Render(m.statusMsg)
 	}
+	// Link hover hint lives here now that there is no shortcuts bar below
+	// the composer: it shows only while a link is under the cursor.
+	if m.hoverHint != "" {
+		return m.th.accentUser.Render(truncateRunes(m.hoverHint, max(1, m.width)))
+	}
 	return ""
 }
 
-// footer renders the cwd/model line and the token/cost stats line.
-// The right side shows "{model-id} • {effort}" so the active reasoning
-// effort is visible at a glance; empty effort renders as "default".
+// footer renders the model line and the token/cost stats line.
+// It shows "{model-id} • {effort}" so the active reasoning effort is
+// visible at a glance; empty effort renders as "default".
 func (m *model) footer() string {
-	left := m.th.footer.Render(collapseHome(m.cwd))
 	label := m.modelID + " • " + m.effortLabel()
 	if m.activeProfile != "" {
 		label += " • profile:" + m.activeProfile
 	}
-	right := m.th.footerRight.Render(label)
-	line1 := padBetween(left, right, m.width)
+	line1 := m.th.footerRight.Render(label)
 
 	stats := fmt.Sprintf("↑%s ↓%s R%s W%s $%.4f",
 		compact(m.usage.Input), compact(m.usage.Output),

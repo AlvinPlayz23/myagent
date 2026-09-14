@@ -54,6 +54,79 @@ func renderTextSelection(content string, selection *textSelection, style lipglos
 	return strings.Join(lines, "\n")
 }
 
+// isWordRune reports whether r belongs in a double-click word selection:
+// identifiers, paths, and URLs select as one unit.
+func isWordRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	switch r {
+	case '_', '-', '.', '/', '@', ':', '~', '+', '%', '#':
+		return true
+	}
+	return false
+}
+
+// expandWord grows a press at (row, col) to its word boundaries on plain
+// (ANSI-stripped) lines. col is a display cell; wide cells map to their
+// owning rune. A press on whitespace selects nothing (anchor == current).
+func expandWord(lines []string, row, col int) (textPoint, textPoint) {
+	if row < 0 || row >= len(lines) {
+		return textPoint{row: row, col: col}, textPoint{row: row, col: col}
+	}
+	runes := []rune(lines[row])
+	if len(runes) == 0 {
+		return textPoint{row: row, col: 0}, textPoint{row: row, col: 0}
+	}
+	// Map the display cell to a rune index.
+	ri, cell := 0, 0
+	for ri < len(runes) && cell+ansi.StringWidth(string(runes[ri])) <= col {
+		cell += ansi.StringWidth(string(runes[ri]))
+		ri++
+	}
+	if ri >= len(runes) {
+		ri = len(runes) - 1
+	}
+	if !isWordRune(runes[ri]) {
+		return textPoint{row: row, col: col}, textPoint{row: row, col: col}
+	}
+	start, end := ri, ri
+	for start > 0 && isWordRune(runes[start-1]) {
+		start--
+	}
+	for end+1 < len(runes) && isWordRune(runes[end+1]) {
+		end++
+	}
+	// Selection end is inclusive; convert rune bounds back to cells.
+	startCell := 0
+	for _, r := range runes[:start] {
+		startCell += ansi.StringWidth(string(r))
+	}
+	endCell := startCell
+	for _, r := range runes[start : end+1] {
+		endCell += ansi.StringWidth(string(r))
+	}
+	return textPoint{row: row, col: startCell}, textPoint{row: row, col: endCell - 1}
+}
+
+// expandParagraph grows a press to the blank-line-delimited paragraph
+// (triple-click) on plain lines. Blank rows select nothing.
+func expandParagraph(lines []string, row int) (textPoint, textPoint) {
+	if row < 0 || row >= len(lines) || strings.TrimSpace(lines[row]) == "" {
+		return textPoint{row: row, col: 0}, textPoint{row: row, col: 0}
+	}
+	start, end := row, row
+	for start > 0 && strings.TrimSpace(lines[start-1]) != "" {
+		start--
+	}
+	for end+1 < len(lines) && strings.TrimSpace(lines[end+1]) != "" {
+		end++
+	}
+	lastWidth := ansi.StringWidth(lines[end])
+	return textPoint{row: start, col: 0}, textPoint{row: end, col: max(0, lastWidth-1)}
+}
+
 // selectedRenderedText extracts exactly what the user selected visually,
 // excluding ANSI styling while retaining displayed line breaks and wrapping.
 func selectedRenderedText(content string, selection textSelection) string {

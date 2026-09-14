@@ -57,7 +57,7 @@ func TestDiscoverProviderModelsFetchesPersistsAndCaches(t *testing.T) {
 	}
 }
 
-func TestModelsAliasParsesAsModelCommand(t *testing.T) {
+func TestModelsParsesAsModelCommand(t *testing.T) {
 	got, err := parseSlashCommand("/models")
 	if err != nil {
 		t.Fatal(err)
@@ -73,10 +73,20 @@ func TestModelsAliasParsesAsModelCommand(t *testing.T) {
 		t.Fatalf("/models with arg parsed as %#v", got)
 	}
 
-	// The alias stays out of /help but remains reachable through the picker.
+	// /models is the one visible model command: shown in /help.
+	found := false
 	for _, item := range commandItems {
-		if item.name == "/models" && !item.hidden {
-			t.Fatal("/models should be hidden from /help")
+		if item.name == "/model" {
+			t.Fatal("/model should no longer exist")
 		}
+		if item.name == "/models" {
+			found = true
+			if item.hidden {
+				t.Fatal("/models should be visible in /help")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("/models missing from commandItems")
 	}
 }

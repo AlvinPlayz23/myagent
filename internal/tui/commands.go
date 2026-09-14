@@ -26,6 +26,8 @@ const (
 	commandPluginPrompt
 	commandPluginRun
 	commandProfile
+	commandMouse
+	commandPaste
 )
 
 type slashCommand struct {
@@ -47,8 +49,7 @@ type commandItem struct {
 
 var commandItems = []commandItem{
 	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
-	{name: "/model", usage: "/model [provider/model-id]", description: "Choose a model and provider", kind: commandModel, requiresArg: true},
-	{name: "/models", usage: "/models [provider/model-id]", description: "Alias of /model; live-discovered models included", kind: commandModel, requiresArg: true, hidden: true},
+	{name: "/models", usage: "/models [provider/model-id]", description: "Choose a model and provider; live-discovered models included", kind: commandModel, requiresArg: true},
 	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort (saved as myagent default)", kind: commandEffort, requiresArg: true},
 	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
 	{name: "/customize", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
@@ -60,6 +61,8 @@ var commandItems = []commandItem{
 	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
 	{name: "/init", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
 	{name: "/thinking", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
+	{name: "/mouse", usage: "/mouse [on|off]", description: "Toggle mouse clicks and hover (off restores native selection)", kind: commandMouse},
+	{name: "/paste", usage: "/paste", description: "Attach the clipboard image (works when ctrl+v is intercepted)", kind: commandPaste},
 }
 
 const commandPickerMaxVisible = 5
@@ -172,7 +175,7 @@ func parseSlashCommandWithPlugins(text string, bundle *plugin.Bundle) (slashComm
 		if item.name != name {
 			continue
 		}
-		optionalArg := item.kind == commandModel || item.kind == commandEffort || item.kind == commandThinking
+		optionalArg := item.kind == commandModel || item.kind == commandEffort || item.kind == commandThinking || item.kind == commandMouse
 		if (item.requiresArg && arg == "" && !optionalArg) || (!item.requiresArg && arg != "" && !optionalArg) {
 			return slashCommand{}, fmt.Errorf("usage: %s", item.usage)
 		}
@@ -243,7 +246,7 @@ func buildHelpText(extra ...string) string {
 	for _, e := range extra {
 		b.WriteString(e)
 	}
-	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v paste, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c quit")
-	b.WriteString("\nImages: press ctrl+v for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")
+	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v or alt+v paste, /paste fallback, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c quit")
+	b.WriteString("\nImages: press ctrl+v or alt+v (or run /paste) for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")
 	return b.String()
 }

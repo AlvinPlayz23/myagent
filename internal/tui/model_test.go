@@ -39,13 +39,18 @@ func TestQueuedFollowUpPromotesToTranscriptWhenConsumed(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(50, 20)
 	message := userMessage("run the tests after this")
+	// Pin the timestamp: queue matching is timestamp-sensitive, so
+	// wall-clock creation time must not decide promotion.
+	message.Timestamp = 1
 	m.queuedFollowUps = []queuedMessage{{display: "run the tests after this", message: message}}
 	m.updateLayout()
 
 	if queued := m.renderQueuedFollowUps(); !strings.Contains(queued, "next") {
 		t.Fatalf("queued follow-up has no pending label: %q", queued)
 	}
-	m.onAgentEvent(userMessageStartEvent("run the tests after this"))
+	ev := userMessageStartEvent("run the tests after this")
+	ev.Message.Timestamp = 1
+	m.onAgentEvent(ev)
 	if len(m.queuedFollowUps) != 0 {
 		t.Fatalf("queued follow-ups = %#v, want empty", m.queuedFollowUps)
 	}
@@ -110,9 +115,12 @@ func TestFollowUpConsumptionClearsQueuedStatus(t *testing.T) {
 	m.working = true
 	m.statusMsg = "Queued follow-up (1 pending)"
 	message := userMessage("later")
+	message.Timestamp = 1
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: message}}
 
-	m.onAgentEvent(userMessageStartEvent("later"))
+	ev := userMessageStartEvent("later")
+	ev.Message.Timestamp = 1
+	m.onAgentEvent(ev)
 	if m.statusMsg != "" {
 		t.Fatalf("status = %q, want empty", m.statusMsg)
 	}
@@ -190,10 +198,15 @@ func TestQueuedFollowUpsPromoteInFIFOOrder(t *testing.T) {
 	m.onResize(50, 20)
 	first := userMessage("first")
 	second := userMessage("second")
+	// Pin timestamps: queue matching is timestamp-sensitive, so wall-clock
+	// creation time must not decide promotion.
+	first.Timestamp, second.Timestamp = 1, 1
 	m.queuedFollowUps = []queuedMessage{{display: "first", message: first}, {display: "second", message: second}}
 	m.updateLayout()
 
-	m.onAgentEvent(userMessageStartEvent("first"))
+	ev := userMessageStartEvent("first")
+	ev.Message.Timestamp = 1
+	m.onAgentEvent(ev)
 	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "second" {
 		t.Fatalf("queued follow-ups after first promotion = %#v", m.queuedFollowUps)
 	}
@@ -221,10 +234,14 @@ func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
 
 func TestSteeringEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
-	m.queuedSteering = []types.Message{userMessage("steer")}
+	steer := userMessage("steer")
+	steer.Timestamp = 1
+	m.queuedSteering = []types.Message{steer}
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
 
-	m.onAgentEvent(userMessageStartEvent("steer"))
+	ev := userMessageStartEvent("steer")
+	ev.Message.Timestamp = 1
+	m.onAgentEvent(ev)
 	if len(m.queuedFollowUps) != 1 || m.queuedFollowUps[0].display != "later" {
 		t.Fatalf("steering removed queued follow-up: %#v", m.queuedFollowUps)
 	}
@@ -233,10 +250,13 @@ func TestSteeringEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
 func TestInitialPromptEventDoesNotRemoveQueuedFollowUp(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	initial := userMessage("initial")
+	initial.Timestamp = 1
 	m.activePrompt = &initial
 	m.queuedFollowUps = []queuedMessage{{display: "later", message: userMessage("later")}}
 
-	m.onAgentEvent(userMessageStartEvent("initial"))
+	ev := userMessageStartEvent("initial")
+	ev.Message.Timestamp = 1
+	m.onAgentEvent(ev)
 	if m.activePrompt != nil {
 		t.Fatal("initial prompt remained active after its event")
 	}
@@ -480,7 +500,7 @@ func TestCommandPickerFitsTerminalAndBorrowsViewportRows(t *testing.T) {
 	if got := strings.Count(view.Content, "\n") + 1; got > m.height {
 		t.Fatalf("view height with picker = %d, terminal height = %d", got, m.height)
 	}
-	if !strings.Contains(view.Content, "/help") || !strings.Contains(view.Content, "/model [provider/model-id]") {
+	if !strings.Contains(view.Content, "/help") || !strings.Contains(view.Content, "/models [provider/model-id]") {
 		t.Fatal("picker view does not contain command choices")
 	}
 
@@ -621,6 +641,58 @@ func TestCtrlVFallsBackToClipboardText(t *testing.T) {
 	}
 	if m.attachments.len() != 0 {
 		t.Fatalf("attachments = %d, want none", m.attachments.len())
+	}
+}
+
+func TestAltVAttachesClipboardImage(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	m.clipboardRead = func() (clipboardPayload, error) {
+		return clipboardPayload{image: png}, nil
+	}
+
+	_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'v', Mod: tea.ModAlt}))
+	if cmd == nil || !m.clipboardBusy {
+		t.Fatal("alt+v did not start an asynchronous clipboard read")
+	}
+	m.Update(cmd())
+
+	if m.clipboardBusy || m.attachments.len() != 1 {
+		t.Fatalf("clipboardBusy=%v attachments=%d", m.clipboardBusy, m.attachments.len())
+	}
+}
+
+func TestPasteCommandAttachesClipboardImage(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	m.clipboardRead = func() (clipboardPayload, error) {
+		return clipboardPayload{image: png}, nil
+	}
+
+	_, cmd := m.runCommand("/paste")
+	if cmd == nil || !m.clipboardBusy {
+		t.Fatal("/paste did not start an asynchronous clipboard read")
+	}
+	m.Update(cmd())
+
+	if m.clipboardBusy || m.attachments.len() != 1 {
+		t.Fatalf("clipboardBusy=%v attachments=%d", m.clipboardBusy, m.attachments.len())
+	}
+}
+
+func TestPasteCommandWorksWhileWorking(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.working = true
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	m.clipboardRead = func() (clipboardPayload, error) {
+		return clipboardPayload{image: png}, nil
+	}
+
+	_, cmd := m.runCommand("/paste")
+	if cmd == nil || !m.clipboardBusy {
+		t.Fatal("/paste was rejected while a run was active")
 	}
 }
 
