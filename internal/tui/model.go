@@ -1130,6 +1130,28 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		m.viewport.ScrollDown(m.viewport.Height() / 2)
 		return m, nil
+	case "ctrl+g":
+		// Jump to the latest output even while typing (ctrl+g is bound to
+		// nothing in the composer). Re-pinning resumes follow-mode via the
+		// AtBottom check in refreshViewport.
+		if m.ready {
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		return m, nil
+	case "home", "end":
+		// Empty prompt: Home always jumps to the top; End re-pins only when
+		// not already at the bottom (so line-end editing still works there).
+		if m.input.Value() == "" && m.ready {
+			if ks == "home" {
+				m.viewport.GotoTop()
+				return m, nil
+			}
+			if !m.viewport.AtBottom() {
+				m.viewport.GotoBottom()
+				return m, nil
+			}
+		}
 	case "up":
 		if m.input.Value() == "" || m.historyIndex >= 0 {
 			if m.navigatePromptHistory(-1) {
@@ -2169,8 +2191,10 @@ func (m *model) addUsage(u types.Usage) {
 	m.usage.Cost.Total += u.Cost.Total
 }
 
-// refreshViewport re-renders the transcript into the viewport and sticks to the
-// bottom while working (so streaming text stays visible).
+// refreshViewport re-renders the transcript into the viewport. It follows new
+// output only when the user was already at the bottom (follow-mode), so
+// scrolling up mid-run inspects history instead of being yanked back down.
+// Press End to re-pin to latest.
 func (m *model) refreshViewport() {
 	if !m.ready {
 		return
@@ -2183,7 +2207,7 @@ func (m *model) refreshViewport() {
 		content = renderTextSelection(content, m.selection, m.th.selection)
 	}
 	m.viewport.SetContent(content)
-	if m.selection == nil && (atBottom || m.working) {
+	if m.selection == nil && atBottom {
 		m.viewport.GotoBottom()
 	}
 }
@@ -2997,7 +3021,8 @@ func (m *model) statusLine() string {
 		if m.statusMsg != "" {
 			msg = m.statusMsg
 		}
-		return fmt.Sprintf("%s %s", frame, m.th.muted.Render(fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)))
+		tail := fmt.Sprintf("%s (%.1fs, esc to cancel)", msg, elapsed)
+		return fmt.Sprintf("%s %s", frame, m.th.muted.Render(tail))
 	}
 	if m.statusMsg != "" {
 		return m.th.muted.Render(m.statusMsg)

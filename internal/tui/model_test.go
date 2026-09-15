@@ -288,6 +288,114 @@ func userMessageStartEvent(text string) types.AgentEvent {
 	return types.AgentEvent{Type: types.EventMessageStart, Message: &message}
 }
 
+func TestRefreshViewportFollowsOnlyWhenAtBottom(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	m.hasSessionTitle = true
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(strings.Repeat("scrollback line ", 10))
+	}
+	m.working = true
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected to start pinned to bottom, offset = %d", m.viewport.YOffset())
+	}
+	pinnedOffset := m.viewport.YOffset()
+	if pinnedOffset == 0 {
+		t.Fatal("test setup did not overflow the viewport; cannot prove follow-mode")
+	}
+
+	// Inspecting history mid-run must survive a refresh: new output arrives
+	// while the user is scrolled up.
+	m.viewport.ScrollUp(m.viewport.Height() / 2)
+	scrolledOffset := m.viewport.YOffset()
+	if scrolledOffset >= pinnedOffset {
+		t.Fatalf("scroll up offset = %d, want less than %d", scrolledOffset, pinnedOffset)
+	}
+	m.transcript.addUser("new output while scrolled up")
+	m.refreshViewport()
+	if m.viewport.YOffset() != scrolledOffset {
+		t.Fatalf("refresh while scrolled up moved offset to %d, want %d", m.viewport.YOffset(), scrolledOffset)
+	}
+
+	// Back at the bottom, new output is followed again.
+	m.viewport.GotoBottom()
+	bottomOffset := m.viewport.YOffset()
+	m.transcript.addUser("more output at bottom")
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Fatalf("refresh at bottom did not follow, offset = %d", m.viewport.YOffset())
+	}
+	if m.viewport.YOffset() < bottomOffset {
+		t.Fatalf("follow-mode moved backwards: offset = %d, was %d", m.viewport.YOffset(), bottomOffset)
+	}
+}
+
+func TestEmptyHomeJumpsToTopFromBottom(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	m.hasSessionTitle = true
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(strings.Repeat("scrollback line ", 10))
+	}
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected to start pinned to bottom, offset = %d", m.viewport.YOffset())
+	}
+	if m.viewport.YOffset() == 0 {
+		t.Fatal("test setup did not overflow the viewport; cannot prove Home")
+	}
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
+	if m.viewport.YOffset() != 0 {
+		t.Fatalf("empty Home from bottom offset = %d, want 0", m.viewport.YOffset())
+	}
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	if !m.viewport.AtBottom() {
+		t.Fatalf("empty End from top did not re-pin, offset = %d", m.viewport.YOffset())
+	}
+}
+
+func TestCtrlGJumpsToBottomWhileTyping(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	m.hasSessionTitle = true
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(strings.Repeat("scrollback line ", 10))
+	}
+	m.working = true
+	m.input.SetValue("half-typed prompt")
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected to start pinned to bottom, offset = %d", m.viewport.YOffset())
+	}
+	pinnedOffset := m.viewport.YOffset()
+	if pinnedOffset == 0 {
+		t.Fatal("test setup did not overflow the viewport; cannot prove ctrl+g")
+	}
+
+	m.viewport.ScrollUp(m.viewport.Height() / 2)
+	if m.viewport.AtBottom() {
+		t.Fatal("scroll up did not leave the bottom")
+	}
+
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModCtrl}))
+	if !m.viewport.AtBottom() {
+		t.Fatalf("ctrl+g offset = %d, want pinned to bottom", m.viewport.YOffset())
+	}
+	if got := m.input.Value(); got != "half-typed prompt" {
+		t.Fatalf("ctrl+g disturbed the composer: %q", got)
+	}
+
+	// Re-pinning resumes follow-mode: new output stays visible.
+	m.transcript.addUser("more output after ctrl+g")
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Fatalf("follow-mode did not resume after ctrl+g, offset = %d", m.viewport.YOffset())
+	}
+}
+
 func TestTranscriptScrollsWithMouseWheel(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(80, 12)
