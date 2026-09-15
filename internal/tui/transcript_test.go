@@ -44,11 +44,12 @@ func TestRenderDiffUsesTextColoring(t *testing.T) {
 	const width = 20
 	out := tr.renderDiff(diff, width)
 
-	// Changed rows are text-colored only (green/red foreground, no background fills).
-	if strings.Contains(out, "48;5;32m") || strings.Contains(out, "48;5;164m") {
+	// Changed rows are text-colored only (TokyoNight truecolor green/red,
+	// with no background fills).
+	if strings.Contains(out, "48;") {
 		t.Fatalf("diff rows should not carry background fills: %q", out)
 	}
-	if !strings.Contains(out, "38;5;35m") || !strings.Contains(out, "38;5;203m") {
+	if !strings.Contains(out, "38;2;158;206;106m") || !strings.Contains(out, "38;2;247;118;142m") {
 		t.Fatalf("diff rows missing green/red foreground coloring: %q", out)
 	}
 
