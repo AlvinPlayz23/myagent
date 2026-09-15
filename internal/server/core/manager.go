@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
@@ -11,7 +12,6 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
-	"strings"
 )
 
 // ResolveFunc resolves a (provider, model) pair — either may be empty for the
@@ -194,7 +194,12 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 			systemPrompt = applied.SystemPrompt
 		}
 		if applied.Effort != "" {
-			effort = applied.Effort
+			normalized, err := llm.NormalizeEffort(model, applied.Effort)
+			if err == nil {
+				effort = normalized
+			} else {
+				effort = ""
+			}
 		}
 	}
 	if sess != nil {
@@ -224,7 +229,7 @@ func (m *Manager) SetEffort(connID, sessionID string, effort llm.Effort) error {
 	return ss.SetEffort(effort)
 }
 
- 	// SetProfile applies a plugin profile (or resets with "" / "reset") on an
+// SetProfile applies a plugin profile (or resets with "" / "reset") on an
 // owned session: filtered registry + rebuilt prompt + effort override.
 // The switch is atomic (single ServerSession lock hold) so a concurrent
 // Prompt cannot observe a half-applied profile. Reset also restores the
