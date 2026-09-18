@@ -447,6 +447,14 @@ func seedTranscript(t *transcript, history []types.Message) {
 			flushText()
 			for _, tc := range msg.ToolCalls() {
 				t.startTool(tc.ID, tc.Name, tc.Arguments)
+				// Resumed history has no meaningful timing: start/end happen
+				// microseconds apart, so drop the stamp and skip the duration
+				// in the metadata line.
+				if len(t.blocks) > 0 {
+					if b := t.blocks[len(t.blocks)-1]; b.kind == blockTool {
+						b.toolTimed = false
+					}
+				}
 			}
 		case types.RoleToolResult:
 			t.endTool(msg.ToolCallID, &types.ToolResult{Content: msg.Content}, msg.IsError)

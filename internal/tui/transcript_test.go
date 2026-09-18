@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -44,12 +45,26 @@ func TestRenderDiffUsesTextColoring(t *testing.T) {
 	const width = 20
 	out := tr.renderDiff(diff, width)
 
-	// Changed rows are text-colored only (green/red foreground, no background fills).
-	if strings.Contains(out, "48;5;32m") || strings.Contains(out, "48;5;164m") {
+	// Changed rows are text-colored only (foreground, no background fills).
+	if strings.Contains(out, "48;") {
 		t.Fatalf("diff rows should not carry background fills: %q", out)
 	}
-	if !strings.Contains(out, "38;5;35m") || !strings.Contains(out, "38;5;203m") {
-		t.Fatalf("diff rows missing green/red foreground coloring: %q", out)
+	// The - and + rows must each carry a distinct foreground color, and those
+	// colors must differ from each other and from the header rows, so a theme
+	// change cannot silently collapse add/remove/context into one color.
+	colorOf := func(line string) string {
+		idx := strings.Index(out, line)
+		if idx < 0 {
+			t.Fatalf("line %q not found in %q", line, out)
+		}
+		seg := out[:idx]
+		start := strings.LastIndex(seg, "\x1b[")
+		end := strings.Index(seg[start:], "m")
+		return seg[start : start+end+1]
+	}
+	addColor, removeColor, metaColor := colorOf("+new"), colorOf("-old"), colorOf("--- a/file.go")
+	if addColor == removeColor || addColor == metaColor || removeColor == metaColor {
+		t.Fatalf("diff rows need distinct add/remove/context colors, got add=%q remove=%q meta=%q in %q", addColor, removeColor, metaColor, out)
 	}
 
 	plain := ansi.Strip(out)
@@ -58,9 +73,9 @@ func TestRenderDiffUsesTextColoring(t *testing.T) {
 		t.Fatalf("rendered %d lines, want %d:\n%q", len(lines), len(diff), plain)
 	}
 	for i, line := range lines {
-		want := diff[i].text
+		want := "  " + diff[i].text
 		if diff[i].prefix != 0 {
-			want = string(diff[i].prefix) + diff[i].text
+			want = "  " + string(diff[i].prefix) + diff[i].text
 		}
 		if line != want {
 			t.Errorf("line %d = %q, want %q", i, line, want)
@@ -103,6 +118,185 @@ func TestFailedEditShowsErrorInsteadOfProposalDiff(t *testing.T) {
 		t.Fatalf("failed edit did not render its error: %q", got)
 	}
 }
+
+func TestToolHeaderParts(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	cases := []struct {
+		name       string
+		args       map[string]any
+		wantName   string
+		wantTarget string
+	}{
+		{"read", map[string]any{"path": "a.go"}, "read", "a.go"},
+		{"read", map[string]any{"file_path": "b.go"}, "read", "b.go"},
+		{"edit", map[string]any{"path": "c.go"}, "edit", "c.go"},
+		{"write", map[string]any{"path": "d.go"}, "write", "d.go"},
+		{"bash", map[string]any{"command": "go build ./..."}, "$", "go build ./..."},
+		{"bash", map[string]any{"command": "one\ntwo"}, "$", "one …"},
+		{"grep", nil, "grep", ""},
+	}
+	for _, tc := range cases {
+		name, target := tr.toolHeaderParts(&block{kind: blockTool, toolName: tc.name, toolArgs: tc.args})
+		if name != tc.wantName || target != tc.wantTarget {
+			t.Errorf("toolHeaderParts(%q) = (%q, %q), want (%q, %q)", tc.name, name, target, tc.wantName, tc.wantTarget)
+		}
+	}
+}
+
+func TestRenderToolShowsMarkerAndMetadata(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.startTool("call", "read", map[string]any{"path": "main.go"})
+	b := tr.blocks[0]
+	b.toolDur = 1500 * time.Millisecond
+	b.toolTimed = true
+	tr.endTool("call", types.TextResult("line one\nline two", nil), false)
+
+	plain := ansi.Strip(tr.renderTool(b, 80))
+	if !strings.Contains(plain, "● read main.go") {
+		t.Fatalf("missing kj-style header: %q", plain)
+	}
+	// endTool overwrites the pinned duration with the real elapsed time, so
+	// assert the metadata shape rather than an exact duration value.
+	if !strings.Contains(plain, "2 lines") || !strings.Contains(plain, "17 B") {
+		t.Fatalf("missing line/byte metadata: %q", plain)
+	}
+	if !strings.Contains(plain, "└") {
+		t.Fatalf("missing metadata leader: %q", plain)
+	}
+}
+
+func TestRenderToolPendingHasNoMetadata(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.startTool("call", "bash", map[string]any{"command": "go test ./..."})
+	plain := ansi.Strip(tr.renderTool(tr.blocks[0], 80))
+	if strings.Contains(plain, "└") {
+		t.Fatalf("pending tool rendered metadata: %q", plain)
+	}
+	if !strings.Contains(plain, "● $ go test ./...") {
+		t.Fatalf("pending tool missing header: %q", plain)
+	}
+}
+
+func TestFoldReadsCollapsesConsecutiveReads(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	for _, path := range []string{"a.go", "b.go", "c.go"} {
+		id := "call-" + path
+		tr.startTool(id, "read", map[string]any{"path": path})
+		tr.blocks[len(tr.blocks)-1].toolTimed = false
+		tr.endTool(id, types.TextResult("contents", nil), false)
+	}
+
+	out := ansi.Strip(tr.render(80))
+	if !strings.Contains(out, "● read 3 files") {
+		t.Fatalf("reads were not folded: %q", out)
+	}
+	for _, path := range []string{"a.go", "b.go", "c.go"} {
+		if !strings.Contains(out, path) {
+			t.Fatalf("folded reads missing path %q: %q", path, out)
+		}
+	}
+
+	// ctrl+o restores the individual read blocks.
+	tr.toggleExpand()
+	expanded := ansi.Strip(tr.render(80))
+	if strings.Contains(expanded, "● read 3 files") {
+		t.Fatalf("expanded view kept the fold: %q", expanded)
+	}
+	if !strings.Contains(expanded, "● read a.go") {
+		t.Fatalf("expanded view missing individual read: %q", expanded)
+	}
+}
+
+func TestFoldReadsSkipsIncompleteAndDuplicateRuns(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	// A pending read breaks the run.
+	tr.startTool("p1", "read", map[string]any{"path": "a.go"})
+	tr.startTool("p2", "read", map[string]any{"path": "b.go"})
+	tr.endTool("p2", types.TextResult("x", nil), false)
+	if fold := tr.foldReads(0); fold != nil {
+		t.Fatalf("folded a pending read: %+v", fold)
+	}
+
+	// Duplicate paths stay separate.
+	tr2 := newTranscript(newTheme(), newMDRenderer())
+	for _, id := range []string{"d1", "d2"} {
+		tr2.startTool(id, "read", map[string]any{"path": "same.go"})
+		tr2.endTool(id, types.TextResult("x", nil), false)
+	}
+	if fold := tr2.foldReads(0); fold != nil {
+		t.Fatalf("folded duplicate-path reads: %+v", fold)
+	}
+}
+
+func TestFormatToolDuration(t *testing.T) {
+	if got := formatToolDuration(350 * time.Millisecond); got != "350ms" {
+		t.Errorf("350ms = %q, want 350ms", got)
+	}
+	if got := formatToolDuration(1500 * time.Millisecond); got != "1.5s" {
+		t.Errorf("1.5s = %q, want 1.5s", got)
+	}
+	if got := formatToolDuration(25 * time.Second); got != "25s" {
+		t.Errorf("25s = %q, want 25s", got)
+	}
+	if got := formatToolDuration(90 * time.Second); got != "1m30s" {
+		t.Errorf("90s = %q, want 1m30s", got)
+	}
+}
+
+func TestFormatByteCount(t *testing.T) {
+	if got := formatByteCount(512); got != "512 B" {
+		t.Errorf("512 = %q, want 512 B", got)
+	}
+	if got := formatByteCount(2048); got != "2.0 KB" {
+		t.Errorf("2048 = %q, want 2.0 KB", got)
+	}
+}
+
+func TestWrapPlainBreaksLongWords(t *testing.T) {
+	blob := strings.Repeat("k", 100)
+	out := wrapPlain(blob, 30)
+	for _, line := range strings.Split(out, "\n") {
+		if len([]rune(line)) > 30 {
+			t.Fatalf("line exceeds width: %q", line)
+		}
+	}
+	// Multiline input keeps its breaks and its words; nothing is lost.
+	out = wrapPlain("aaa bbb\ncccc dddd", 5)
+	if !strings.Contains(out, "aaa") || !strings.Contains(out, "dddd") {
+		t.Fatalf("wrap dropped content: %q", out)
+	}
+	// Short text is untouched.
+	if got := wrapPlain("hello", 80); got != "hello" {
+		t.Fatalf("short text changed: %q", got)
+	}
+}
+
+func TestLongSingleLineBlocksWrapToWidth(t *testing.T) {
+	blob := strings.Repeat("ksdn", 60) // 240 unbroken runes
+	tr := newTranscript(newTheme(), newMDRenderer())
+	const width = 40
+
+	tr.beginThinking()
+	tr.appendThinkingDelta(blob)
+	tr.endThinking()
+	for i, line := range strings.Split(ansi.Strip(tr.render(width)), "\n") {
+		if len([]rune(line)) > width {
+			t.Fatalf("thinking line %d exceeds width: %q", i, line)
+		}
+	}
+
+	tr.addErrorText(blob)
+	tr.addNotice(blob)
+	tr.startTool("c1", "read", map[string]any{"path": "f.go"})
+	tr.blocks[len(tr.blocks)-1].toolTimed = false
+	tr.endTool("c1", types.TextResult(blob, nil), false)
+	for i, line := range strings.Split(ansi.Strip(tr.render(width)), "\n") {
+		if len([]rune(line)) > width {
+			t.Fatalf("transcript line %d exceeds width: %q", i, line)
+		}
+	}
+}
+
 
 func TestRetryNoticeExpandsWithToggle(t *testing.T) {
 	tr := newTranscript(newTheme(), newMDRenderer())

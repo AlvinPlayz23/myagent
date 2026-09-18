@@ -465,6 +465,10 @@ type model struct {
 
 	// usage accumulates across the session for the footer.
 	usage types.Usage
+	// lastInput is the provider-reported input-token count of the most recent
+	// turn — the current context-window occupancy (kj's contextStatus). Zero
+	// means no usage has been reported yet.
+	lastInput int
 
 	// Mouse interaction (hit.go): capture toggle, recorded hit layouts,
 	// hover state, multi-click tracking, pending-confirm, toast queue.
@@ -1242,6 +1246,7 @@ func (m *model) resumeSelectedSession() (tea.Model, tea.Cmd) {
 	m.transcript.clear()
 	seedTranscript(m.transcript, history)
 	m.usage = types.Usage{}
+	m.lastInput = 0
 	m.statusMsg = "Resumed session " + info.ID + "."
 	m.updateLayout()
 	return m, nil
@@ -1696,6 +1701,7 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		}
 		m.transcript.clear()
 		m.usage = types.Usage{}
+		m.lastInput = 0
 		m.sessionTitle = ""
 		m.hasSessionTitle = false
 		m.updateTerminalTitle()
@@ -2189,6 +2195,11 @@ func (m *model) addUsage(u types.Usage) {
 	m.usage.CacheRead += u.CacheRead
 	m.usage.CacheWrite += u.CacheWrite
 	m.usage.Cost.Total += u.Cost.Total
+	// The input count of the latest completed turn is the best estimate of
+	// current context-window occupancy (provider-reported, not cumulative).
+	if u.Input > 0 {
+		m.lastInput = u.Input
+	}
 }
 
 // refreshViewport re-renders the transcript into the viewport. It follows new
@@ -2583,10 +2594,15 @@ func (m *model) View() tea.View {
 }
 
 // renderComposer draws the textarea with the chrome its prompt style calls for:
-// a rounded box for the default style, framing rules for the ruled style.
+// a rounded box for the default style, framing rules for the ruled style. The
+// box border lights up with the accent color while the composer is focused.
 func (m *model) renderComposer() string {
 	if m.promptStyle != promptRuled {
-		return m.th.composerBox.Width(max(1, m.width)).Render(m.input.View())
+		box := m.th.composerBox
+		if m.input.Focused() {
+			box = m.th.composerFocused
+		}
+		return box.Width(max(1, m.width)).Render(m.input.View())
 	}
 	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
 	return rule + "\n" + m.input.View() + "\n" + rule
@@ -2599,17 +2615,18 @@ func (m *model) renderQueuedFollowUps() string {
 	width := max(1, m.width)
 	lines := make([]string, 0, len(m.queuedFollowUps))
 	for i, queued := range m.queuedFollowUps {
-		label := "↳ next"
+		label := "next"
 		if len(m.queuedFollowUps) > 1 {
-			label = fmt.Sprintf("↳ next %d/%d", i+1, len(m.queuedFollowUps))
+			label = fmt.Sprintf("next %d/%d", i+1, len(m.queuedFollowUps))
 		}
+		chip := m.th.chip.Render(label)
 		// One dim line per queued prompt: collapse newlines, truncate to fit.
 		body := strings.Join(strings.Fields(queued.display), " ")
-		bodyWidth := max(1, width-len([]rune(label))-4)
+		bodyWidth := max(1, width-len([]rune(label))-6)
 		if r := []rune(body); len(r) > bodyWidth {
 			body = string(r[:bodyWidth-1]) + "…"
 		}
-		lines = append(lines, " "+m.th.queuedLabel.Render(label)+"  "+m.th.muted.Render(body))
+		lines = append(lines, " "+chip+" "+m.th.muted.Render(body))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -3032,12 +3049,20 @@ func (m *model) statusLine() string {
 	if m.hoverHint != "" {
 		return m.th.accentUser.Render(truncateRunes(m.hoverHint, max(1, m.width)))
 	}
+	// Scrolled-up readers get a persistent way back down: ctrl+g re-pins
+	// the viewport (see the onKey binding), so they never have to guess
+	// the key or reach for End.
+	if m.ready && !m.viewport.AtBottom() {
+		return m.th.muted.Render("↑ scrolled up · ctrl+g for latest")
+	}
 	return ""
 }
 
 // footer renders the model line and the token/cost stats line.
 // It shows "{model-id} • {effort}" so the active reasoning effort is
-// visible at a glance; empty effort renders as "default".
+// visible at a glance; empty effort renders as "default". A kj-style
+// context-window gauge ("ctx 42%") is appended when the active model's
+// window is known and usage has been reported.
 func (m *model) footer() string {
 	label := m.modelID + " • " + m.effortLabel()
 	if m.activeProfile != "" {
@@ -3049,8 +3074,56 @@ func (m *model) footer() string {
 		compact(m.usage.Input), compact(m.usage.Output),
 		compact(m.usage.CacheRead), compact(m.usage.CacheWrite),
 		m.usage.Cost.Total)
+	if ctx := m.contextGauge(); ctx != "" {
+		stats += "  " + ctx
+	}
 	line2 := m.th.footer.Render(stats)
 	return line1 + "\n" + line2
+}
+
+// contextGauge renders the kj-style context-window usage indicator for the
+// footer: "ctx N%" graded calm/warn/critical, with a /compact hint once usage
+// crosses the warn line (kj's compaction threshold). It needs the provider-
+// reported input tokens of the last completed turn (current occupancy, not
+// the cumulative session total) and the model's context window from the
+// catalog; without either it renders nothing so the footer never shows a
+// misleading 0%.
+func (m *model) contextGauge() string {
+	window := m.contextWindow()
+	if window <= 0 || m.lastInput <= 0 {
+		return ""
+	}
+	pct := float64(m.lastInput) * 100 / float64(window)
+	if pct > 100 {
+		pct = 100
+	}
+	style := m.th.ctxOK
+	switch {
+	case pct >= 95:
+		style = m.th.ctxCritical
+	case pct >= 70:
+		style = m.th.ctxWarn
+	}
+	label := fmt.Sprintf("%.0f%%", pct)
+	if pct >= 70 {
+		label += " — /compact"
+	}
+	return m.th.footer.Render("ctx ") + style.Render(label)
+}
+
+// contextWindow resolves the active model's context window from the catalog
+// via the availableModels hook, returning 0 when unknown. m.modelID is the
+// "provider/id" ref, so it compares against Model.Ref().
+func (m *model) contextWindow() int {
+	if m.availableModels == nil {
+		return 0
+	}
+	for _, item := range m.availableModels() {
+		if item.Ref() == m.modelID && item.ContextWindow > 0 {
+			return item.ContextWindow
+		}
+	}
+	return 0
 }
 
 // effortLabel renders the active reasoning effort for the footer.

@@ -45,6 +45,12 @@ type block struct {
 	toolOutput string
 	toolErr    bool
 	toolDone   bool
+	// toolStart/toolDur feed the kj-style elapsed-time metadata shown after a
+	// tool completes. toolTimed is false for resumed history, which has no
+	// meaningful start stamp.
+	toolStart time.Time
+	toolDur   time.Duration
+	toolTimed bool
 
 	// thinking fields
 	done bool // streaming finished (thinking blocks)
@@ -233,6 +239,8 @@ func (t *transcript) startTool(callID, name string, args map[string]any) {
 		toolName:   name,
 		toolArgs:   args,
 		toolDiff:   proposalDiff(name, args),
+		toolStart:  time.Now(),
+		toolTimed:  true,
 	})
 }
 
@@ -245,6 +253,9 @@ func (t *transcript) endTool(callID string, result *types.ToolResult, isError bo
 	b.toolDone = true
 	b.toolErr = isError
 	b.toolOutput = resultText(result)
+	if b.toolTimed && !b.toolStart.IsZero() {
+		b.toolDur = time.Since(b.toolStart)
+	}
 	b.cacheValid = false
 }
 
@@ -259,17 +270,28 @@ func (t *transcript) findTool(callID string) *block {
 
 // render produces the full transcript content string wrapped at width. Blocks
 // are separated by a blank line (pi's Spacer(1)). Thinking blocks are omitted
-// entirely when thinking is hidden, so no stray separators remain.
+// entirely when thinking is hidden, so no stray separators remain. Runs of
+// consecutive completed reads fold into one summary line (kj's folded reads).
 func (t *transcript) render(width int) string {
 	var sb strings.Builder
-	for _, b := range t.blocks {
+	for i := 0; i < len(t.blocks); i++ {
+		b := t.blocks[i]
 		if b.kind == blockThinking && !t.showThinking {
 			continue
+		}
+		var out string
+		// Folding applies in the collapsed view only: ctrl+o restores the
+		// individual read blocks with their output previews.
+		if fold := t.foldReads(i); !t.expanded && fold != nil {
+			out = t.renderFoldedReads(fold)
+			i = fold.end
+		} else {
+			out = t.renderBlock(b, width)
 		}
 		if sb.Len() > 0 {
 			sb.WriteByte('\n')
 		}
-		sb.WriteString(t.renderBlock(b, width))
+		sb.WriteString(out)
 		sb.WriteByte('\n')
 	}
 	return sb.String()
@@ -293,7 +315,10 @@ func (t *transcript) renderBlock(b *block, width int) string {
 		// user, tool, and notice blocks never become clickable.
 		out = makeURLsClickable(strings.TrimRight(t.md.render(b.text, width), "\n"))
 	case blockError:
-		out = t.th.errorText.Render(b.text)
+		// Provider errors often arrive as one giant line; wrap them to the
+		// viewport like every other plain-text block so they never run
+		// off-screen.
+		out = t.th.errorText.Render(wrapPlain(b.text, width))
 	case blockNotice:
 		out = t.renderNotice(b, width)
 	case blockTool:
@@ -310,25 +335,28 @@ func (t *transcript) renderBlock(b *block, width int) string {
 
 // renderNotice renders a muted system notice. Retry notices carry the
 // underlying provider error, collapsed behind the global ctrl+o toggle.
+// Both the headline and the detail are wrapped so long single-line
+// provider errors never run off-screen.
 func (t *transcript) renderNotice(b *block, width int) string {
+	headline := wrapPlain(b.text, width)
 	if b.noticeDetail == "" {
-		return t.th.muted.Render(b.text)
+		return t.th.muted.Render(headline)
 	}
 	if !t.expanded {
-		return t.th.muted.Render(b.text) + "\n" +
+		return t.th.muted.Render(headline) + "\n" +
 			t.th.muted.Render("… (ctrl+o to expand)")
 	}
 	detail := strings.TrimRight(wordwrap.String(b.noticeDetail, max(1, width-2)), "\n")
-	return t.th.muted.Render(b.text) + "\n" +
+	return t.th.muted.Render(headline) + "\n" +
 		t.th.muted.Render(detail) + "\n" +
 		t.th.muted.Render("(ctrl+o to collapse)")
 }
 
-// renderTool renders a collapsible tool block: a one-line status header plus an
-// optional preview (collapsed) or full output (expanded). Status is conveyed by
-// the header color (pending/success/error), matching pi.
+// renderTool renders a collapsible tool block kj-style: a one-line status
+// header ("● name target" with a status-colored marker), a dim metadata line
+// (elapsed time, result size) once the call completes, and an optional
+// preview (collapsed) or full output (expanded).
 func (t *transcript) renderTool(b *block, width int) string {
-	header := t.toolHeader(b)
 	statusStyle := t.th.toolPending
 	switch {
 	case !b.toolDone:
@@ -340,7 +368,17 @@ func (t *transcript) renderTool(b *block, width int) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(statusStyle.Render(header))
+	sb.WriteString(statusStyle.Render("● "))
+	name, target := t.toolHeaderParts(b)
+	sb.WriteString(t.th.textPrimary.Bold(true).Render(name))
+	if target != "" {
+		sb.WriteByte(' ')
+		sb.WriteString(t.th.muted.Render(target))
+	}
+	if meta := t.toolMetaLine(b); meta != "" {
+		sb.WriteByte('\n')
+		sb.WriteString(t.th.muted.Render("  └ ") + meta)
+	}
 
 	// Edit and write calls show their requested change as a Git-style proposal
 	// only after the tool succeeds. Failed calls show their error output instead,
@@ -355,23 +393,133 @@ func (t *transcript) renderTool(b *block, width int) string {
 	if body == "" {
 		return sb.String()
 	}
+	// Tool results are plain text (minified JSON, blobs, long URLs), so wrap
+	// to the viewport before indenting — nothing may run off-screen.
+	body = wrapPlain(body, max(1, width-2))
 	lines := strings.Split(body, "\n")
 	const previewLines = 8
 	if !t.expanded && len(lines) > previewLines {
 		shown := lines[:previewLines]
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
+		sb.WriteString(t.th.muted.Render(indentBody(strings.Join(shown, "\n"))))
 		sb.WriteByte('\n')
 		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines)))
 	} else {
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(body))
+		sb.WriteString(t.th.muted.Render(indentBody(body)))
 		if t.expanded && len(lines) > previewLines {
 			sb.WriteByte('\n')
 			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
 		}
 	}
 	return sb.String()
+}
+
+// wrapPlain reflows plain (non-markdown) text to the viewport width so long
+// lines wrap instead of running off-screen. Unlike markdown, which glamour
+// reflows, thinking bodies, errors, notices, and tool output are raw strings.
+// wordwrap breaks on whitespace but leaves unbroken runs (a 300-char token
+// blob, minified JSON) intact, so overlong words are hard-split to width.
+func wrapPlain(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	wrapped := wordwrap.String(strings.TrimRight(text, "\n"), width)
+	lines := strings.Split(wrapped, "\n")
+	changed := false
+	for i, line := range lines {
+		if len([]rune(line)) > width {
+			lines[i] = splitRunes(line, width)
+			changed = true
+		}
+	}
+	if !changed {
+		return wrapped
+	}
+	return strings.Join(lines, "\n")
+}
+
+// splitRunes hard-splits an unbroken line into width-sized chunks.
+func splitRunes(line string, width int) string {
+	runes := []rune(line)
+	var sb strings.Builder
+	for len(runes) > width {
+		sb.WriteString(string(runes[:width]))
+		sb.WriteByte('\n')
+		runes = runes[width:]
+	}
+	sb.WriteString(string(runes))
+	return sb.String()
+}
+
+// indentBody indents a multi-line tool output by two spaces so its text starts
+// under the metadata line ("  └ …"), matching kj's wrapAndIndent. Empty lines
+// stay empty so no trailing whitespace is emitted.
+func indentBody(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = "  " + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// toolMetaLine builds the dim "└ …" metadata shown under a completed tool
+// header (kj's formatToolResultMetadata + withDuration): elapsed time, plus a
+// result-size summary derived from the output.
+func (t *transcript) toolMetaLine(b *block) string {
+	if !b.toolDone {
+		return ""
+	}
+	if b.toolErr {
+		return t.th.toolError.Render("error")
+	}
+	var parts []string
+	if b.toolTimed && b.toolDur > 0 {
+		parts = append(parts, formatToolDuration(b.toolDur))
+	}
+	if body := strings.TrimRight(b.toolOutput, "\n"); body != "" {
+		lines := strings.Count(body, "\n") + 1
+		if lines > 1 {
+			parts = append(parts, fmt.Sprintf("%d lines", lines))
+		}
+		parts = append(parts, formatByteCount(len(body)))
+	}
+	return t.th.muted.Render(strings.Join(parts, " · "))
+}
+
+// formatToolDuration renders an elapsed tool run kj-style: whole milliseconds
+// under a second (avoids float-rounding artifacts like 0.35→"0.3s"), tenths
+// of a second under ten seconds, whole seconds under a minute, and the Go
+// "NmNs" form above.
+func formatToolDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return "0ms"
+	}
+	switch {
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm%ds", int(d/time.Minute), int((d%time.Minute)/time.Second))
+	case d >= 10*time.Second:
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	case d >= time.Second:
+		return fmt.Sprintf("%.1fs", float64(d)/float64(time.Second))
+	default:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+}
+
+// formatByteCount renders a byte count kj-style: raw bytes under 1 KB,
+// one-decimal KB/MB above.
+func formatByteCount(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 // thinkTokens estimates reasoning tokens for the live thinking header using
@@ -414,6 +562,10 @@ func (t *transcript) renderThinking(b *block, width int) string {
 		return headerStyle.Render(header)
 	}
 
+	// Thinking streams are raw reasoning text with no markdown reflow, so
+	// wrap them to the viewport — a long unbroken token run must break
+	// across lines instead of running off-screen.
+	body = wrapPlain(body, max(1, width-2))
 	lines := strings.Split(body, "\n")
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render(header))
@@ -560,6 +712,9 @@ func (t *transcript) renderDiff(lines []diffLine, width int) string {
 		if line.prefix != 0 {
 			text = string(line.prefix) + text
 		}
+		// Diff rows sit two cells right so they line up under the metadata
+		// line with the indented body text above.
+		text = "  " + text
 		switch {
 		case line.prefix == '+':
 			sb.WriteString(t.th.diffAdd.Render(text))
@@ -581,15 +736,16 @@ func (t *transcript) renderDiff(lines []diffLine, width int) string {
 	return sb.String()
 }
 
-// toolHeader builds the bold one-line summary per tool, echoing pi's forms:
+// toolHeaderParts splits the one-line summary into a bold tool name and a
+// dim target, echoing pi/kj's forms:
 //
-//	read path[:range]
-//	edit path
-//	write path
-//	$ <cmd>
-//	<name> {json args}
-func (t *transcript) toolHeader(b *block) string {
-	name := b.toolName
+//	read path[:range]      → ("read", "path[:range]")
+//	edit path              → ("edit", "path")
+//	write path             → ("write", "path")
+//	$ <cmd>                → ("$", "<cmd>")
+//	<name> {json args}     → ("<name>", "{json args}")
+func (t *transcript) toolHeaderParts(b *block) (name, target string) {
+	name = b.toolName
 	arg := func(k string) string {
 		if b.toolArgs == nil {
 			return ""
@@ -601,38 +757,106 @@ func (t *transcript) toolHeader(b *block) string {
 		}
 		return ""
 	}
+	pathArg := func() string {
+		if p := arg("path"); p != "" {
+			return p
+		}
+		return arg("file_path")
+	}
 	switch name {
-	case "read":
-		p := arg("path")
-		if p == "" {
-			p = arg("file_path")
-		}
-		return "read " + p
-	case "edit":
-		p := arg("path")
-		if p == "" {
-			p = arg("file_path")
-		}
-		return "edit " + p
-	case "write":
-		p := arg("path")
-		if p == "" {
-			p = arg("file_path")
-		}
-		return "write " + p
+	case "read", "edit", "write":
+		return name, pathArg()
 	case "bash":
 		cmd := arg("command")
 		if cmd == "" {
 			cmd = arg("cmd")
 		}
-		return "$ " + firstLine(cmd)
+		return "$", firstLine(cmd)
 	default:
 		if len(b.toolArgs) == 0 {
-			return name
+			return name, ""
 		}
 		raw, _ := json.Marshal(b.toolArgs)
-		return name + " " + string(raw)
+		return name, string(raw)
 	}
+}
+
+// readFold groups a run of consecutive completed read calls on distinct paths
+// so they render as one "● read N files" line (kj's FormatFoldedReads).
+type readFold struct {
+	count int
+	end   int // index of the last block in the run
+}
+
+// foldReads returns the fold starting at index i when two or more consecutive
+// read blocks follow, or nil. Reads of the same path (polling, retries) stay
+// separate so repeated attention to one file remains visible.
+func (t *transcript) foldReads(i int) *readFold {
+	b := t.blocks[i]
+	if b.kind != blockTool || b.toolName != "read" || !b.toolDone || b.toolErr {
+		return nil
+	}
+	fold := &readFold{count: 1, end: i}
+	seen := map[string]struct{}{t.readPath(b): {}}
+	for j := i + 1; j < len(t.blocks); j++ {
+		nb := t.blocks[j]
+		if nb.kind != blockTool || nb.toolName != "read" || !nb.toolDone || nb.toolErr {
+			break
+		}
+		p := t.readPath(nb)
+		if _, dup := seen[p]; dup {
+			break
+		}
+		seen[p] = struct{}{}
+		fold.count++
+		fold.end = j
+	}
+	if fold.count < 2 {
+		return nil
+	}
+	return fold
+}
+
+// readPath extracts the path argument of a read call.
+func (t *transcript) readPath(b *block) string {
+	if p := toolArg(b.toolArgs, "path"); p != "" {
+		return p
+	}
+	return toolArg(b.toolArgs, "file_path")
+}
+
+// renderFoldedReads renders a folded run of completed reads:
+//
+//	● read 3 files
+//	  └ a.go · b.go · c.go · 1.2s
+func (t *transcript) renderFoldedReads(fold *readFold) string {
+	var sb strings.Builder
+	sb.WriteString(t.th.toolSuccess.Render("● "))
+	sb.WriteString(t.th.textPrimary.Bold(true).Render("read"))
+	sb.WriteByte(' ')
+	sb.WriteString(t.th.muted.Render(fmt.Sprintf("%d files", fold.count)))
+
+	paths := make([]string, 0, fold.count)
+	var total time.Duration
+	timed := true
+	for j := fold.end - fold.count + 1; j <= fold.end; j++ {
+		b := t.blocks[j]
+		if p := t.readPath(b); p != "" {
+			paths = append(paths, p)
+		}
+		if !b.toolTimed {
+			timed = false
+		}
+		total += b.toolDur
+	}
+	var meta []string
+	if timed && total > 0 {
+		meta = append(meta, formatToolDuration(total))
+	}
+	meta = append(meta, paths...)
+	sb.WriteByte('\n')
+	sb.WriteString(t.th.muted.Render("  └ " + strings.Join(meta, " · ")))
+	return sb.String()
 }
 
 // resultText flattens a ToolResult's content into text for display.

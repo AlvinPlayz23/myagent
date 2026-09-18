@@ -5,14 +5,84 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
+	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+// TestContextGauge covers the kj-style context indicator: hidden when the
+// window or usage is unknown, graded by occupancy, capped at 100%, driven by
+// the last turn's input tokens rather than the cumulative session total, and
+// suggesting /compact once usage crosses the warn threshold.
+func TestContextGauge(t *testing.T) {
+	newGaugeModel := func(window int) *model {
+		m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "test-model", "")
+		if window > 0 {
+			m.availableModels = func() []modelcatalog.Model {
+				return []modelcatalog.Model{{Provider: "p", ID: "test-model", ContextWindow: window}}
+			}
+			m.modelID = "p/test-model"
+		}
+		return m
+	}
+
+	t.Run("hidden without window", func(t *testing.T) {
+		m := newGaugeModel(0)
+		m.addUsage(types.Usage{Input: 1000})
+		if got := m.contextGauge(); got != "" {
+			t.Fatalf("gauge = %q, want empty when window unknown", got)
+		}
+	})
+	t.Run("hidden without usage", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		if got := m.contextGauge(); got != "" {
+			t.Fatalf("gauge = %q, want empty when no usage reported", got)
+		}
+	})
+	t.Run("renders percent", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		m.addUsage(types.Usage{Input: 42000})
+		if got := ansi.Strip(m.contextGauge()); got != "ctx 42%" {
+			t.Fatalf("gauge = %q, want %q", got, "ctx 42%")
+		}
+	})
+	t.Run("driven by last turn, not cumulative", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		m.addUsage(types.Usage{Input: 30000})
+		m.addUsage(types.Usage{Input: 10000})
+		if got := ansi.Strip(m.contextGauge()); got != "ctx 10%" {
+			t.Fatalf("gauge = %q, want %q (last turn wins)", got, "ctx 10%")
+		}
+	})
+	t.Run("grades severity", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		m.addUsage(types.Usage{Input: 96000})
+		if got := m.contextGauge(); !strings.Contains(got, "96%") {
+			t.Fatalf("critical gauge missing percent: %q", got)
+		}
+	})
+	t.Run("warn tier suggests compaction", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		m.addUsage(types.Usage{Input: 80000})
+		got := ansi.Strip(m.contextGauge())
+		if !strings.Contains(got, "80%") || !strings.Contains(got, "/compact") {
+			t.Fatalf("warn gauge = %q, want percent plus /compact hint", got)
+		}
+	})
+	t.Run("caps at 100", func(t *testing.T) {
+		m := newGaugeModel(100000)
+		m.addUsage(types.Usage{Input: 250000})
+		if got := ansi.Strip(m.contextGauge()); got != "ctx 100% — /compact" {
+			t.Fatalf("gauge = %q, want %q", got, "ctx 100% — /compact")
+		}
+	})
+}
 
 // The picker's labels and descriptions are written by hand, so it is the one
 // place the registered levels cannot be derived from llm.EffortLevels(). Guard
@@ -229,6 +299,41 @@ func TestViewFitsTerminalWithQueuedFollowUp(t *testing.T) {
 	}
 	if !strings.Contains(view.Content, "run the tests after this") {
 		t.Fatalf("view does not contain queued follow-up: %q", view.Content)
+	}
+}
+
+func TestStatusLineOffersWayBackDown(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 24)
+	m.hasSessionTitle = true
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(strings.Repeat("scrollback line ", 10))
+	}
+	m.refreshViewport()
+
+	// Pinned to the bottom, the status line stays quiet.
+	if got := m.statusLine(); got != "" {
+		t.Fatalf("status at bottom = %q, want empty", got)
+	}
+
+	// Scrolled up, it advertises the way back down.
+	m.viewport.ScrollUp(m.viewport.Height() / 2)
+	got := ansi.Strip(m.statusLine())
+	if !strings.Contains(got, "ctrl+g") {
+		t.Fatalf("status while scrolled up = %q, want the ctrl+g hint", got)
+	}
+
+	// Higher-priority lines still win: an in-flight run and status
+	// messages take precedence over the scroll hint.
+	m.working = true
+	m.startedAt = time.Now()
+	if got := ansi.Strip(m.statusLine()); strings.Contains(got, "ctrl+g") {
+		t.Fatalf("working status = %q, want the spinner line, not the scroll hint", got)
+	}
+	m.working = false
+	m.statusMsg = "hello"
+	if got := ansi.Strip(m.statusLine()); strings.Contains(got, "ctrl+g") || !strings.Contains(got, "hello") {
+		t.Fatalf("status message = %q, want the message, not the scroll hint", got)
 	}
 }
 
