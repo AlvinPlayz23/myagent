@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
@@ -132,7 +133,7 @@ var welcomeChoices = []welcomeChoice{
 	{style: welcomeOrb, label: "Orb", description: "animated dotted orb"},
 	{style: welcomeBanner, label: "Banner", description: "block letters with a shimmer sweep"},
 	{style: welcomeWave, label: "Wave", description: "flowing ripple under the title"},
-	{style: welcomeRain, label: "Rain", description: "drifting dots behind the title"},
+	{style: welcomeRain, label: "Rain", description: "full-screen falling rain — very experimental!"},
 	{style: welcomeFill, label: "Fill", description: "block letters filling with liquid"},
 	{style: welcomeMyagent, label: "Myagent", description: "chrome diamond mark with hero layout and menu"},
 }
@@ -2271,7 +2272,7 @@ func (m *model) renderWelcome() string {
 	case welcomeWave:
 		return title + "\n" + subtitle + "\n\n" + m.renderWave() + "\n\n" + hint
 	case welcomeRain:
-		return m.renderRain(compact, title, subtitle) + "\n\n" + hint
+		return m.renderRain(compact, title, subtitle)
 	case welcomeFill:
 		if m.width < wordmarkWidth+4 {
 			break
@@ -2355,54 +2356,232 @@ func (m *model) renderWave() string {
 	return centerLine(sb.String(), m.width)
 }
 
-// renderRain lays sparse drifting dots behind the title and subtitle. Drop
-// positions come from a hash of the column, so the field is deterministic and
-// stable across renders at the same frame.
+// Rain density knobs. Drops are scattered by a per-column hash, so these
+// tune how heavy the field reads without touching layout, timing, or the
+// text overlay. Lower rainColumnPct = more empty sky; longer periods = more
+// vertical space between drops in a column.
+const (
+	// rainColumnPct is the share of columns that carry drops at all. The
+	// rest stay empty, which is what keeps a wide terminal from looking
+	// like a solid curtain.
+	rainColumnPct = 62
+	// rainPeriodBase/rainPeriodSpread bound each column's fall period in
+	// rows (periods run base … base+spread-1).
+	rainPeriodBase   = 13
+	rainPeriodSpread = 9
+)
+
+// renderRain fills the whole viewport with falling rain, then seats the
+// title, hint, and clickable menu ON the rain's own vertical grid — no
+// separate flex container. Text rows replace rain cells in place. Drop
+// positions come from a hash of the column, so the field is deterministic
+// and stable across renders at the same frame.
 func (m *model) renderRain(compact bool, centeredRows ...string) string {
-	height := 7
-	if compact {
-		height = 5
+	height := m.welcomeViewportHeight()
+	if height < 7 {
+		height = 7
 	}
-	fieldWidth := min(max(m.width-4, 16), 64)
-	left := max(0, (m.width-fieldWidth)/2)
+	m.recordRainMenu(compact, centeredRows)
 
-	// Rows the title/subtitle occupy stay clear of drops so text is readable.
-	titleRow := height / 2
-	occupied := map[int]string{}
-	for i, row := range centeredRows {
-		occupied[titleRow+i] = row
-	}
-
-	rows := make([]string, 0, height+len(centeredRows))
+	rows := make([]string, 0, height)
 	for y := 0; y < height; y++ {
-		if row, ok := occupied[y]; ok {
-			rows = append(rows, row)
-			continue
-		}
-		var sb strings.Builder
-		sb.WriteString(strings.Repeat(" ", left))
-		for x := range fieldWidth {
-			cell := ' '
-			var style lipgloss.Style
-			// Each column runs its own drop on a column-specific period and
-			// offset, so the field never falls in lockstep.
-			period := 11 + rainHash(x)%9
-			offset := rainHash(x*7+1) % period
-			if (m.welcomeFrame+offset)%period == y%period {
-				cell, style = '·', m.th.orbDim
-			} else if (m.welcomeFrame+offset)%period == (y+1)%period {
-				cell, style = '·', m.th.orbMedium
-			}
-			if cell == ' ' {
-				sb.WriteRune(' ')
-				continue
-			}
-			sb.WriteString(style.Render(string(cell)))
-		}
-		rows = append(rows, strings.TrimRight(sb.String(), " "))
+		rows = append(rows, m.rainRow(y, height, compact, centeredRows))
 	}
 	return strings.Join(rows, "\n")
 }
+
+// recordRainMenu anchors the menu to the rain grid and records its rows for
+// mouse clicks. The menu slot opens below the title block; because the menu
+// is clickable content (welcomeMenu range) it is always laid out in full,
+// even when the viewport is short.
+func (m *model) recordRainMenu(compact bool, centeredRows []string) {
+	height := m.welcomeViewportHeight()
+	if height < 7 {
+		height = 7
+	}
+	titleRow := m.rainTitleRow(len(centeredRows), height, compact)
+	menuStart := titleRow + len(centeredRows) + 1
+	m.welcomeMenu = [2]int{menuStart, menuStart + len(welcomeMenuItems)}
+}
+
+// rainTitleRow picks the title block's first row: biased about a quarter
+// down the viewport (like the default welcome's /3 weighting) so the rain
+// has real sky above it, tightened when the viewport is short.
+func (m *model) rainTitleRow(blockRows, height int, compact bool) int {
+	if compact {
+		return max(1, (height-blockRows-len(welcomeMenuItems)-5)/3)
+	}
+	row := height / 4
+	if row+blockRows+1+len(welcomeMenuItems)+3 > height {
+		row = max(1, height-blockRows-1-len(welcomeMenuItems)-3)
+	}
+	return row
+}
+
+// rainHint returns the width-appropriate hint text, mirroring renderWelcome.
+func (m *model) rainHint() string {
+	hint := "Type a prompt to begin · /help for commands"
+	if m.width < 44 {
+		hint = "Type a prompt · /help for commands"
+	}
+	if m.width < 34 {
+		hint = "Type a prompt to begin"
+	}
+	return hint
+}
+
+// rainRow renders one viewport row: a rain cell row spanning the full
+// width, with the title block, clickable menu, and hint drawn OVER the
+// rain — the drops keep falling behind the text instead of splitting the
+// sky into separate fields above and below it.
+func (m *model) rainRow(y, height int, compact bool, centeredRows []string) string {
+	titleRow := m.rainTitleRow(len(centeredRows), height, compact)
+	menuStart := titleRow + len(centeredRows) + 1
+	hintRow := menuStart + len(welcomeMenuItems) + 1
+
+	var sb strings.Builder
+	for x := 0; x < m.width; x++ {
+		// Thin the field: only a share of columns carry drops at all, so a
+		// wide terminal reads as scattered rain instead of a solid curtain.
+		if rainHash(x*31+5)%100 >= rainColumnPct {
+			sb.WriteRune(' ')
+			continue
+		}
+		cell := ' '
+		var style lipgloss.Style
+		// Each column runs its own drop on a column-specific period and
+		// offset, so the field never falls in lockstep. Longer periods leave
+		// more empty sky between drops. Drops fall one row per frame; the
+		// head glows brighter than its fading tail.
+		period := rainPeriodBase + rainHash(x)%rainPeriodSpread
+		offset := rainHash(x*7+1) % period
+		pos := (m.welcomeFrame + offset) % period
+		switch {
+		case pos == y%period:
+			cell, style = '│', m.th.orbBright
+		case pos == (y+1)%period:
+			cell, style = '·', m.th.orbMedium
+		}
+		if cell == ' ' {
+			sb.WriteRune(' ')
+			continue
+		}
+		sb.WriteString(style.Render(string(cell)))
+	}
+	row := strings.TrimRight(sb.String(), " ")
+
+	// Text slots replace the rain segment they cover, leaving the drops on
+	// either side visible so the field reads as one continuous sky.
+	if y >= titleRow && y < titleRow+len(centeredRows) {
+		return overlayRainCell(row, centeredRows[y-titleRow], m.width)
+	}
+	if y >= menuStart && y < menuStart+len(welcomeMenuItems) {
+		return overlayRainCell(row, m.rainMenuRow(y-menuStart), m.width)
+	}
+	if y == hintRow {
+		return overlayRainCell(row, centerLine(m.th.muted.Render(m.rainHint()), m.width), m.width)
+	}
+	return row
+}
+
+// overlayRainCell draws a centered text row over a rain row: the text
+// replaces the rain segment it covers while the drops on either side stay
+// visible, so the field reads as one continuous sky behind the words. Both
+// rows are ANSI-styled, so the merge works on plain cells: rain cells are
+// spaces or drop glyphs, text cells are spaces or content. Text wins every
+// non-space slot; styled rain wins only where the text row is blank.
+func overlayRainCell(rainRow, textRow string, width int) string {
+	rainCells := ansiCells(rainRow)
+	textCells := ansiCells(textRow)
+	out := make([]string, width)
+	for x := 0; x < width; x++ {
+		var rain, text string
+		if x < len(rainCells) {
+			rain = rainCells[x]
+		}
+		if x < len(textCells) {
+			text = textCells[x]
+		}
+		if plainCell(text) != " " && plainCell(text) != "" {
+			out[x] = text
+			continue
+		}
+		if rain == "" {
+			out[x] = " "
+			continue
+		}
+		out[x] = rain
+	}
+	return strings.TrimRight(strings.Join(out, ""), " ")
+}
+
+// ansiCells splits a styled row into one styled string per terminal cell.
+// ANSI escape sequences attach to the cell they precede; plain runes map
+// one-to-one (rain glyphs and text are all single-cell runes).
+func ansiCells(s string) []string {
+	var cells []string
+	var pending string
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			pending += s[i:j]
+			i = j
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		cells = append(cells, pending+string(r))
+		pending = ""
+		i += size
+	}
+	if pending != "" {
+		cells = append(cells, pending)
+	}
+	return cells
+}
+
+// plainCell strips ANSI escapes from one cell for the blank-vs-content test.
+func plainCell(cell string) string {
+	for {
+		i := strings.Index(cell, "\x1b[")
+		if i < 0 {
+			return cell
+		}
+		j := strings.Index(cell[i:], "m")
+		if j < 0 {
+			return cell[:i]
+		}
+		cell = cell[:i] + cell[i+j+1:]
+	}
+}
+
+// rainMenuRow renders one clickable menu row in the same `label … key`
+// shape as renderWelcomeMenu, plus the hover background when hovered.
+func (m *model) rainMenuRow(i int) string {
+	item := welcomeMenuItems[i]
+	menuWidth := 30
+	if menuWidth > m.width-4 && m.width-4 > 10 {
+		menuWidth = m.width - 4
+	}
+	gap := menuWidth - len([]rune(item[0])) - len([]rune(item[1]))
+	if gap < 2 {
+		gap = 2
+	}
+	row := item[0] + strings.Repeat(" ", gap) + item[1]
+	if m.hoverKind == hoverWelcome && m.hoverIdx == i {
+		return centerLine(m.th.rowHover.Render(row), m.width)
+	}
+	return centerLine(
+		m.th.textPrimary.Render(item[0])+
+			strings.Repeat(" ", gap)+
+			m.th.muted.Render(item[1]), m.width)
+}
+
 
 // rainHash is a small deterministic integer hash used to scatter rain columns.
 func rainHash(n int) int {

@@ -3,7 +3,90 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
+
+// TestRainDensityStaysThin guards the "make the rain thinner" tuning: the
+// field must scatter drops rather than blanket the screen, and most columns
+// should carry no drops at all. A future density tweak that regresses to a
+// solid curtain trips this.
+func TestRainDensityStaysThin(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+	m.onResize(160, 40)
+	const width, height = 160, 60
+
+	filled, total := 0, 0
+	for y := 0; y < height; y++ {
+		plain := ansi.Strip(m.rainRow(y, height, false, nil))
+		runes := []rune(plain)
+		for x := 0; x < width; x++ {
+			total++
+			if x < len(runes) && (runes[x] == '│' || runes[x] == '·') {
+				filled++
+			}
+		}
+	}
+	density := float64(filled) / float64(total)
+	if density > 0.09 {
+		t.Fatalf("rain density = %.3f of cells, want <= 0.09 (field reads as a curtain)", density)
+	}
+	if density == 0 {
+		t.Fatal("rain field is completely empty; drops are not rendering")
+	}
+}
+
+func TestRainFillsViewportAndKeepsMenu(t *testing.T) {
+	dir := t.TempDir()
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", dir)
+	m.onResize(80, 30)
+	m.welcomeStyle = welcomeRain
+	view := m.renderWelcome()
+	lines := strings.Split(view, "\n")
+	if len(lines) != m.welcomeViewportHeight() {
+		t.Fatalf("rain rows = %d, want viewport height %d", len(lines), m.welcomeViewportHeight())
+	}
+	// The same overlay keeps working on the next frame.
+	m.welcomeFrame++
+	m.welcomeFrame++
+	if again := strings.Count(m.renderWelcome(), "\n") + 1; again != m.welcomeViewportHeight() {
+		t.Fatalf("rain rows on later frame = %d, want %d", again, m.welcomeViewportHeight())
+	}
+	for _, want := range []string{"myagent", "Start typing", "/resume", "/models"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("rain welcome missing %q:\n%s", want, view)
+		}
+	}
+	// Menu rows are recorded for clicks and span the full menu.
+	rows := m.welcomeMenu[1] - m.welcomeMenu[0]
+	if rows != len(welcomeMenuItems) {
+		t.Fatalf("rain menu rows = %d, want %d", rows, len(welcomeMenuItems))
+	}
+	// Full-screen rain reaches the edges within the first few rows.
+	edge := false
+	for _, line := range lines[:min(6, len(lines))] {
+		plain := ansi.Strip(line)
+		if strings.HasPrefix(plain, "│") || strings.HasSuffix(plain, "│") {
+			edge = true
+			break
+		}
+	}
+	if !edge {
+		t.Fatalf("no rain row touches the viewport edge:\n%s", view)
+	}
+
+	// The menu row still sits ON falling rain: stripping the text leaves
+	// drops on both sides instead of a blank gap.
+	menuLine := lines[m.welcomeMenu[0]+2]
+	withoutText := menuLine
+	for _, item := range welcomeMenuItems {
+		withoutText = strings.ReplaceAll(withoutText, item[0], "")
+		withoutText = strings.ReplaceAll(withoutText, item[1], "")
+	}
+	if plain := ansi.Strip(withoutText); !strings.Contains(plain, "│") && !strings.Contains(plain, "·") {
+		t.Fatalf("menu row has no rain behind it:\n%s", menuLine)
+	}
+}
 
 func TestMyagentTierThresholds(t *testing.T) {
 	if got := myagentTierForHeight(21); got != logoHidden {
