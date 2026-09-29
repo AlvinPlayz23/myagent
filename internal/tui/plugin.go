@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
@@ -149,7 +150,8 @@ func (m *model) applyProfile(name string) error {
 		return fmt.Errorf("Cancel the current run before switching profiles.")
 	}
 	if name == "" || name == "reset" {
-		m.runner.setTools(m.baseRegistry, m.basePrompt)
+		base := m.baseRegistry.Without(m.disabledTools)
+		m.runner.setTools(base, agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...))
 		m.runner.setEffort(m.baseEffort)
 		m.activeProfile = ""
 		m.statusMsg = "Profile reset."
@@ -159,7 +161,7 @@ func (m *model) applyProfile(name string) error {
 	if m.pluginBundle == nil {
 		return fmt.Errorf("no profiles available")
 	}
-	applied, err := plugin.Apply(m.pluginBundle, m.baseRegistry, m.basePrompt, m.cwd, name)
+	applied, err := plugin.Apply(m.pluginBundle, m.baseRegistry, m.basePrompt, m.cwd, name, m.disabledTools...)
 	if err != nil {
 		return err
 	}
@@ -260,4 +262,45 @@ func buildPluginHelpExtra(items []commandItem) string {
 		fmt.Fprintf(&b, "  %-21s %s\n", item.usage, item.description)
 	}
 	return b.String()
+}
+
+// applyToolToggles publishes the /tools deny list: it rebuilds the effective
+// registry (profile allowlist first, disabled filter last), persists the
+// choice, and swaps the runner's registry + system prompt. Callers must refuse
+// while a run is active. An empty list re-enables every tool.
+func (m *model) applyToolToggles(pending []string) {
+	if m.working {
+		m.statusMsg = "Cancel the current run before changing tools."
+		return
+	}
+	previous := m.disabledTools
+	if m.saveDisabledTools != nil {
+		if err := m.saveDisabledTools(pending); err != nil {
+			m.statusMsg = "Could not save tools: " + err.Error()
+			return
+		}
+	}
+	m.disabledTools = append([]string(nil), pending...)
+	if m.activeProfile != "" {
+		// Re-apply the profile so its instructions and effort survive the
+		// change; applyProfile routes the disabled list through plugin.Apply.
+		if err := m.applyProfile(m.activeProfile); err != nil {
+			m.disabledTools = previous
+			if m.saveDisabledTools != nil {
+				_ = m.saveDisabledTools(previous)
+			}
+			m.statusMsg = err.Error()
+			return
+		}
+	} else {
+		base := m.baseRegistry.Without(m.disabledTools)
+		m.runner.setTools(base, agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...))
+	}
+	switch {
+	case len(pending) == 0:
+		m.statusMsg = "All tools enabled."
+	default:
+		m.statusMsg = fmt.Sprintf("Tools updated: %d disabled.", len(pending))
+	}
+	m.refreshViewport()
 }

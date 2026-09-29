@@ -97,6 +97,16 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 			return nil
 		}
+		m.disabledTools = append([]string(nil), persistedConfig.DisabledTools...)
+		m.saveDisabledTools = func(disabled []string) error {
+			previous := persistedConfig.DisabledTools
+			persistedConfig.DisabledTools = append([]string(nil), disabled...)
+			if err := config.Save(persistedConfig); err != nil {
+				persistedConfig.DisabledTools = previous
+				return err
+			}
+			return nil
+		}
 	}
 	m.syncComposerStyle()
 	m.setTerminalTitle = terminal.SetTitle
@@ -123,6 +133,11 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		} else if err := m.applyProfile(m.defaultProfile); err != nil {
 			m.statusMsg = err.Error()
 		}
+	} else if len(m.disabledTools) > 0 {
+		// Persisted /tools deny list with no pinned profile: hide the tools
+		// before the first turn so the model never sees them.
+		base := m.baseRegistry.Without(m.disabledTools)
+		m.runner.setTools(base, agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...))
 	}
 	if agent.HasRepositoryGuidance(cwd) {
 		if m.statusMsg != "" {

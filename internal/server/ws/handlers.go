@@ -208,6 +208,26 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		}
 		return map[string]any{"profile": pp.Profile}, nil
 
+	case "session.setTools":
+		var p struct {
+			SessionID string   `json:"sessionId"`
+			Disabled  []string `json:"disabled"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		if p.SessionID == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		}
+		if err := c.manager.SetDisabledTools(c.id, p.SessionID, p.Disabled); err != nil {
+			return nil, coreError(err)
+		}
+		ss, err := c.manager.Get(c.id, p.SessionID)
+		if err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{"disabled": ss.DisabledTools()}, nil
+
 	case "session.rename":
 		var p sessionRename
 		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {

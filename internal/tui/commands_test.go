@@ -36,6 +36,8 @@ func TestParseSlashCommand(t *testing.T) {	tests := []struct {
 		{input: "/effort xhigh", kind: commandEffort, arg: "xhigh"},
 		{input: "/providers", kind: commandProviders},
 		{input: "/customize", kind: commandCustomize},
+		{input: "/tools", kind: commandTools},
+		{input: "/tools extra", want: "usage: /tools"},
 		{input: "/init", kind: commandInit},
 		{input: "/thinking", kind: commandThinking},
 		{input: "/thinking on", kind: commandThinking, arg: "on"},

@@ -28,6 +28,7 @@ const (
 	commandProfile
 	commandMouse
 	commandPaste
+	commandTools
 )
 
 type slashCommand struct {
@@ -61,6 +62,7 @@ var commandItems = []commandItem{
 	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
 	{name: "/init", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
 	{name: "/thinking", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
+	{name: "/tools", usage: "/tools", description: "Enable or disable tools for the model", kind: commandTools},
 	{name: "/mouse", usage: "/mouse [on|off]", description: "Toggle mouse clicks and hover (off restores native selection)", kind: commandMouse},
 	{name: "/paste", usage: "/paste", description: "Attach the clipboard image (works when ctrl+v is intercepted)", kind: commandPaste},
 }

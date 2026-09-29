@@ -33,6 +33,9 @@ type Options struct {
 	NoPlugins bool
 	// DefaultProfile pins a profile for every session (fail-fast unknown).
 	DefaultProfile string
+	// DefaultDisabledTools lists tool names hidden from the model for every
+	// session (the /tools deny list). Applied after any profile allowlist.
+	DefaultDisabledTools []string
 }
 
 // Manager owns the set of live server sessions. All methods are safe for
@@ -185,7 +188,7 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		want = profile[0]
 	}
 	if want != "" {
-		applied, err := plugin.Apply(bundle, registry, basePrompt, cwd, want)
+		applied, err := plugin.Apply(bundle, registry, basePrompt, cwd, want, m.opts.DefaultDisabledTools...)
 		if err != nil {
 			return nil, err
 		}
@@ -196,6 +199,9 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		if applied.Effort != "" {
 			effort = applied.Effort
 		}
+	} else if len(m.opts.DefaultDisabledTools) > 0 {
+		registry = registry.Without(m.opts.DefaultDisabledTools)
+		systemPrompt = agent.BuildSystemPrompt(registry, cwd, m.opts.DefaultDisabledTools...)
 	}
 	if sess != nil {
 		model.SessionID = sess.ID()
@@ -224,7 +230,33 @@ func (m *Manager) SetEffort(connID, sessionID string, effort llm.Effort) error {
 	return ss.SetEffort(effort)
 }
 
- 	// SetProfile applies a plugin profile (or resets with "" / "reset") on an
+// SetDisabledTools applies the /tools deny list to an owned session: the base
+// registry (built-ins + plugin shell tools) minus the named tools, with the
+// active profile's instructions preserved. It is rejected while a run is
+// active (ErrBusy) so an in-flight turn never observes a half-swapped registry.
+func (m *Manager) SetDisabledTools(connID, sessionID string, disabled []string) error {
+	ss, err := m.Get(connID, sessionID)
+	if err != nil {
+		return err
+	}
+	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
+	base := tools.DefaultRegistry(ss.Cwd())
+	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
+		base.Add(st)
+	}
+	profile := ss.ActiveProfile()
+	if profile == "" {
+		filtered := base.Without(disabled)
+		return ss.SetDisabledTools(filtered, agent.BuildSystemPrompt(filtered, ss.Cwd(), disabled...), disabled)
+	}
+	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile, disabled...)
+	if err != nil {
+		return err
+	}
+	return ss.SetDisabledTools(applied.Registry, applied.SystemPrompt, disabled)
+}
+
+// SetProfile applies a plugin profile (or resets with "" / "reset") on an
 // owned session: filtered registry + rebuilt prompt + effort override.
 // The switch is atomic (single ServerSession lock hold) so a concurrent
 // Prompt cannot observe a half-applied profile. Reset also restores the
@@ -241,18 +273,19 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 		for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
 			base.Add(st)
 		}
+		base = base.Without(ss.DisabledTools())
 		effort, nerr := llm.NormalizeEffort(ss.Model(), m.opts.DefaultEffort)
 		if nerr != nil {
 			effort = ""
 		}
-		return ss.SetProfile(base, agent.BuildSystemPrompt(base, ss.Cwd()), effort)
+		return ss.SetProfile(base, agent.BuildSystemPrompt(base, ss.Cwd(), ss.DisabledTools()...), effort, "", ss.DisabledTools())
 	}
 	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
 	base := tools.DefaultRegistry(ss.Cwd())
 	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
 		base.Add(st)
 	}
-	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile)
+	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile, ss.DisabledTools()...)
 	if err != nil {
 		return err
 	}
@@ -264,7 +297,7 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 			effort = ""
 		}
 	}
-	return ss.SetProfile(applied.Registry, applied.SystemPrompt, effort)
+	return ss.SetProfile(applied.Registry, applied.SystemPrompt, effort, profile, ss.DisabledTools())
 }
 
 // Get returns the live session with the given id if connID may act on it.

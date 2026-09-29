@@ -1,9 +1,24 @@
 package plugin
 
 import (
+	"context"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/AlvinPlayz23/myagent/internal/tools"
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+// stubTool is a minimal tools.Tool for Apply composition tests.
+type stubTool struct{ name string }
+
+func (s *stubTool) Name() string               { return s.name }
+func (s *stubTool) Description() string        { return "stub " + s.name }
+func (s *stubTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (s *stubTool) Execute(context.Context, string, map[string]any) (*types.ToolResult, error) {
+	return nil, nil
+}
 
 func TestLoadBytesMergeAndCollisions(t *testing.T) {
 	global := []byte(`{"tools":[{"name":"echo","description":"d","parameters":{"type":"object","properties":{"msg":{"type":"string"}}},"command":"echo {{.msg}}"}],"commands":[{"name":"/hi","description":"d","prompt":"hi {{$args}}"}],"profiles":[{"name":"plan","description":"d","tools":["read"]}]}`)
@@ -80,5 +95,36 @@ func TestDenyBlocks(t *testing.T) {
 	}
 	if err := deny("ls -la"); err != nil {
 		t.Fatalf("unexpected deny: %v", err)
+	}
+}
+
+func TestApplyDisabledWinsOverProfileAllowlist(t *testing.T) {
+	b := LoadBytes([]byte(`{"profiles":[{"name":"plan","description":"d","tools":["read","bash"]}]}`), nil)
+	base := tools.NewRegistry(
+		&stubTool{name: "read"}, &stubTool{name: "write"},
+		&stubTool{name: "edit"}, &stubTool{name: "bash"},
+	)
+	// Profile allows read+bash; the /tools deny list removes bash on top.
+	applied, err := Apply(b, base, "base", "/tmp", "plan", "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := applied.Registry.Names(), []string{"read"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("registry = %v, want %v", got, want)
+	}
+	if strings.Contains(applied.SystemPrompt, "- bash:") {
+		t.Fatalf("prompt still advertises disabled bash:\n%s", applied.SystemPrompt)
+	}
+}
+
+func TestApplyDisabledWithNoProfile(t *testing.T) {
+	// An empty profile name is a no-op regardless of the disabled list.
+	base := tools.NewRegistry(&stubTool{name: "read"}, &stubTool{name: "bash"})
+	applied, err := Apply(nil, base, "base", "/tmp", "", "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Registry != nil {
+		t.Fatalf("expected zero AppliedProfile for empty name, got %+v", applied)
 	}
 }

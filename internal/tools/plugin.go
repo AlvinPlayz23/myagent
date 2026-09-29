@@ -5,6 +5,27 @@ import (
 	"strings"
 )
 
+// Without returns a new registry with the named tools removed, preserving
+// order. Unknown names are ignored. An empty name list returns r unchanged so
+// callers can treat "nothing disabled" as a no-op.
+func (r *Registry) Without(names []string) *Registry {
+	if len(names) == 0 {
+		return r
+	}
+	remove := make(map[string]bool, len(names))
+	for _, n := range names {
+		remove[n] = true
+	}
+	out := make([]Tool, 0, len(r.order))
+	for _, t := range r.All() {
+		if remove[t.Name()] {
+			continue
+		}
+		out = append(out, t)
+	}
+	return NewRegistry(out...)
+}
+
 // Add appends a tool to the registry, replacing any existing tool with the
 // same name (order is preserved for replacements).
 func (r *Registry) Add(t Tool) {

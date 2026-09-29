@@ -78,6 +78,9 @@ type Config struct {
 	Retry        *RetryConfig              `json:"retry,omitempty"`
 	WelcomeStyle string                    `json:"welcomeStyle,omitempty"`
 	PromptStyle  string                    `json:"promptStyle,omitempty"`
+	// DisabledTools lists tool names hidden from the model. Unknown names are
+	// ignored; new tools default to enabled, so this stays a deny list.
+	DisabledTools []string `json:"disabledTools,omitempty"`
 }
 
 // RetryConfig tunes automatic retries of transient provider failures. Omitted

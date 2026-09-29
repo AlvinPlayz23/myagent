@@ -57,6 +57,11 @@ type ServerSession struct {
 	cwd       string
 	running   bool
 	cancelRun context.CancelFunc
+	// activeProfile and disabledTools track the last-applied /profile and
+	// /tools state so later changes can be re-composed (profile allowlist
+	// first, disabled filter last).
+	activeProfile string
+	disabledTools []string
 	owner     string // connection id; "" = unowned
 	closed    bool
 
@@ -351,8 +356,10 @@ func (s *ServerSession) SetTools(reg *tools.Registry, systemPrompt string) error
 // SetProfile atomically swaps the tool registry, system prompt, and effort
 // (profile switching). A single lock hold guarantees a concurrent Prompt
 // cannot observe a half-applied profile (new tools with old effort or vice
-// versa). Fails with ErrBusy while a run is active.
-func (s *ServerSession) SetProfile(reg *tools.Registry, systemPrompt string, effort llm.Effort) error {
+// versa). profile records the active profile ("" for reset) so a later
+// SetDisabledTools can recompose the registry. Fails with ErrBusy while a run
+// is active.
+func (s *ServerSession) SetProfile(reg *tools.Registry, systemPrompt string, effort llm.Effort, profile string, disabled []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
@@ -361,6 +368,37 @@ func (s *ServerSession) SetProfile(reg *tools.Registry, systemPrompt string, eff
 	s.cfg.Registry = reg
 	s.cfg.SystemPrompt = systemPrompt
 	s.cfg.Effort = effort
+	s.activeProfile = profile
+	s.disabledTools = append([]string(nil), disabled...)
+	return nil
+}
+
+// ActiveProfile returns the last-applied profile name ("" when none).
+func (s *ServerSession) ActiveProfile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeProfile
+}
+
+// DisabledTools returns a copy of the active /tools deny list.
+func (s *ServerSession) DisabledTools() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.disabledTools...)
+}
+
+// SetDisabledTools atomically swaps the registry, system prompt, and recorded
+// deny list without touching the effort or active profile. Fails with ErrBusy
+// while a run is active so the loop never sees a half-swapped registry.
+func (s *ServerSession) SetDisabledTools(reg *tools.Registry, systemPrompt string, disabled []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return ErrBusy
+	}
+	s.cfg.Registry = reg
+	s.cfg.SystemPrompt = systemPrompt
+	s.disabledTools = append([]string(nil), disabled...)
 	return nil
 }
 

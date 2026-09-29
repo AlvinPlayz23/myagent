@@ -50,6 +50,11 @@ func (r *Registry) All() []Tool {
 	return out
 }
 
+// Names returns the registered tool names in order.
+func (r *Registry) Names() []string {
+	return append([]string(nil), r.order...)
+}
+
 // argString returns args[key] as a string, or "" if missing/wrong type.
 func argString(args map[string]any, key string) (string, bool) {
 	v, ok := args[key]
