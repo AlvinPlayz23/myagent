@@ -302,10 +302,14 @@ func TestCustomizeCommandSelectsAndSavesOrb(t *testing.T) {
 	}
 
 	m.runCommand("/customize")
-	if !m.customize.active || m.customize.selected().welcome != welcomeDefault {
-		t.Fatal("customize picker did not open on the current default style")
+	if !m.customize.active || m.customize.level != 0 || m.customize.sel != 0 {
+		t.Fatal("customize did not open on the option-group list")
 	}
-	m.customize.move(1)
+	m.confirmCustomize() // enter the Startup Style group (cursor -> Default)
+	if m.customize.selected().welcome != welcomeDefault {
+		t.Fatal("startup group did not open on the current default style")
+	}
+	m.customize.move(1) // -> Orb
 	m.applyCustomizeSelection()
 
 	if m.customize.active || m.welcomeStyle != welcomeOrb || saved != welcomeOrb {

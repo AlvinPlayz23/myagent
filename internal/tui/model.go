@@ -271,7 +271,9 @@ func (p *customizePicker) openGroup(g int, current int) {
 	}
 	p.level = 1
 	p.group = g
-	p.sel = current
+	// current indexes this group's choices, not the group list; keep it in range
+	// so sel is always valid for the level we just switched to.
+	p.sel = min(max(current, 0), max(len(customizeChoices(customizeGroups[g].section))-1, 0))
 }
 
 // backToGroups returns from a group's choices to the option list, keeping the
@@ -1450,7 +1452,11 @@ func (m *model) confirmInlineRow(item int) (tea.Model, tea.Cmd) {
 		if m.customize.sel == item {
 			return m.confirmCustomize()
 		}
-		m.customize.sel = item
+		// The click index comes from the last painted row map, which belongs to
+		// whichever level was on screen; clamp it to the level we are on now.
+		if h := m.customize.height(); item >= 0 && item < h {
+			m.customize.sel = item
+		}
 		return m, nil
 	case m.exportPick.active:
 		if m.exportPick.sel == item {
@@ -1841,8 +1847,17 @@ func (m *model) writeExport(overwrite bool) (tea.Model, tea.Cmd) {
 // setting.
 func (m *model) confirmCustomize() (tea.Model, tea.Cmd) {
 	if m.customize.level == 0 {
-		m.customize.openGroup(m.customize.sel, m.currentCustomizeChoice(m.customize.sel))
-		m.statusMsg = "Choose a " + customizeGroups[m.customize.sel].label + " option."
+		// openGroup rewrites sel to the current choice's index, so the group
+		// index has to be captured before descending.
+		group := m.customize.sel
+		if group < 0 || group >= len(customizeGroups) {
+			m.customize.close()
+			m.statusMsg = "Customization cancelled."
+			m.updateLayout()
+			return m, nil
+		}
+		m.customize.openGroup(group, m.currentCustomizeChoice(group))
+		m.statusMsg = "Choose a " + customizeGroups[group].label + " option."
 		m.updateLayout()
 		return m, nil
 	}
@@ -1867,6 +1882,9 @@ func (m *model) currentCustomizeChoice(group int) int {
 // applyCustomizeSelection saves whichever grouped setting the cursor sits on.
 func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
 	row := m.customize.selected()
+	if m.customize.level != 1 || (m.customize.sel < 0 || m.customize.sel >= len(m.customize.choices())) {
+		return m, nil // no valid row under the cursor: save nothing
+	}
 	if row.section == sectionComposer {
 		return m.applyPromptStyle(row)
 	}
