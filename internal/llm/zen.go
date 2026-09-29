@@ -40,10 +40,15 @@ func ClampContributorEffort(modelID string, effort Effort) Effort {
 }
 
 // ClassifyZenError returns an actionable hint for known Zen (/v1) failure
-// shapes. It returns "" when the body does not match a known case.
+// shapes. It returns "" when the body does not match a known case, and also
+// returns "" for non-Zen hosts so generic provider errors (e.g. a local
+// proxy rejecting tools with "not supported") never get a Zen hint appended.
 // Matching is case-insensitive and deliberately substring-based because Zen
 // nests the vendor message inside several envelope shapes.
-func ClassifyZenError(status int, body, modelID, endpoint string) string {
+func ClassifyZenError(status int, body, modelID, endpoint, baseURL string) string {
+	if !IsZenHost(baseURL) {
+		return ""
+	}
 	lower := strings.ToLower(body)
 	isResponses := strings.HasSuffix(endpoint, "/responses")
 
@@ -54,8 +59,11 @@ func ClassifyZenError(status int, body, modelID, endpoint string) string {
 		strings.Contains(lower, "free tier"):
 		return " — Zen free model " + quoteModel(modelID) + " requires an OpenCode client session (x-opencode-session) and is not usable without it by vendor policy; use a paid Zen model or OpenCode"
 	case strings.Contains(lower, "model is unavailable"),
-		strings.Contains(lower, "not supported"),
-		strings.Contains(lower, "modelerror"):
+		strings.Contains(lower, "modelerror"),
+		// "not supported" alone is too generic (tool errors, proxy errors,
+		// etc. all contain it), so only treat it as a model-availability
+		// signal when the body is actually about a model.
+		(strings.Contains(lower, "not supported") && strings.Contains(lower, "model")):
 		return " — Zen reports model " + quoteModel(modelID) + " unavailable/unsupported on /v1; refresh GET /v1/models and pick another Zen model"
 	case status == 500 && IsMuseSparkModel(modelID) && !isResponses:
 		return " — Muse Spark is served on Zen /responses, not /chat/completions; myagent routes muse-spark* to /responses automatically"

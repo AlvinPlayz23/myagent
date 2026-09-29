@@ -5,11 +5,30 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
+
+// rewriteHostTransport forwards requests to a local test server while
+// preserving the original model's BaseURL for host-gated logic (Zen hints).
+type rewriteHostTransport struct {
+	target string
+}
+
+func (t *rewriteHostTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	u, err := url.Parse(t.target)
+	if err != nil {
+		return nil, err
+	}
+	clone := r.Clone(r.Context())
+	clone.URL.Scheme = u.Scheme
+	clone.URL.Host = u.Host
+	clone.Host = u.Host
+	return http.DefaultTransport.RoundTrip(clone)
+}
 
 func streamResponsesFromSSE(t *testing.T, modelID, payload string, check func(t *testing.T, r *http.Request, body string)) []StreamEvent {
 	t.Helper()
@@ -97,8 +116,11 @@ func TestResponsesHTTPErrorCarriesHint(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// The model points at the Zen host (so the Zen hint applies) while the
+	// transport rewrites the request to the local test server.
 	provider := NewOpenAIProvider("")
-	stream, err := provider.Stream(context.Background(), Model{ID: "muse-spark-1.3-contributor-free", BaseURL: srv.URL}, Request{})
+	provider.Client = &http.Client{Transport: &rewriteHostTransport{target: srv.URL}}
+	stream, err := provider.Stream(context.Background(), Model{ID: "muse-spark-1.3-contributor-free", BaseURL: "https://opencode.ai/zen/v1"}, Request{})
 	if err != nil {
 		t.Fatal(err)
 	}

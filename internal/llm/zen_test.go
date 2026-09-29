@@ -37,12 +37,14 @@ func TestClampContributorEffort(t *testing.T) {
 }
 
 func TestClassifyZenError(t *testing.T) {
+	zenBase := "https://opencode.ai/zen/v1"
 	cases := []struct {
 		name     string
 		status   int
 		body     string
 		model    string
 		endpoint string
+		baseURL  string
 		wantSub  string
 		wantNone bool
 	}{
@@ -51,6 +53,7 @@ func TestClassifyZenError(t *testing.T) {
 			status:  400,
 			body:    `{"type":"error","error":{"type":"MissingSessionID","message":"Error from provider (Console): OpenCode's free tier can only be used in OpenCode"}}`,
 			model:   "test-model-free",
+			baseURL: zenBase,
 			wantSub: "requires an OpenCode client session",
 		},
 		{
@@ -58,6 +61,7 @@ func TestClassifyZenError(t *testing.T) {
 			status:  400,
 			body:    `{"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: Model is unavailable."}}`,
 			model:   "some-model",
+			baseURL: zenBase,
 			wantSub: "unavailable/unsupported",
 		},
 		{
@@ -65,6 +69,7 @@ func TestClassifyZenError(t *testing.T) {
 			status:  401,
 			body:    `{"type":"error","error":{"type":"ModelError","message":"Model mimo-v2-flash-free is not supported"}}`,
 			model:   "mimo-v2-flash-free",
+			baseURL: zenBase,
 			wantSub: "unavailable/unsupported",
 		},
 		{
@@ -73,6 +78,7 @@ func TestClassifyZenError(t *testing.T) {
 			body:     `{"type":"error","error":{"type":"error","message":"Internal server error"}}`,
 			model:    "muse-spark-1.3-contributor-free",
 			endpoint: "/chat/completions",
+			baseURL:  zenBase,
 			wantSub:  "/responses",
 		},
 		{
@@ -81,6 +87,7 @@ func TestClassifyZenError(t *testing.T) {
 			body:     `{"type":"error","error":{"type":"error","message":"Internal server error"}}`,
 			model:    "muse-spark-1.3-contributor-free",
 			endpoint: "/responses",
+			baseURL:  zenBase,
 			wantNone: true,
 		},
 		{
@@ -89,12 +96,40 @@ func TestClassifyZenError(t *testing.T) {
 			body:     `{"type":"error","message":"boom"}`,
 			model:    "gpt-5.5",
 			endpoint: "/chat/completions",
+			baseURL:  zenBase,
+			wantNone: true,
+		},
+		{
+			name:     "non-zen model error gets no zen hint",
+			status:   400,
+			body:     `{"error":{"message":"Model foo is not supported"}}`,
+			model:    "cline-pass/cline-free/deepseek-v4.1-flash",
+			endpoint: "/chat/completions",
+			baseURL:  "http://127.0.0.1:18789/v1",
+			wantNone: true,
+		},
+		{
+			name:     "tool calling not supported is not a model error",
+			status:   400,
+			body:     `{"error":{"message":"Tool calling is not supported by cline-proxy: it runs without tools (no tool loop)."}}`,
+			model:    "cline-pass/cline-free/deepseek-v4.1-flash",
+			endpoint: "/chat/completions",
+			baseURL:  "http://127.0.0.1:18789/v1",
+			wantNone: true,
+		},
+		{
+			name:     "zen tool error gets no model hint",
+			status:   400,
+			body:     `{"error":{"message":"Tool calling is not supported by provider"}}`,
+			model:    "mimo-v2-flash-free",
+			endpoint: "/chat/completions",
+			baseURL:  zenBase,
 			wantNone: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ClassifyZenError(tc.status, tc.body, tc.model, tc.endpoint)
+			got := ClassifyZenError(tc.status, tc.body, tc.model, tc.endpoint, tc.baseURL)
 			if tc.wantNone {
 				if got != "" {
 					t.Fatalf("hint = %q, want empty", got)

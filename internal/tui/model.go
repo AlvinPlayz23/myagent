@@ -190,7 +190,7 @@ func normalizePromptStyle(style string) promptStyle {
 	return promptDefault
 }
 
-// customizeSection identifies which setting a /customize row belongs to.
+// customizeSection identifies which setting a /customize choice belongs to.
 type customizeSection int
 
 const (
@@ -198,23 +198,43 @@ const (
 	sectionComposer
 )
 
-// customizeRow is one line of the /customize panel. Header rows title a group
-// and carry no value, so navigation skips over them.
+// customizeGroup is one top-level entry of the /customize panel. Selecting it
+// opens the choices that belong to the group.
+type customizeGroup struct {
+	section     customizeSection
+	label       string
+	description string
+}
+
+var customizeGroups = []customizeGroup{
+	{section: sectionStartup, label: "Startup Style", description: "empty-session welcome"},
+	{section: sectionComposer, label: "Composer (Prompt Box)", description: "where you type"},
+}
+
+// customizeRow is one selectable choice within a group.
 type customizeRow struct {
 	section     customizeSection
-	header      bool
 	label       string
 	description string
 	welcome     welcomeStyle
 	prompt      promptStyle
 }
 
-// customizeRows flattens the grouped settings into the display order used by
-// both the renderer and the picker's cursor.
-var customizeRows = buildCustomizeRows()
-
-func buildCustomizeRows() []customizeRow {
-	rows := []customizeRow{{section: sectionStartup, header: true, label: "1. Startup Style", description: "empty-session welcome"}}
+// customizeChoices returns the selectable choices belonging to a group.
+func customizeChoices(section customizeSection) []customizeRow {
+	if section == sectionComposer {
+		rows := make([]customizeRow, 0, len(promptChoices))
+		for _, choice := range promptChoices {
+			rows = append(rows, customizeRow{
+				section:     sectionComposer,
+				label:       choice.label,
+				description: choice.description,
+				prompt:      choice.style,
+			})
+		}
+		return rows
+	}
+	rows := make([]customizeRow, 0, len(welcomeChoices))
 	for _, choice := range welcomeChoices {
 		rows = append(rows, customizeRow{
 			section:     sectionStartup,
@@ -223,73 +243,77 @@ func buildCustomizeRows() []customizeRow {
 			welcome:     choice.style,
 		})
 	}
-	rows = append(rows, customizeRow{section: sectionComposer, header: true, label: "2. Composer (Prompt Box)", description: "where you type"})
-	for _, choice := range promptChoices {
-		rows = append(rows, customizeRow{
-			section:     sectionComposer,
-			label:       choice.label,
-			description: choice.description,
-			prompt:      choice.style,
-		})
-	}
 	return rows
 }
 
+// customizePicker tracks the two-level /customize panel: level 0 lists the
+// option groups; level 1 lists the choices within the opened group.
 type customizePicker struct {
 	active bool
-	sel    int
+	level  int // 0 = option groups, 1 = a group's choices
+	group  int // index into customizeGroups while level == 1
+	sel    int // cursor within the active level
 }
 
-// open positions the cursor on the row matching the active startup style so the
-// panel opens showing what is currently in effect.
-func (p *customizePicker) open(current welcomeStyle) {
+// open shows the option groups with the cursor on the first one.
+func (p *customizePicker) open() {
 	p.active = true
-	p.sel = firstSelectableRow()
-	for i, row := range customizeRows {
-		if !row.header && row.section == sectionStartup && row.welcome == current {
-			p.sel = i
-			break
-		}
-	}
+	p.level = 0
+	p.group = 0
+	p.sel = 0
 }
 
-func firstSelectableRow() int {
-	for i, row := range customizeRows {
-		if !row.header {
-			return i
-		}
+// openGroup descends into the group at index g, positioning the cursor on the
+// choice the group is currently set to.
+func (p *customizePicker) openGroup(g int, current int) {
+	if g < 0 || g >= len(customizeGroups) {
+		return
 	}
-	return 0
+	p.level = 1
+	p.group = g
+	p.sel = current
+}
+
+// backToGroups returns from a group's choices to the option list, keeping the
+// cursor on the group it came from.
+func (p *customizePicker) backToGroups() {
+	p.level = 0
+	p.sel = p.group
 }
 
 func (p *customizePicker) close() { p.active = false }
 
-// move advances the cursor by delta selectable rows, stepping over the group
-// headers in either direction.
+// choices returns the choices of the group being browsed, or nil at level 0.
+func (p *customizePicker) choices() []customizeRow {
+	if p.level == 0 || p.group < 0 || p.group >= len(customizeGroups) {
+		return nil
+	}
+	return customizeChoices(customizeGroups[p.group].section)
+}
+
+// height reports how many selectable entries the current level holds.
+func (p *customizePicker) height() int {
+	if p.level == 0 {
+		return len(customizeGroups)
+	}
+	return len(p.choices())
+}
+
+// move advances the cursor by delta entries, wrapping at either end.
 func (p *customizePicker) move(delta int) {
-	n := len(customizeRows)
+	n := p.height()
 	if delta == 0 || n == 0 {
 		return
 	}
-	step := 1
-	if delta < 0 {
-		step, delta = -1, -delta
-	}
-	for ; delta > 0; delta-- {
-		for i := 0; i < n; i++ {
-			p.sel = (p.sel + step + n) % n
-			if !customizeRows[p.sel].header {
-				break
-			}
-		}
-	}
+	p.sel = ((p.sel+delta)%n + n) % n
 }
 
 func (p *customizePicker) selected() customizeRow {
-	if p.sel < 0 || p.sel >= len(customizeRows) {
+	choices := p.choices()
+	if p.sel < 0 || p.sel >= len(choices) {
 		return customizeRow{}
 	}
-	return customizeRows[p.sel]
+	return choices[p.sel]
 }
 
 func normalizeWelcomeStyle(style string) welcomeStyle {
@@ -861,7 +885,7 @@ func (m *model) panelHeight() int {
 	if m.exportPick.active || m.exportFormat != "" || m.exportOverwrite {
 		desired = 3
 	} else if m.customize.active {
-		desired = len(customizeRows) + 1
+		desired = m.customize.height() + 1
 	}
 	return min(desired, max(0, available))
 }
@@ -997,9 +1021,17 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.customize.move(-1)
 		case "down":
 			m.customize.move(1)
-		case "enter":
-			return m.applyCustomizeSelection()
+		case "enter", "right":
+			return m.confirmCustomize()
+		case "left":
+			if m.customize.level == 1 {
+				m.customize.backToGroups()
+			}
 		case "esc":
+			if m.customize.level == 1 {
+				m.customize.backToGroups()
+				return m, nil
+			}
 			m.customize.close()
 			m.statusMsg = "Customization cancelled."
 			m.updateLayout()
@@ -1416,7 +1448,7 @@ func (m *model) confirmInlineRow(item int) (tea.Model, tea.Cmd) {
 		return m, nil
 	case m.customize.active:
 		if m.customize.sel == item {
-			return m.applyCustomizeSelection()
+			return m.confirmCustomize()
 		}
 		m.customize.sel = item
 		return m, nil
@@ -1723,8 +1755,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 	case commandProviders:
 		return m.openProviderPicker()
 	case commandCustomize:
-		m.customize.open(m.welcomeStyle)
-		m.statusMsg = "Choose the empty-session startup style."
+		m.customize.open()
+		m.statusMsg = "Choose a customization group."
 		m.updateLayout()
 	case commandCompact:
 		runCtx, cancel := context.WithCancel(m.ctx)
@@ -1804,12 +1836,37 @@ func (m *model) writeExport(overwrite bool) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// confirmCustomize handles enter at the active level: at the group list it
+// opens the highlighted group, and inside a group it saves the highlighted
+// setting.
+func (m *model) confirmCustomize() (tea.Model, tea.Cmd) {
+	if m.customize.level == 0 {
+		m.customize.openGroup(m.customize.sel, m.currentCustomizeChoice(m.customize.sel))
+		m.statusMsg = "Choose a " + customizeGroups[m.customize.sel].label + " option."
+		m.updateLayout()
+		return m, nil
+	}
+	return m.applyCustomizeSelection()
+}
+
+// currentCustomizeChoice reports the index of the choice a group is currently
+// set to, so its submenu opens with the cursor on the active value.
+func (m *model) currentCustomizeChoice(group int) int {
+	if group < 0 || group >= len(customizeGroups) {
+		return 0
+	}
+	choices := customizeChoices(customizeGroups[group].section)
+	for i, row := range choices {
+		if m.rowIsCurrent(row) {
+			return i
+		}
+	}
+	return 0
+}
+
 // applyCustomizeSelection saves whichever grouped setting the cursor sits on.
 func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
 	row := m.customize.selected()
-	if row.header {
-		return m, nil
-	}
 	if row.section == sectionComposer {
 		return m.applyPromptStyle(row)
 	}
@@ -2938,31 +2995,65 @@ func (m *model) renderFilePicker() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderCustomizePicker draws the settings grouped under numbered headers. The
-// window scrolls so the cursor stays visible on short terminals.
+// renderCustomizePicker draws the two-level /customize panel. Level 0 lists the
+// customization groups; enter opens one and shows its selections. The window
+// scrolls so the cursor stays visible on short terminals.
 func (m *model) renderCustomizePicker() string {
 	height := m.panelHeight()
 	if height == 0 {
 		return ""
 	}
-	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render("Customize — ↑/↓ select, enter save, esc cancel")}
+	if m.customize.level == 0 {
+		return m.renderCustomizeGroups(height)
+	}
+	return m.renderCustomizeChoices(height)
+}
+
+// renderCustomizeGroups lists the top-level customization groups.
+func (m *model) renderCustomizeGroups(height int) string {
+	title := "Customize — ↑/↓ select, enter open, esc cancel"
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render(title)}
 	m.inlineRowItems = append(m.inlineRowItems, -1)
-	count := min(height-1, len(customizeRows))
+	count := min(height-1, len(customizeGroups))
 	if count <= 0 {
 		return strings.Join(lines, "\n")
 	}
 	start := max(0, m.customize.sel-count+1)
-	if maxStart := len(customizeRows) - count; start > maxStart {
+	if maxStart := len(customizeGroups) - count; start > maxStart {
 		start = maxStart
 	}
 	for i := start; i < start+count; i++ {
-		row := customizeRows[i]
-		if row.header {
-			line := fmt.Sprintf("%s  %s", row.label, m.th.muted.Render(row.description))
-			lines = append(lines, m.th.pickerGroup.MaxWidth(max(1, m.width)).Render(line))
-			m.inlineRowItems = append(m.inlineRowItems, -1)
-			continue
+		group := customizeGroups[i]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.customize.sel {
+			marker, style = "> ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
 		}
+		line := fmt.Sprintf("  %s%-22s %s", marker, group.label, m.th.muted.Render(group.description))
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderCustomizeChoices lists the selectable options of the opened group.
+func (m *model) renderCustomizeChoices(height int) string {
+	group := customizeGroups[m.customize.group]
+	title := fmt.Sprintf("Customize › %s — ↑/↓ select, enter save, ←/esc back", group.label)
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render(title)}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
+	choices := m.customize.choices()
+	count := min(height-1, len(choices))
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start := max(0, m.customize.sel-count+1)
+	if maxStart := len(choices) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		row := choices[i]
 		marker, style := "  ", m.th.cmdPickerItem
 		if i == m.customize.sel {
 			marker, style = "> ", m.th.cmdPickerSel
@@ -2982,9 +3073,6 @@ func (m *model) renderCustomizePicker() string {
 
 // rowIsCurrent reports whether a row holds the value its group is set to.
 func (m *model) rowIsCurrent(row customizeRow) bool {
-	if row.header {
-		return false
-	}
 	if row.section == sectionComposer {
 		return row.prompt == m.promptStyle
 	}
