@@ -241,7 +241,12 @@ func run(argv []string) error {
 			systemPrompt = applied.SystemPrompt
 		}
 		if applied.Effort != "" {
-			effort = applied.Effort
+			normalized, nerr := llm.NormalizeEffort(model, applied.Effort)
+			if nerr == nil {
+				effort = normalized
+			} else {
+				effort = ""
+			}
 		}
 	}
 	agentCfg := agent.Config{

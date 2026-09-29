@@ -39,6 +39,18 @@ func TestLoadBytesSkipsInvalid(t *testing.T) {
 	}
 }
 
+func TestProjectCommandOverrideClampsTimeout(t *testing.T) {
+	global := []byte(`{"commands":[{"name":"/build","description":"build","run":"make build","timeoutMs":30000}]}`)
+	project := []byte(`{"commands":[{"name":"/build","description":"build","run":"make build","timeoutMs":999999}]}`)
+	b := LoadBytes(global, project)
+	if len(b.Commands) != 1 {
+		t.Fatalf("commands = %+v, want one command", b.Commands)
+	}
+	if got := b.Commands[0].TimeoutMs; got != maxTimeoutMs {
+		t.Errorf("override timeout = %d, want %d", got, maxTimeoutMs)
+	}
+}
+
 func TestEnabledKillSwitch(t *testing.T) {
 	b := LoadBytes([]byte(`{"enabled":false,"tools":[{"name":"a","description":"d","parameters":{"type":"object"},"command":"x"}]}`), nil)
 	if !b.Disabled || len(b.Tools) != 0 {

@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -464,6 +466,34 @@ func TestCreateRejectsInvalidEffortBeforePersistingSession(t *testing.T) {
 	}
 	if len(infos) != 0 {
 		t.Fatalf("persisted sessions after rejected create = %d, want 0", len(infos))
+	}
+}
+
+func TestCreateProfileFallsBackWhenModelDoesNotSupportEffort(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, ".myagent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginData := `{"profiles":[{"name":"reasoning","description":"reasoning profile","effort":"high"}]}`
+	if err := os.WriteFile(filepath.Join(cwd, ".myagent", "plugins.json"), []byte(pluginData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			return nil, llm.Model{ID: "plain", Provider: "test", ReasoningKnown: true}, nil
+		},
+		DefaultCwd: cwd,
+	})
+	t.Cleanup(func() { cancel(); manager.Shutdown() })
+
+	ss, err := manager.Create("conn1", CreateParams{Profile: "reasoning"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ss.Effort(); got != "" {
+		t.Errorf("profile effort = %q, want provider default", got)
 	}
 }
 

@@ -60,11 +60,24 @@ func quoteCmd(s string) string {
 	if s == "" {
 		return `""`
 	}
-	if !strings.ContainsAny(s, " \t\"&<>|^%") {
+	if !strings.ContainsAny(s, " \t\"&<>|^%()") {
 		return s
 	}
-	// Escape embedded double quotes for cmd.exe.
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	// cmd.exe does not recognize backslash-escaped quotes. Escape its control
+	// characters before wrapping the argument so interpolation cannot terminate
+	// the argument and append a second command.
+	escaped := strings.NewReplacer(
+		"^", "^^",
+		"%", "%%",
+		"\"", "^\"",
+		"&", "^&",
+		"<", "^<",
+		">", "^>",
+		"|", "^|",
+		"(", "^(",
+		")", "^)",
+	).Replace(s)
+	return `"` + escaped + `"`
 }
 
 func quotePowerShell(s string) string {
