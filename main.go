@@ -232,7 +232,7 @@ func run(argv []string) error {
 	baseEffort := effort
 	systemPrompt := basePrompt
 	if profileFlag != "" {
-		applied, perr := plugin.Apply(bundle, registry, basePrompt, cwd, profileFlag)
+		applied, perr := plugin.Apply(bundle, registry, basePrompt, cwd, profileFlag, cfg.DisabledTools...)
 		if perr != nil {
 			return perr
 		}
@@ -243,6 +243,9 @@ func run(argv []string) error {
 		if applied.Effort != "" {
 			effort = applied.Effort
 		}
+	} else if len(cfg.DisabledTools) > 0 {
+		registry = registry.Without(cfg.DisabledTools)
+		systemPrompt = agent.BuildSystemPrompt(registry, cwd, cfg.DisabledTools...)
 	}
 	agentCfg := agent.Config{
 		Provider:           provider,

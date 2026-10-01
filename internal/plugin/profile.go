@@ -103,9 +103,11 @@ type AppliedProfile struct {
 // basePrompt is the already-built prompt for the full (plugin-merged)
 // registry; when a profile is active the prompt is rebuilt from the filtered
 // registry and instructions are appended under a "Mode instructions:" heading.
-// Unknown name returns an error listing available profiles. Empty name
-// returns a zero AppliedProfile (no profile) and no error.
-func Apply(b *Bundle, base *tools.Registry, basePrompt, cwd, name string) (AppliedProfile, error) {
+// disabled names (the /tools deny list) are removed after the profile
+// allowlist, so a profile can never re-enable a disabled tool. Unknown name
+// returns an error listing available profiles. Empty name returns a zero
+// AppliedProfile (no profile) and no error.
+func Apply(b *Bundle, base *tools.Registry, basePrompt, cwd, name string, disabled ...string) (AppliedProfile, error) {
 	if strings.TrimSpace(name) == "" {
 		return AppliedProfile{}, nil
 	}
@@ -119,7 +121,8 @@ func Apply(b *Bundle, base *tools.Registry, basePrompt, cwd, name string) (Appli
 		return AppliedProfile{}, err
 	}
 	filtered = WrapDeny(filtered, deny)
-	prompt := agent.BuildSystemPrompt(filtered, cwd)
+	filtered = filtered.Without(disabled)
+	prompt := agent.BuildSystemPrompt(filtered, cwd, disabled...)
 	if strings.TrimSpace(def.Instructions) != "" {
 		prompt += "\n\nMode instructions:\n" + def.Instructions
 	}

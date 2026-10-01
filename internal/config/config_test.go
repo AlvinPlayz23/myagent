@@ -71,6 +71,7 @@ func TestNeedsSetup(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	useTempDir(t)
 	want := testConfig()
+	want.DisabledTools = []string{"bash", "write"}
 	if err := Save(want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -91,6 +92,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.DefaultModel != want.DefaultModel || got.WelcomeStyle != want.WelcomeStyle || len(got.Providers) != 2 || got.Providers["local"].BaseURL != "http://localhost:11434/v1" {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if len(got.DisabledTools) != 2 || got.DisabledTools[0] != "bash" || got.DisabledTools[1] != "write" {
+		t.Fatalf("DisabledTools round-trip = %v, want [bash write]", got.DisabledTools)
 	}
 	if !strings.HasSuffix(string(data), "\n") {
 		t.Fatal("saved file should end with newline")

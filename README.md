@@ -282,6 +282,7 @@ to run, or **Esc** to dismiss it.
 | `/effort <level>`    | Set `default`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `/providers`         | Add API keys for compatible catalog providers |
 | `/customize`         | Choose the default text or animated orb startup style |
+| `/tools`             | Enable or disable tools the model can call             |
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |
@@ -303,6 +304,13 @@ in `config.json` separate.
 `/new`. The default is the static `myagent` text; the optional dotted orb
 animates only while the empty welcome is visible. The choice is persisted in
 `config.json`.
+`/tools` lists every tool in the active registry — the built-ins `read`,
+`write`, `edit`, and `bash` plus any plugin shell tools — and lets you toggle
+each one. Disabled tools are removed from the registry and the system prompt,
+so the model never sees them. The choice is a deny list persisted in
+`config.json` as `disabledTools`; a plugin profile's allowlist is applied
+first and the deny list last, so a profile can never re-enable a disabled
+tool. Toggling is refused while a run is active.
 `/new` preserves the previous session file and makes the new session the one
 shown in the exit resume instructions. `/resume` lists previous sessions by
 timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to

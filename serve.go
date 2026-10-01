@@ -139,11 +139,12 @@ func runServe(argv []string) error {
 			}
 			return providerSettings.Resolve(providerName, modelID, baseURLFlag)
 		},
-		DefaultCwd:         cwd,
-		CompactionSettings: compaction.DefaultSettings,
-		DefaultEffort:      effort,
-		NoPlugins:          noPlugins,
-		DefaultProfile:     profileFlag,
+		DefaultCwd:           cwd,
+		CompactionSettings:   compaction.DefaultSettings,
+		DefaultEffort:        effort,
+		NoPlugins:            noPlugins,
+		DefaultProfile:       profileFlag,
+		DefaultDisabledTools: cfg.DisabledTools,
 	})
 	defer manager.Shutdown()
 

@@ -419,6 +419,7 @@ type model struct {
 	effort          effortPicker
 	providers       providerPicker
 	customize       customizePicker
+	tools           toolsPicker
 	exportPick      exportPicker
 	exportName      textinput.Model
 	exportFormat    export.Format
@@ -478,6 +479,10 @@ type model struct {
 	savePromptStyle    func(promptStyle) error
 	saveDefaultEffort  func(llm.Effort) error
 	defaultEffort     llm.Effort
+	// disabledTools is the /tools deny list, applied on top of whatever
+	// base or profile registry is active (a profile cannot re-enable a tool).
+	disabledTools     []string
+	saveDisabledTools func([]string) error
 	exportSession      func(export.Format, string, bool) (string, error)
 
 	// Plugin system (PLUGINS.md): bundle loaded at startup, active profile,
@@ -888,6 +893,8 @@ func (m *model) panelHeight() int {
 		desired = 3
 	} else if m.customize.active {
 		desired = m.customize.height() + 1
+	} else if m.tools.active {
+		desired = m.tools.height()
 	}
 	return min(desired, max(0, available))
 }
@@ -1036,6 +1043,22 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.customize.close()
 			m.statusMsg = "Customization cancelled."
+			m.updateLayout()
+		}
+		return m, nil
+	}
+	if m.tools.active {
+		switch ks {
+		case "up":
+			m.tools.move(-1)
+		case "down":
+			m.tools.move(1)
+		case "space", "enter":
+			m.tools.toggle()
+		case "esc":
+			pending := m.tools.pending()
+			m.tools.close()
+			m.applyToolToggles(pending)
 			m.updateLayout()
 		}
 		return m, nil
@@ -1458,6 +1481,15 @@ func (m *model) confirmInlineRow(item int) (tea.Model, tea.Cmd) {
 			m.customize.sel = item
 		}
 		return m, nil
+	case m.tools.active:
+		if m.tools.sel == item {
+			m.tools.toggle()
+			return m, nil
+		}
+		if item >= 0 && item < len(m.tools.names) {
+			m.tools.sel = item
+		}
+		return m, nil
 	case m.exportPick.active:
 		if m.exportPick.sel == item {
 			return m.confirmExportPick()
@@ -1764,6 +1796,8 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.customize.open()
 		m.statusMsg = "Choose a customization group."
 		m.updateLayout()
+	case commandTools:
+		m.openToolsPicker()
 	case commandCompact:
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.cancel = cancel
@@ -2089,6 +2123,21 @@ func (m *model) applyModel(item modelcatalog.Model) (tea.Model, tea.Cmd) {
 	m.statusMsg = "Model set to " + item.Ref() + "."
 	m.updateLayout()
 	return m, nil
+}
+
+// openToolsPicker opens the /tools multi-select panel over the currently
+// active registry. The base registry lists every tool a profile could use;
+// the pending deny set starts from the persisted disabledTools.
+func (m *model) openToolsPicker() {
+	reg := m.baseRegistry
+	if m.activeProfile != "" && m.pluginBundle != nil {
+		if applied, err := plugin.Apply(m.pluginBundle, m.baseRegistry, m.basePrompt, m.cwd, m.activeProfile); err == nil && applied.Registry != nil {
+			reg = applied.Registry
+		}
+	}
+	m.tools.open(reg, m.disabledTools)
+	m.statusMsg = "Toggle tools with space, then esc to save."
+	m.updateLayout()
 }
 
 func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
@@ -2931,6 +2980,9 @@ func (m *model) renderPanel() string {
 	if m.customize.active {
 		return m.renderCustomizePicker()
 	}
+	if m.tools.active {
+		return m.renderToolsPicker()
+	}
 	if m.keyFor.ID != "" {
 		return m.renderProviderKeyEntry()
 	}
@@ -3095,6 +3147,45 @@ func (m *model) rowIsCurrent(row customizeRow) bool {
 		return row.prompt == m.promptStyle
 	}
 	return row.welcome == m.welcomeStyle
+}
+
+// renderToolsPicker draws the /tools multi-select panel: one row per registered
+// tool with a [x]/[ ] enabled marker. Space toggles the highlighted row; esc
+// applies the pending deny list.
+func (m *model) renderToolsPicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render(m.tools.disabledSummary())}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
+	count := min(height-1, len(m.tools.names))
+	if count <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start := max(0, m.tools.sel-count+1)
+	if maxStart := len(m.tools.names) - count; start > maxStart {
+		start = maxStart
+	}
+	for i := start; i < start+count; i++ {
+		name := m.tools.names[i]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.tools.sel {
+			marker, style = "> ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
+		}
+		box := "[ ]"
+		state := "disabled"
+		if !m.tools.isDisabled(name) {
+			box = "[x]"
+			state = "enabled"
+		}
+		line := fmt.Sprintf("  %s%-4s %-14s %s", marker, box, name, m.th.muted.Render(state))
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) renderEffortPicker() string {

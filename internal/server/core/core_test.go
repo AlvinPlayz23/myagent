@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -539,5 +540,63 @@ func waitRequests(t *testing.T, p *scriptedProvider, n int) {
 			t.Fatalf("provider never reached %d requests", n)
 		case <-time.After(5 * time.Millisecond):
 		}
+	}
+}
+
+func TestSetDisabledToolsFiltersRegistry(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m, _ := newTestManager(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ss.DisabledTools(); len(got) != 0 {
+		t.Fatalf("initial disabled tools = %v, want empty", got)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash", "write"}); err != nil {
+		t.Fatalf("SetDisabledTools: %v", err)
+	}
+	if got, want := ss.DisabledTools(), []string{"bash", "write"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DisabledTools = %v, want %v", got, want)
+	}
+	want := []string{"read", "edit"}
+	if got := ss.cfg.Registry.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("registry = %v, want %v", got, want)
+	}
+	if strings.Contains(ss.cfg.SystemPrompt, "- bash:") {
+		t.Fatalf("prompt still advertises bash:\n%s", ss.cfg.SystemPrompt)
+	}
+
+	// Clearing the deny list restores every tool.
+	if err := m.SetDisabledTools("conn1", ss.ID(), nil); err != nil {
+		t.Fatalf("SetDisabledTools clear: %v", err)
+	}
+	if got := len(ss.cfg.Registry.Names()); got != 4 {
+		t.Fatalf("registry after clear has %d tools, want 4", got)
+	}
+}
+
+func TestSetDisabledToolsBusyGuard(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok", block: make(chan struct{})}
+	m, _ := newTestManager(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.Prompt("hi"); err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, ss)
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash"}); !errors.Is(err, ErrBusy) {
+		t.Errorf("SetDisabledTools while running = %v, want ErrBusy", err)
+	}
+	close(provider.block)
+	if _, err := drainUntilDone(t, ss); err != nil {
+		t.Fatal(err)
+	}
+	if got := ss.DisabledTools(); len(got) != 0 {
+		t.Errorf("disabled tools changed despite ErrBusy: %v", got)
 	}
 }
