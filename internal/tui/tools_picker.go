@@ -86,8 +86,19 @@ func (p *toolsPicker) pending() []string {
 	return out
 }
 
-// enabledCount reports how many registered tools remain enabled.
-func (p *toolsPicker) enabledCount() int { return len(p.names) - len(p.disabled) }
+// enabledCount reports how many of this picker's registered tools remain
+// enabled. It iterates p.names so deny entries that are not in this registry
+// (stale config names, or tools excluded by the active profile's allowlist)
+// never produce a wrong or negative count.
+func (p *toolsPicker) enabledCount() int {
+	n := 0
+	for _, name := range p.names {
+		if !p.disabled[name] {
+			n++
+		}
+	}
+	return n
+}
 
 // disabledSummary renders the panel title with a count of active tools.
 func (p *toolsPicker) disabledSummary() string {

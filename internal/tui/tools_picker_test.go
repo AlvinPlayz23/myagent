@@ -189,3 +189,28 @@ func TestToolsCommandOpensPanelAndEscApplies(t *testing.T) {
 		t.Fatalf("registry = %v, want [read write edit]", got)
 	}
 }
+
+func TestToolsPickerEnabledCountIgnoresStaleEntries(t *testing.T) {
+	p := &toolsPicker{}
+	p.open(tools.DefaultRegistry("/tmp"), []string{"write", "stale-plugin-tool"})
+	// Only "write" is in the registry; the stale name must not affect the count.
+	if got, want := p.enabledCount(), 3; got != want {
+		t.Fatalf("enabledCount = %d, want %d", got, want)
+	}
+	if s := p.disabledSummary(); !strings.Contains(s, "(3/4 enabled)") {
+		t.Fatalf("summary = %q, want 3/4 enabled", s)
+	}
+}
+
+func TestToolsPickerEnabledCountIgnoresProfileExcludedTools(t *testing.T) {
+	// Simulates the picker opened over a profile-filtered registry (read+bash)
+	// while the deny list still holds a tool the profile excludes (write).
+	p := &toolsPicker{}
+	p.open(tools.DefaultRegistry("/tmp").Without([]string{"write", "edit"}), []string{"write", "bash"})
+	if got, want := p.enabledCount(), 1; got != want {
+		t.Fatalf("enabledCount = %d, want %d", got, want)
+	}
+	if s := p.disabledSummary(); !strings.Contains(s, "(1/2 enabled)") {
+		t.Fatalf("summary = %q, want 1/2 enabled", s)
+	}
+}

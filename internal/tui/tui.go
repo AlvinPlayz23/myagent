@@ -267,8 +267,10 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if m.defaultProfile != "" {
 			_ = m.applyProfile(m.defaultProfile)
 		} else {
-			r.cfg.Registry = m.baseRegistry
-			r.cfg.SystemPrompt = m.basePrompt
+			// The persisted /tools deny list still applies on top of the reset.
+			base := m.baseRegistry.Without(m.disabledTools)
+			r.cfg.Registry = base
+			r.cfg.SystemPrompt = agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...)
 			r.cfg.Effort = m.baseEffort
 			m.activeProfile = ""
 		}
