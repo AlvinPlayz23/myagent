@@ -106,6 +106,11 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			_ = m.applyProfile(m.defaultProfile)
 		} else if m.activeProfile != "" {
 			_ = m.applyProfile("reset")
+		} else {
+			// No profile to re-apply: rebuild the registry so the previous
+			// session's deny list does not linger in the live tools.
+			base := m.baseRegistry.Without(m.disabledTools)
+			r.setTools(base, agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...))
 		}
 		return nil
 	})
@@ -440,6 +445,10 @@ func seedTranscript(t *transcript, history []types.Message) {
 	for _, msg := range history {
 		switch msg.Role {
 		case types.RoleUser:
+			if msg.Source == types.SourceSubagentCompletion {
+				t.addCompletionNotice(textOf(msg))
+				continue
+			}
 			if compaction.IsSummaryMessage(msg) {
 				t.addNotice("∼ " + textOf(msg))
 				continue

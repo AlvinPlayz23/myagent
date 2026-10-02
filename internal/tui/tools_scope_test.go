@@ -105,6 +105,37 @@ func TestScopePanelBackOutPreservesToggles(t *testing.T) {
 	}
 }
 
+// TestScopeExitWritesNothing covers both the "Exit without saving" row and the
+// advertised q key: neither may persist to either scope or change the deny list.
+func TestScopeExitWritesNothing(t *testing.T) {
+	for _, via := range []string{"row", "q"} {
+		t.Run(via, func(t *testing.T) {
+			m := newToolsTestModel(t)
+			saved := false
+			m.saveDisabledTools = func([]string) error { saved = true; return nil }
+			m.saveSessionTools = func([]string) error { saved = true; return nil }
+
+			m.scope.open([]string{"bash"})
+			if via == "row" {
+				m.scope.sel = len(scopeChoices) - 1
+				m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			} else {
+				m.onKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+			}
+			if m.scope.active || m.tools.active {
+				t.Fatal("dialog still open after exit")
+			}
+			if saved {
+				t.Fatal("exit wrote to a scope")
+			}
+			if len(m.disabledTools) != 0 || len(m.globalDisabledTools) != 0 || len(m.sessionDisabledTools) != 0 {
+				t.Fatalf("exit changed deny lists: %v %v %v", m.disabledTools, m.globalDisabledTools, m.sessionDisabledTools)
+			}
+		})
+	}
+}
+
+
 // TestScopePanelRendersBothChoices confirms the panel offers both scopes and
 // marks session scope unavailable when no store is wired.
 func TestScopePanelRendersBothChoices(t *testing.T) {

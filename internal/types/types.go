@@ -112,8 +112,17 @@ type Message struct {
 	IsError    bool   `json:"isError,omitempty"`
 	Details    any    `json:"details,omitempty"`
 
+	// Source marks system-generated messages (e.g. SourceSubagentCompletion)
+	// that carry RoleUser for providers but are not human input. Empty for
+	// ordinary messages, including all sessions persisted before this field.
+	Source string `json:"source,omitempty"`
+
 	Timestamp int64 `json:"timestamp"` // Unix millis
 }
+
+// SourceSubagentCompletion marks the user-role message injected into the
+// parent conversation when a background subagent finishes.
+const SourceSubagentCompletion = "subagent_completion"
 
 // ToolCalls returns the toolCall content blocks in this (assistant) message.
 func (m Message) ToolCalls() []ContentBlock {

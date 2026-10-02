@@ -1,9 +1,11 @@
-package rpc
+﻿package rpc
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
 func TestParseValid(t *testing.T) {
@@ -135,5 +137,40 @@ func TestUnmarshalParams(t *testing.T) {
 		t.Error("expected invalid-params error")
 	} else if rpcErr.Code != CodeInvalidParams {
 		t.Errorf("code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestNotificationCarriesCompletionSource(t *testing.T) {
+	msg := types.Message{
+		Role:    types.RoleUser,
+		Source:  types.SourceSubagentCompletion,
+		Content: []types.ContentBlock{types.TextBlock("report")},
+	}
+	b, err := MarshalNotification("session.event", map[string]any{
+		"sessionId": "s1",
+		"event":     types.AgentEvent{Type: types.EventMessageEnd, Message: &msg},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Params struct {
+			Event types.AgentEvent `json:"event"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	m := got.Params.Event.Message
+	if m == nil || m.Source != types.SourceSubagentCompletion || m.Role != types.RoleUser {
+		t.Fatalf("round trip lost source: %s", b)
+	}
+	if !strings.Contains(string(b), `"source":"subagent_completion"`) {
+		t.Fatalf("wire format missing source: %s", b)
+	}
+
+	plain, _ := json.Marshal(types.Message{Role: types.RoleUser})
+	if strings.Contains(string(plain), `"source"`) {
+		t.Fatalf("ordinary messages must omit source: %s", plain)
 	}
 }

@@ -1072,6 +1072,11 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			choice := m.scope.choice() // selected scope (session/global/exit)
 			m.scope.close()
 			m.applyToolTogglesScoped(pending, choice.scope)
+		case "q":
+			// Exit without saving: discard the staged list and close everything.
+			m.scope.close()
+			m.applyToolTogglesScoped(nil, scopeExit)
+			m.updateLayout()
 		case "esc":
 			// Back out to the toggles with the staged deny list intact (q exits all).
 			pending := m.scope.pending
@@ -2295,7 +2300,10 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 		if ev.Message != nil {
 			switch ev.Message.Role {
 			case types.RoleUser:
-				if m.activePrompt != nil && sameUserMessage(*m.activePrompt, *ev.Message) {
+				if ev.Message.Source != "" {
+					// System-generated (e.g. subagent completion): never matches a
+					// human prompt or queued input; rendered on message_end.
+				} else if m.activePrompt != nil && sameUserMessage(*m.activePrompt, *ev.Message) {
 					m.activePrompt = nil
 				} else if i := messageIndex(m.queuedSteering, *ev.Message); i >= 0 {
 					m.queuedSteering = append(m.queuedSteering[:i], m.queuedSteering[i+1:]...)
@@ -2328,6 +2336,10 @@ func (m *model) onAgentEvent(ev types.AgentEvent) tea.Cmd {
 	case types.EventMessageEnd:
 		if ev.Message != nil {
 			switch ev.Message.Role {
+			case types.RoleUser:
+				if ev.Message.Source == types.SourceSubagentCompletion {
+					m.transcript.addCompletionNotice(textOf(*ev.Message))
+				}
 			case types.RoleAssistant:
 				if ev.Message.Usage != nil {
 					m.addUsage(*ev.Message.Usage)

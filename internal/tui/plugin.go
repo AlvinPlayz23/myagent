@@ -284,6 +284,11 @@ func (m *model) applyToolTogglesScoped(pending []string, scope toolScope) {
 		m.statusMsg = "Cancel the current run before changing tools."
 		return
 	}
+	if scope == scopeExit {
+		// Discard the staged list: write nothing and change nothing.
+		m.statusMsg = "Tool changes discarded."
+		return
+	}
 	previousGlobal := m.globalDisabledTools
 	previousSession := m.sessionDisabledTools
 	previousEffective := m.disabledTools

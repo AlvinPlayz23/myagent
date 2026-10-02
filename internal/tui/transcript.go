@@ -229,6 +229,19 @@ func (t *transcript) addNotice(text string) {
 	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text})
 }
 
+// addCompletionNotice appends an expandable notice for a system-generated
+// subagent completion. It is never rendered as human input.
+func (t *transcript) addCompletionNotice(text string) {
+	headline := "◆ Subagent finished"
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "Subagent task ") {
+			headline = "◆ " + strings.TrimSuffix(line, ".")
+			break
+		}
+	}
+	t.blocks = append(t.blocks, &block{kind: blockNotice, text: headline, noticeDetail: strings.TrimSpace(text)})
+}
+
 // addRetryNotice appends a retry notice whose underlying provider error is
 // revealed with the global ctrl+o expand toggle.
 func (t *transcript) addRetryNotice(text, detail string) {

@@ -545,3 +545,125 @@ func TestTwoClientsOwnership(t *testing.T) {
 		t.Errorf("cross-client prompt error = %+v", resp.Error)
 	}
 }
+
+// subagentProvider drives a parent that launches one background subagent; the
+// child (a request without the subagent tool) blocks on childGate.
+type subagentProvider struct {
+	mu         sync.Mutex
+	parentReqs int
+	childGate  chan struct{}
+}
+
+func (p *subagentProvider) Stream(ctx context.Context, _ llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
+	isParent := false
+	for _, tl := range req.Tools {
+		if tl.Name == "subagent" {
+			isParent = true
+		}
+	}
+	var msg types.Message
+	if isParent {
+		p.mu.Lock()
+		switch p.parentReqs {
+		case 0:
+			msg = types.Message{StopReason: types.StopToolUse, Content: []types.ContentBlock{
+				{Type: types.ContentToolCall, ID: "call-1", Name: "subagent", Arguments: map[string]any{"prompt": "investigate"}}}}
+		case 1:
+			msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("launched")}}
+		default:
+			msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("all done")}}
+		}
+		p.parentReqs++
+		p.mu.Unlock()
+	} else {
+		msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("child result")}}
+	}
+	msg.Role = types.RoleAssistant
+	out := make(chan llm.StreamEvent, 1)
+	go func() {
+		defer close(out)
+		if !isParent {
+			select {
+			case <-p.childGate:
+			case <-ctx.Done():
+				return
+			}
+		}
+		out <- llm.StreamEvent{Type: "done", Message: &msg}
+	}()
+	return out, nil
+}
+
+func (p *subagentProvider) parentRequests() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.parentReqs
+}
+
+func TestBackgroundSubagentCompletionOverWebSocket(t *testing.T) {
+	provider := &subagentProvider{childGate: make(chan struct{})}
+	url, _ := testServer(t, provider)
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "go"}), &struct{}{})
+
+	deadline := time.After(10 * time.Second)
+	for provider.parentRequests() < 2 {
+		select {
+		case <-deadline:
+			t.Fatal("parent never finished its first turn")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	// While the child runs, the run is idle: no session.done may be sent.
+	time.Sleep(150 * time.Millisecond)
+	for len(c.notifs) > 0 {
+		if n := <-c.notifs; n.Method == "session.done" {
+			t.Fatal("session.done sent while a background subagent was running")
+		}
+	}
+	close(provider.childGate)
+
+	var completion *types.Message
+	for completion == nil {
+		n := c.waitNotif("session.event")
+		var p struct {
+			Event types.AgentEvent `json:"event"`
+		}
+		if err := json.Unmarshal(n.Params, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Event.Type == types.EventMessageEnd && p.Event.Message != nil &&
+			p.Event.Message.Source == types.SourceSubagentCompletion {
+			completion = p.Event.Message
+		}
+	}
+	if completion.Role != types.RoleUser || !strings.Contains(completion.Content[0].Text, "child result") {
+		t.Fatalf("bad completion message: %+v", completion)
+	}
+	done := c.waitNotif("session.done")
+	if strings.Contains(string(done.Params), `"error"`) {
+		t.Fatalf("done params = %s", done.Params)
+	}
+
+	// The completion is persisted with its source so resumed clients can
+	// render it as a system notice rather than human input.
+	var msgs struct {
+		Messages []types.Message `json:"messages"`
+	}
+	c.result(c.call("session.messages", map[string]any{"sessionId": created.SessionID}), &msgs)
+	var persisted int
+	for _, m := range msgs.Messages {
+		if m.Source == types.SourceSubagentCompletion {
+			persisted++
+		}
+	}
+	if persisted != 1 {
+		t.Fatalf("persisted completion messages = %d, want 1", persisted)
+	}
+}

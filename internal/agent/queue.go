@@ -22,10 +22,42 @@ type Queue struct {
 	mu       sync.Mutex
 	steering []types.Message
 	followUp []types.Message
+	wake     chan struct{}
+}
+
+// WakeableMessageQueue is a MessageQueue that can wake an idle run (one that
+// is only waiting on background subagents) as soon as input is enqueued.
+// Notifications are hints: receivers must re-poll Steering/FollowUp.
+type WakeableMessageQueue interface {
+	MessageQueue
+	Wake() <-chan struct{}
 }
 
 // NewQueue returns an empty queue.
-func NewQueue() *Queue { return &Queue{} }
+func NewQueue() *Queue { return &Queue{wake: make(chan struct{}, 1)} }
+
+// wakeChan lazily creates the channel so zero-value queues work. Caller holds mu.
+func (q *Queue) wakeChan() chan struct{} {
+	if q.wake == nil {
+		q.wake = make(chan struct{}, 1)
+	}
+	return q.wake
+}
+
+// Wake returns a channel signalled (coalesced) after every enqueue.
+func (q *Queue) Wake() <-chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.wakeChan()
+}
+
+// signal must be called with mu held.
+func (q *Queue) signal() {
+	select {
+	case q.wakeChan() <- struct{}{}:
+	default:
+	}
+}
 
 // EnqueueSteering adds a steering message (delivered mid-run, before the next
 // assistant turn).
@@ -33,6 +65,7 @@ func (q *Queue) EnqueueSteering(m types.Message) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.steering = append(q.steering, m)
+	q.signal()
 }
 
 // EnqueueFollowUp adds a follow-up message (delivered after the current work
@@ -41,6 +74,7 @@ func (q *Queue) EnqueueFollowUp(m types.Message) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.followUp = append(q.followUp, m)
+	q.signal()
 }
 
 // Steering drains and returns any queued steering messages.

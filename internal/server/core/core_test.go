@@ -748,3 +748,111 @@ func TestSetDisabledToolsPersistsConfigJSON(t *testing.T) {
 		t.Fatal("tools save lost an external welcome style update")
 	}
 }
+
+// subagentProvider drives a parent that launches one background subagent. The
+// child (request without the subagent tool) blocks on childGate.
+type subagentProvider struct {
+	mu         sync.Mutex
+	parentReqs int
+	childReqs  int
+	childGate  chan struct{}
+}
+
+func (p *subagentProvider) Stream(ctx context.Context, _ llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
+	isParent := false
+	for _, tl := range req.Tools {
+		if tl.Name == "subagent" {
+			isParent = true
+		}
+	}
+	p.mu.Lock()
+	var msg types.Message
+	if isParent {
+		switch p.parentReqs {
+		case 0:
+			msg = types.Message{StopReason: types.StopToolUse, Content: []types.ContentBlock{
+				{Type: types.ContentToolCall, ID: "call-1", Name: "subagent", Arguments: map[string]any{"prompt": "investigate"}}}}
+		case 1:
+			msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("launched")}}
+		default:
+			msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("all done")}}
+		}
+		p.parentReqs++
+	} else {
+		p.childReqs++
+		msg = types.Message{StopReason: types.StopStop, Content: []types.ContentBlock{types.TextBlock("child result")}}
+	}
+	p.mu.Unlock()
+	msg.Role = types.RoleAssistant
+	out := make(chan llm.StreamEvent, 1)
+	go func() {
+		defer close(out)
+		if !isParent {
+			select {
+			case <-p.childGate:
+			case <-ctx.Done():
+				return
+			}
+		}
+		out <- llm.StreamEvent{Type: "done", Message: &msg}
+	}()
+	return out, nil
+}
+
+func TestBackgroundSubagentCompletionResumesRun(t *testing.T) {
+	provider := &subagentProvider{childGate: make(chan struct{})}
+	m, _ := newTestManager(t, provider)
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.Prompt("go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The parent finishes its own turn while the child is still blocked; the
+	// run must stay active (idle) instead of emitting Done.
+	deadline := time.After(5 * time.Second)
+	for {
+		provider.mu.Lock()
+		n := provider.parentReqs
+		provider.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("parent never finished its first turn")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !ss.Running() {
+		t.Fatal("run ended while a background subagent was still running")
+	}
+	close(provider.childGate)
+
+	events, runErr := drainUntilDone(t, ss)
+	if runErr != nil {
+		t.Fatalf("run error: %v", runErr)
+	}
+	var completions int
+	for _, ev := range events {
+		if ev.Type == types.EventMessageEnd && ev.Message != nil &&
+			ev.Message.Source == types.SourceSubagentCompletion {
+			completions++
+			if ev.Message.Role != types.RoleUser || !strings.Contains(ev.Message.Content[0].Text, "child result") {
+				t.Errorf("bad completion message: %+v", ev.Message)
+			}
+		}
+	}
+	if completions != 1 {
+		t.Fatalf("completion events = %d, want 1", completions)
+	}
+	if provider.parentReqs != 3 {
+		t.Errorf("parent requests = %d, want 3 (launch, ack, resume)", provider.parentReqs)
+	}
+	if last := eventTypes(events); last[len(last)-1] != types.EventAgentEnd {
+		t.Errorf("last event = %v, want agent_end", last[len(last)-1])
+	}
+}

@@ -38,13 +38,19 @@ type Config struct {
 	Effort             llm.Effort
 	Queue              MessageQueue // optional
 	CompactionSettings compaction.Settings
+	// MaxBackgroundTasks bounds outstanding background tool tasks (running or
+	// undelivered) per run. Nonpositive means DefaultMaxBackgroundTasks.
+	MaxBackgroundTasks int
 }
 
 // Loop is a reusable agent driver over a fixed Config and conversation.
+// A Loop has a single owner: Run/Messages/Compact must not be called
+// concurrently on the same Loop.
 type Loop struct {
 	cfg      Config
 	messages []types.Message
 	emit     EventSink
+	sched    *backgroundScheduler // set only for the duration of Run
 }
 
 // New creates a Loop seeded with prior conversation messages (may be nil).
@@ -63,6 +69,14 @@ func (l *Loop) Messages() []types.Message { return l.messages }
 // during this run (prompts + assistant + tool results).
 func (l *Loop) Run(ctx context.Context, prompts []types.Message) ([]types.Message, error) {
 	var produced []types.Message
+
+	// Background tasks are owned by this run: cancelled and joined on every
+	// exit path so none can outlive it or leak into a later Run.
+	l.sched = newBackgroundScheduler(ctx, l.cfg.MaxBackgroundTasks)
+	defer func() {
+		l.sched.close()
+		l.sched = nil
+	}()
 
 	// Heal interruption damage from a prior aborted run before the next
 	// provider request: normalize legacy abort texts and strip unpairable
@@ -112,10 +126,11 @@ func (l *Loop) Run(ctx context.Context, prompts []types.Message) ([]types.Messag
 func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn bool) error {
 	pending := l.steering()
 
+outer:
 	for {
 		hasMoreToolCalls := true
 
-		for hasMoreToolCalls || len(pending) > 0 {
+		for hasMoreToolCalls || len(pending) > 0 || l.hasReadyCompletions() {
 			if !firstTurn {
 				if err := l.emit(ctx, types.AgentEvent{Type: types.EventTurnStart}); err != nil {
 					return err
@@ -138,6 +153,12 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 					*produced = append(*produced, m)
 				}
 				pending = nil
+			}
+
+			// Inject finished background tasks (after steering, never inside a
+			// tool batch or during a provider stream).
+			if err := l.injectCompletions(ctx, produced); err != nil {
+				return err
 			}
 
 			// Compact immediately before every provider request. In particular,
@@ -197,12 +218,29 @@ func (l *Loop) runLoop(ctx context.Context, produced *[]types.Message, firstTurn
 			pending = l.steering()
 		}
 
-		// Agent would stop. Check for follow-up messages.
-		if followUp := l.followUp(); len(followUp) > 0 {
-			pending = followUp
-			continue
+		// Agent would stop. Check for follow-up messages, then wait for any
+		// background tasks still running (idle, no provider calls) until a
+		// completion or queued input resumes the run.
+		for {
+			if steer := l.steering(); len(steer) > 0 {
+				pending = steer
+				continue outer
+			}
+			if followUp := l.followUp(); len(followUp) > 0 {
+				pending = followUp
+				continue outer
+			}
+			running, ready := l.schedState()
+			if ready > 0 {
+				continue outer
+			}
+			if running == 0 {
+				break outer
+			}
+			if err := l.waitIdle(ctx); err != nil {
+				return err
+			}
 		}
-		break
 	}
 
 	return l.emit(ctx, types.AgentEvent{Type: types.EventAgentEnd, Messages: l.messages})
@@ -366,6 +404,19 @@ func (l *Loop) runTool(ctx context.Context, tc types.ContentBlock) (result *type
 			isError = true
 		}
 	}()
+	if bg, ok := tool.(BackgroundTool); ok && l.sched != nil {
+		task, err := bg.PrepareBackground(ctx, tc.ID, tc.Arguments, l.cfg)
+		if err == nil {
+			var ack *types.ToolResult
+			if ack, err = l.sched.start(task); err == nil {
+				return ack, false
+			}
+		}
+		if ctx.Err() != nil {
+			return types.TextResult(InterruptedText, nil), true
+		}
+		return types.TextResult(err.Error(), nil), true
+	}
 	result, err := tool.Execute(ctx, tc.ID, tc.Arguments)
 	if err != nil {
 		// Aborted mid-execution: the tool returns the cancelled context
@@ -459,6 +510,63 @@ func (l *Loop) steering() []types.Message {
 		return nil
 	}
 	return l.cfg.Queue.Steering()
+}
+
+func (l *Loop) hasReadyCompletions() bool {
+	_, ready := l.schedState()
+	return ready > 0
+}
+
+func (l *Loop) schedState() (running, ready int) {
+	if l.sched == nil {
+		return 0, 0
+	}
+	return l.sched.state()
+}
+
+// injectCompletions commits each ready completion: message_start/end are
+// emitted first and the message is appended and marked delivered only after
+// both succeed. A sink failure is terminal for the run.
+func (l *Loop) injectCompletions(ctx context.Context, produced *[]types.Message) error {
+	if l.sched == nil {
+		return nil
+	}
+	for _, m := range l.sched.ready() {
+		msg := m
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
+			return err
+		}
+		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageEnd, Message: &msg}); err != nil {
+			return err
+		}
+		l.messages = append(l.messages, msg)
+		*produced = append(*produced, msg)
+		l.sched.delivered()
+	}
+	return nil
+}
+
+// waitIdle blocks until a background completion, queued input, or
+// cancellation. Wakes are hints; callers re-poll. Non-wakeable queues are
+// polled on a slow ticker.
+func (l *Loop) waitIdle(ctx context.Context) error {
+	var queueWake <-chan struct{}
+	var poll <-chan time.Time
+	if wq, ok := l.cfg.Queue.(WakeableMessageQueue); ok && wq != nil {
+		queueWake = wq.Wake()
+	} else if l.cfg.Queue != nil {
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		poll = t.C
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-l.sched.wake():
+	case <-queueWake:
+	case <-poll:
+	}
+	return nil
 }
 
 func (l *Loop) followUp() []types.Message {
