@@ -36,6 +36,53 @@ func TestRainDensityStaysThin(t *testing.T) {
 	}
 }
 
+// TestWelcomeHintReportsDisabledTools covers the startup notice: when the
+// persisted /tools deny list is non-empty it replaces the prompt hint, listing
+// the disabled tools sorted; with an empty list the normal hint returns.
+func TestWelcomeHintReportsDisabledTools(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+	m.onResize(120, 40)
+
+	if got := ansi.Strip(m.welcomeHintPlain()); !strings.Contains(got, "Type a prompt") {
+		t.Fatalf("hint with no disabled tools = %q, want the prompt hint", got)
+	}
+
+	m.disabledTools = []string{"write", "bash"}
+	if got, want := ansi.Strip(m.welcomeHintPlain()), "Disabled tools: bash, write"; got != want {
+		t.Fatalf("hint = %q, want %q (sorted list, prompt hint replaced)", got, want)
+	}
+	// Sorting must not mutate the model's slice.
+	if m.disabledTools[0] != "write" {
+		t.Fatalf("welcomeHintPlain reordered m.disabledTools: %v", m.disabledTools)
+	}
+
+	// The styled line carries the same text, truncated to the terminal width
+	// so a long deny list cannot wrap.
+	m.disabledTools = []string{"bash", "write", "edit", "read", "glob", "grep"}
+	plain := ansi.Strip(m.welcomeHint())
+	if w := len([]rune(strings.TrimSpace(plain))); w > m.width {
+		t.Fatalf("hint width = %d, want <= terminal width %d", w, m.width)
+	}
+}
+
+// TestWelcomeHintDisabledAcrossStyles asserts every welcome style renders the
+// notice, not just the default one.
+func TestWelcomeHintDisabledAcrossStyles(t *testing.T) {
+	for _, style := range []welcomeStyle{welcomeDefault, welcomeMyagent, welcomeRain, welcomeOrb, welcomeBanner, welcomeWave, welcomeFill} {
+		m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+		m.onResize(120, 40)
+		m.welcomeStyle = style
+		m.disabledTools = []string{"bash"}
+		view := ansi.Strip(m.renderWelcome())
+		if !strings.Contains(view, "Disabled tools: bash") {
+			t.Fatalf("style %v did not show the disabled-tools notice:\n%s", style, view)
+		}
+		if strings.Contains(view, "Type a prompt") {
+			t.Fatalf("style %v kept the prompt hint alongside the notice:\n%s", style, view)
+		}
+	}
+}
+
 func TestRainFillsViewportAndKeepsMenu(t *testing.T) {
 	dir := t.TempDir()
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", dir)

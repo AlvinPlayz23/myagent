@@ -37,6 +37,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/printmode"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/setup"
+	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/tui"
@@ -214,6 +215,16 @@ func run(argv []string) error {
 	}
 
 	registry := tools.DefaultRegistry(cwd)
+	// The subagent tool reads the live parent config through SetBase; the
+	// frontend that owns that config installs it (print mode below, TUI in Run).
+	subagentTool := subagent.New(subagent.WithCwd(cwd), subagent.WithResolve(func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+		p, m, rerr := cfg.ResolveWithAuth(authStore, providerName, modelID, "")
+		if rerr != nil {
+			return nil, llm.Model{}, rerr
+		}
+		return p, catalog.Enrich(m), nil
+	}))
+	registry.Add(subagentTool)
 	// Plugins: merge ShellTools (per-session cwd + session id), then apply
 	// --profile if pinned. Unknown --profile fails fast (§10.3).
 	bundle := plugin.Load(cwd, noPlugins)
@@ -303,6 +314,7 @@ func run(argv []string) error {
 		return nil
 	}
 	defer sess.Close()
+	subagentTool.SetBase(func() agent.Config { return agentCfg })
 	if bundle.Summary() != "Loaded plugins: none" {
 		fmt.Fprintln(os.Stderr, bundle.Summary())
 	}

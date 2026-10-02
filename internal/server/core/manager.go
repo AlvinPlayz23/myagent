@@ -10,6 +10,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/plugin"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"strings"
 )
@@ -36,6 +37,11 @@ type Options struct {
 	// DefaultDisabledTools lists tool names hidden from the model for every
 	// session (the /tools deny list). Applied after any profile allowlist.
 	DefaultDisabledTools []string
+	// SaveDisabledTools persists a new /tools deny list so it survives a
+	// restart. Optional: when nil the deny list stays in memory only (tests,
+	// embedders). Called before the session is mutated, so a save failure
+	// leaves the running session untouched.
+	SaveDisabledTools func(disabled []string) error
 }
 
 // Manager owns the set of live server sessions. All methods are safe for
@@ -46,12 +52,31 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[string]*ServerSession
+	// cfgMu guards currentDisabled and serializes read-modify-write of the
+	// persisted config around SaveDisabledTools, so two concurrent connections
+	// cannot lose one another's write. Held only for the save and for reading
+	// the current deny list; never across a session lock.
+	cfgMu           sync.Mutex
+	currentDisabled []string
 }
 
 // NewManager builds a Manager. ctx bounds every run; cancel it on server
 // shutdown, then call Shutdown to close session files.
 func NewManager(ctx context.Context, opts Options) *Manager {
-	return &Manager{ctx: ctx, opts: opts, sessions: map[string]*ServerSession{}}
+	return &Manager{
+		ctx:             ctx,
+		opts:            opts,
+		sessions:        map[string]*ServerSession{},
+		currentDisabled: append([]string(nil), opts.DefaultDisabledTools...),
+	}
+}
+
+// defaultDisabledTools returns the deny list new sessions should start with:
+// the boot-time value, refreshed whenever a client persists a new one.
+func (m *Manager) defaultDisabledTools() []string {
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
+	return append([]string(nil), m.currentDisabled...)
 }
 
 // CreateParams are the options for Create.
@@ -168,11 +193,24 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 	return ss, nil
 }
 
+// newBase builds the unfiltered base registry (built-ins + subagent). cfg
+// supplies the owning session's live config to the subagent tool.
+func (m *Manager) newBase(cwd string, cfg func() agent.Config) *tools.Registry {
+	reg := tools.DefaultRegistry(cwd)
+	reg.Add(subagent.New(
+		subagent.WithCwd(cwd),
+		subagent.WithBase(cfg),
+		subagent.WithResolve(subagent.ResolveFunc(m.opts.Resolve)),
+	))
+	return reg
+}
+
 // wrap builds the ServerSession over an open session file. An Apply failure
 // (unknown profile, bad deny regex, invalid effort) is returned so callers
 // fail fast instead of silently starting the session without the profile.
 func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort, profile ...string) (*ServerSession, error) {
-	registry := tools.DefaultRegistry(cwd)
+	var ss *ServerSession
+	registry := m.newBase(cwd, func() agent.Config { return ss.Config() })
 	bundle := plugin.Load(cwd, m.opts.NoPlugins)
 	sessID := ""
 	if sess != nil {
@@ -183,12 +221,15 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 	}
 	basePrompt := agent.BuildSystemPrompt(registry, cwd)
 	systemPrompt := basePrompt
+	// Snapshot the deny list under cfgMu: a concurrent client may be saving a
+	// new one, and this session should start from a consistent value.
+	defaultDisabled := m.defaultDisabledTools()
 	want := m.opts.DefaultProfile
 	if len(profile) > 0 && profile[0] != "" {
 		want = profile[0]
 	}
 	if want != "" {
-		applied, err := plugin.Apply(bundle, registry, basePrompt, cwd, want, m.opts.DefaultDisabledTools...)
+		applied, err := plugin.Apply(bundle, registry, basePrompt, cwd, want, defaultDisabled...)
 		if err != nil {
 			return nil, err
 		}
@@ -199,9 +240,9 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		if applied.Effort != "" {
 			effort = applied.Effort
 		}
-	} else if len(m.opts.DefaultDisabledTools) > 0 {
-		registry = registry.Without(m.opts.DefaultDisabledTools)
-		systemPrompt = agent.BuildSystemPrompt(registry, cwd, m.opts.DefaultDisabledTools...)
+	} else if len(defaultDisabled) > 0 {
+		registry = registry.Without(defaultDisabled)
+		systemPrompt = agent.BuildSystemPrompt(registry, cwd, defaultDisabled...)
 	}
 	if sess != nil {
 		model.SessionID = sess.ID()
@@ -214,7 +255,8 @@ func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.M
 		CompactionSettings: m.opts.CompactionSettings,
 		Effort:             effort,
 	}
-	return newServerSession(m.ctx, sess, cfg, model.Provider+"/"+model.ID, cwd), nil
+	ss = newServerSession(m.ctx, sess, cfg, model.Provider+"/"+model.ID, cwd)
+	return ss, nil
 }
 
 // SetEffort applies a reasoning effort to subsequent runs on an owned session.
@@ -234,26 +276,56 @@ func (m *Manager) SetEffort(connID, sessionID string, effort llm.Effort) error {
 // registry (built-ins + plugin shell tools) minus the named tools, with the
 // active profile's instructions preserved. It is rejected while a run is
 // active (ErrBusy) so an in-flight turn never observes a half-swapped registry.
+//
+// The choice is persisted through Options.SaveDisabledTools *before* the session
+// is mutated, so a failed write leaves the running session untouched and is
+// reported to the caller. On success the value new sessions inherit is
+// refreshed, so sessions created later start from the user's current choice.
 func (m *Manager) SetDisabledTools(connID, sessionID string, disabled []string) error {
 	ss, err := m.Get(connID, sessionID)
 	if err != nil {
 		return err
 	}
+	if ss.Running() {
+		return ErrBusy
+	}
 	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-	base := tools.DefaultRegistry(ss.Cwd())
+	base := m.newBase(ss.Cwd(), ss.Config)
 	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
 		base.Add(st)
 	}
 	profile := ss.ActiveProfile()
+	reg, prompt := base, agent.BuildSystemPrompt(base, ss.Cwd())
 	if profile == "" {
-		filtered := base.Without(disabled)
-		return ss.SetDisabledTools(filtered, agent.BuildSystemPrompt(filtered, ss.Cwd(), disabled...), disabled)
+		reg = base.Without(disabled)
+		prompt = agent.BuildSystemPrompt(reg, ss.Cwd(), disabled...)
+	} else {
+		applied, aerr := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile, disabled...)
+		if aerr != nil {
+			return aerr
+		}
+		reg, prompt = applied.Registry, applied.SystemPrompt
 	}
-	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile, disabled...)
-	if err != nil {
+	if err := m.persistDisabledTools(disabled); err != nil {
 		return err
 	}
-	return ss.SetDisabledTools(applied.Registry, applied.SystemPrompt, disabled)
+	return ss.SetDisabledTools(reg, prompt, disabled)
+}
+
+// persistDisabledTools writes the deny list through Options.SaveDisabledTools,
+// serializing concurrent callers so no update is lost, and refreshes the value
+// new sessions inherit.
+func (m *Manager) persistDisabledTools(disabled []string) error {
+	if m.opts.SaveDisabledTools == nil {
+		return nil
+	}
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
+	if err := m.opts.SaveDisabledTools(append([]string(nil), disabled...)); err != nil {
+		return err
+	}
+	m.currentDisabled = append([]string(nil), disabled...)
+	return nil
 }
 
 // SetProfile applies a plugin profile (or resets with "" / "reset") on an
@@ -269,7 +341,7 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 	}
 	if profile == "" || profile == "reset" {
 		bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-		base := tools.DefaultRegistry(ss.Cwd())
+		base := m.newBase(ss.Cwd(), ss.Config)
 		for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
 			base.Add(st)
 		}
@@ -281,7 +353,7 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 		return ss.SetProfile(base, agent.BuildSystemPrompt(base, ss.Cwd(), ss.DisabledTools()...), effort, "", ss.DisabledTools())
 	}
 	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-	base := tools.DefaultRegistry(ss.Cwd())
+	base := m.newBase(ss.Cwd(), ss.Config)
 	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
 		base.Add(st)
 	}

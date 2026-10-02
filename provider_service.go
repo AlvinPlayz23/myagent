@@ -182,6 +182,23 @@ func validateProviderInput(p ws.ProviderInput) error {
 	return nil
 }
 
+// updateConfigLocked replaces the display/resolve snapshot only after the merged
+// save succeeds. The caller must hold s.mu.
+func (s *providerService) updateConfigLocked(fn func(*config.Config) error) error {
+	var updated *config.Config
+	if err := config.Update(func(cfg *config.Config) error {
+		if err := fn(cfg); err != nil {
+			return err
+		}
+		updated = cfg
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.cfg = updated
+	return nil
+}
+
 func (s *providerService) Save(in ws.ProviderInput) (ws.ProviderList, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,65 +206,67 @@ func (s *providerService) Save(in ws.ProviderInput) (ws.ProviderList, error) {
 		return ws.ProviderList{}, err
 	}
 	name, model := strings.TrimSpace(in.Name), strings.TrimSpace(in.Model)
-	if in.Builtin {
-		known := s.catalog != nil && s.catalog.IsBuiltinProvider(name)
-		if !known {
-			if _, ok := config.Preset(name); !ok {
-				return ws.ProviderList{}, fmt.Errorf("provider %q is not a known built-in provider", name)
+	if err := s.updateConfigLocked(func(cfg *config.Config) error {
+		if in.Builtin {
+			known := s.catalog != nil && s.catalog.IsBuiltinProvider(name)
+			if !known {
+				if _, ok := config.Preset(name); !ok {
+					return fmt.Errorf("provider %q is not a known built-in provider", name)
+				}
 			}
-		}
-		baseURL := strings.TrimSpace(in.BaseURL)
-		if baseURL == "" {
-			if preset, ok := config.Preset(name); ok {
-				baseURL = preset.BaseURL
+			baseURL := strings.TrimSpace(in.BaseURL)
+			if baseURL == "" {
+				if preset, ok := config.Preset(name); ok {
+					baseURL = preset.BaseURL
+				}
 			}
+			if baseURL == "" {
+				return fmt.Errorf("base URL is required")
+			}
+			existing, _ := s.auth.Get(name)
+			key := strings.TrimSpace(in.APIKey)
+			if key == "" {
+				key = existing.APIKey
+			}
+			if key == "" {
+				return fmt.Errorf("API key is required")
+			}
+			if _, custom := cfg.Providers[name]; custom {
+				return fmt.Errorf("provider %q is managed as a custom provider", name)
+			}
+			if err := s.auth.Set(name, auth.Credentials{APIKey: key, BaseURL: baseURL}); err != nil {
+				return err
+			}
+		} else {
+			baseURL := strings.TrimSpace(in.BaseURL)
+			if baseURL == "" {
+				return fmt.Errorf("base URL is required")
+			}
+			if cfg.Providers == nil {
+				cfg.Providers = map[string]config.ProviderConfig{}
+			}
+			existing := cfg.Providers[name]
+			key := strings.TrimSpace(in.APIKey)
+			if key == "" {
+				key = existing.APIKey
+			}
+			dialect := strings.TrimSpace(in.ReasoningDialect)
+			if dialect == "" {
+				dialect = existing.ReasoningDialect
+			}
+			transportParsed, err := llm.ParseTransport(in.Transport)
+			if err != nil {
+				return err
+			}
+			transport := string(transportParsed)
+			if transport == "" {
+				transport = existing.Transport
+			}
+			cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model, ReasoningDialect: dialect, Transport: transport}
 		}
-		if baseURL == "" {
-			return ws.ProviderList{}, fmt.Errorf("base URL is required")
-		}
-		existing, _ := s.auth.Get(name)
-		key := strings.TrimSpace(in.APIKey)
-		if key == "" {
-			key = existing.APIKey
-		}
-		if key == "" {
-			return ws.ProviderList{}, fmt.Errorf("API key is required")
-		}
-		if _, custom := s.cfg.Providers[name]; custom {
-			return ws.ProviderList{}, fmt.Errorf("provider %q is managed as a custom provider", name)
-		}
-		if err := s.auth.Set(name, auth.Credentials{APIKey: key, BaseURL: baseURL}); err != nil {
-			return ws.ProviderList{}, err
-		}
-	} else {
-		baseURL := strings.TrimSpace(in.BaseURL)
-		if baseURL == "" {
-			return ws.ProviderList{}, fmt.Errorf("base URL is required")
-		}
-		if s.cfg.Providers == nil {
-			s.cfg.Providers = map[string]config.ProviderConfig{}
-		}
-		existing := s.cfg.Providers[name]
-		key := strings.TrimSpace(in.APIKey)
-		if key == "" {
-			key = existing.APIKey
-		}
-		dialect := strings.TrimSpace(in.ReasoningDialect)
-		if dialect == "" {
-			dialect = existing.ReasoningDialect
-		}
-		transportParsed, err := llm.ParseTransport(in.Transport)
-		if err != nil {
-			return ws.ProviderList{}, err
-		}
-		transport := string(transportParsed)
-		if transport == "" {
-			transport = existing.Transport
-		}
-		s.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: key, BaseURL: baseURL, Model: model, ReasoningDialect: dialect, Transport: transport}
-	}
-	s.cfg.DefaultModel = name + "/" + model
-	if err := config.Save(s.cfg); err != nil {
+		cfg.DefaultModel = name + "/" + model
+		return nil
+	}); err != nil {
 		return ws.ProviderList{}, err
 	}
 	return s.listLocked(), nil
@@ -260,12 +279,30 @@ func (s *providerService) Delete(name string) (ws.ProviderList, error) {
 	if name == "" {
 		return ws.ProviderList{}, fmt.Errorf("provider name is required")
 	}
-	if defaultName, _, ok := providerRef(s.cfg.DefaultModel); ok && defaultName == name {
-		return ws.ProviderList{}, fmt.Errorf("choose a different default model before deleting %q", name)
+	current, err := config.Load()
+	if err != nil {
+		return ws.ProviderList{}, err
 	}
-	if _, custom := s.cfg.Providers[name]; custom {
-		delete(s.cfg.Providers, name)
-		if err := config.Save(s.cfg); err != nil {
+	checkDefault := func(cfg *config.Config) error {
+		if defaultName, _, ok := providerRef(cfg.DefaultModel); ok && defaultName == name {
+			return fmt.Errorf("choose a different default model before deleting %q", name)
+		}
+		return nil
+	}
+	if err := checkDefault(current); err != nil {
+		return ws.ProviderList{}, err
+	}
+	if _, custom := current.Providers[name]; custom {
+		if err := s.updateConfigLocked(func(cfg *config.Config) error {
+			if err := checkDefault(cfg); err != nil {
+				return err
+			}
+			if _, configured := cfg.Providers[name]; !configured {
+				return fmt.Errorf("provider %q is not configured", name)
+			}
+			delete(cfg.Providers, name)
+			return nil
+		}); err != nil {
 			return ws.ProviderList{}, err
 		}
 		if s.catalog != nil {
@@ -275,6 +312,7 @@ func (s *providerService) Delete(name string) (ws.ProviderList, error) {
 		if err := s.auth.Delete(name); err != nil {
 			return ws.ProviderList{}, err
 		}
+		s.cfg = current
 	} else {
 		return ws.ProviderList{}, fmt.Errorf("provider %q is not configured", name)
 	}
@@ -288,11 +326,13 @@ func (s *providerService) SetDefault(name, model string) (ws.ProviderList, error
 	if name == "" || model == "" {
 		return ws.ProviderList{}, fmt.Errorf("provider and model are required")
 	}
-	if _, _, err := s.cfg.ResolveWithAuth(s.auth, name, model, ""); err != nil {
-		return ws.ProviderList{}, err
-	}
-	s.cfg.DefaultModel = name + "/" + model
-	if err := config.Save(s.cfg); err != nil {
+	if err := s.updateConfigLocked(func(cfg *config.Config) error {
+		if _, _, err := cfg.ResolveWithAuth(s.auth, name, model, ""); err != nil {
+			return err
+		}
+		cfg.DefaultModel = name + "/" + model
+		return nil
+	}); err != nil {
 		return ws.ProviderList{}, err
 	}
 	return s.listLocked(), nil

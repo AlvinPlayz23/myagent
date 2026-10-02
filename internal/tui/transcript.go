@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 	"github.com/muesli/reflow/wordwrap"
 )
@@ -45,6 +46,9 @@ type block struct {
 	toolOutput string
 	toolErr    bool
 	toolDone   bool
+	// toolModel is the model a subagent call runs on: the requested override
+	// while pending, then the actual model from the result details.
+	toolModel string
 	// toolStart/toolDur feed the kj-style elapsed-time metadata shown after a
 	// tool completes. toolTimed is false for resumed history, which has no
 	// meaningful start stamp.
@@ -241,7 +245,33 @@ func (t *transcript) startTool(callID, name string, args map[string]any) {
 		toolDiff:   proposalDiff(name, args),
 		toolStart:  time.Now(),
 		toolTimed:  true,
+		toolModel:  subagentModelArg(name, args),
 	})
+}
+
+// subagentModelArg returns the explicit model override of a subagent call.
+func subagentModelArg(name string, args map[string]any) string {
+	if name != subagent.ToolName {
+		return ""
+	}
+	return strings.TrimSpace(toolArg(args, "model"))
+}
+
+// subagentModel extracts the model id from a subagent result's details, which
+// are a subagent.Details live and a decoded map in resumed history.
+func subagentModel(details any) string {
+	switch d := details.(type) {
+	case subagent.Details:
+		return d.Model
+	case *subagent.Details:
+		if d != nil {
+			return d.Model
+		}
+	case map[string]any:
+		s, _ := d["model"].(string)
+		return s
+	}
+	return ""
 }
 
 // endTool records the result on the matching tool block.
@@ -253,6 +283,11 @@ func (t *transcript) endTool(callID string, result *types.ToolResult, isError bo
 	b.toolDone = true
 	b.toolErr = isError
 	b.toolOutput = resultText(result)
+	if b.toolName == subagent.ToolName && result != nil {
+		if m := subagentModel(result.Details); m != "" {
+			b.toolModel = m
+		}
+	}
 	if b.toolTimed && !b.toolStart.IsZero() {
 		b.toolDur = time.Since(b.toolStart)
 	}
@@ -373,7 +408,22 @@ func (t *transcript) renderTool(b *block, width int) string {
 	sb.WriteString(t.th.textPrimary.Bold(true).Render(name))
 	if target != "" {
 		sb.WriteByte(' ')
-		sb.WriteString(t.th.muted.Render(target))
+		// Wrap long targets to the viewport; continuation lines are indented
+		// under the target like the metadata and output bodies.
+		avail := max(1, width-2-len([]rune(name))-1)
+		if len([]rune(target)) > avail {
+			wrapped := wrapPlain(target, avail)
+			lines := strings.Split(wrapped, "\n")
+			for i := range lines {
+				lines[i] = t.th.muted.Render(lines[i])
+				if i > 0 {
+					lines[i] = strings.Repeat(" ", 2+len([]rune(name))+1) + lines[i]
+				}
+			}
+			sb.WriteString(strings.Join(lines, "\n"))
+		} else {
+			sb.WriteString(t.th.muted.Render(target))
+		}
 	}
 	if meta := t.toolMetaLine(b); meta != "" {
 		sb.WriteByte('\n')
@@ -476,6 +526,9 @@ func (t *transcript) toolMetaLine(b *block) string {
 		return t.th.toolError.Render("error")
 	}
 	var parts []string
+	if b.toolModel != "" {
+		parts = append(parts, truncateDots(b.toolModel, 32))
+	}
 	if b.toolTimed && b.toolDur > 0 {
 		parts = append(parts, formatToolDuration(b.toolDur))
 	}
@@ -772,6 +825,10 @@ func (t *transcript) toolHeaderParts(b *block) (name, target string) {
 			cmd = arg("cmd")
 		}
 		return "$", firstLine(cmd)
+	case "subagent":
+		// The prompt is a full task brief; show only a truncated one-line
+		// preview in the header.
+		return name, truncateDots(strings.Join(strings.Fields(arg("prompt")), " "), 100)
 	default:
 		if len(b.toolArgs) == 0 {
 			return name, ""
@@ -874,6 +931,15 @@ func resultText(r *types.ToolResult) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// truncateDots shortens s to at most n runes, ending in "..." when cut.
+func truncateDots(s string, n int) string {
+	r := []rune(s)
+	if n <= 3 || len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
 }
 
 func firstLine(s string) string {

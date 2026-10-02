@@ -17,6 +17,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/sessionstate"
+	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/terminal"
 	"github.com/AlvinPlayz23/myagent/internal/titlegen"
 	"github.com/AlvinPlayz23/myagent/internal/types"
@@ -25,6 +27,43 @@ import (
 // Run starts the interactive TUI. It drives the agent loop over the given
 // config and prior history, persisting every produced message to sess as it
 // completes. It returns the active session when the user quits, which may be a
+// sessionToolsKey is the sessionstate key holding a session's /tools deny list.
+const sessionToolsKey = "disabledTools"
+
+// loadSessionTools reads the session-scoped deny list for a session, returning
+// nil when the session is nil, has no stored list, or the store is unreadable.
+// A store failure must not block startup: the global list still applies.
+func loadSessionTools(store *sessionstate.File, sess *session.Session) []string {
+	if store == nil || sess == nil {
+		return nil
+	}
+	disabled, ok := store.GetStringSlice(sess.ID(), sessionToolsKey)
+	if !ok {
+		return nil
+	}
+	return disabled
+}
+
+// pruneSessionState drops stored entries whose session file no longer exists.
+// Sessions are never deleted in this codebase, but a user may clear the
+// sessions directory by hand, and without pruning the file would keep one
+// entry per session ever started. Failures are ignored: pruning is an
+// optimization, not a correctness requirement.
+func pruneSessionState(store *sessionstate.File) {
+	if store == nil {
+		return
+	}
+	infos, err := session.List()
+	if err != nil {
+		return
+	}
+	live := make(map[string]bool, len(infos))
+	for _, info := range infos {
+		live[info.ID] = true
+	}
+	_, _ = store.Prune(live)
+}
+
 // session created through /new.
 func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, authStore *auth.Store, catalog *modelcatalog.Catalog, sess *session.Session, history []types.Message, modelID, cwd string, pluginArgs ...any) (*session.Session, error) {
 	queue := newMsgQueue()
@@ -33,6 +72,13 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		cfg.Model.SessionID = sess.ID()
 	}
 	r := newRunner(cfg, queue, history)
+	// Point the subagent tool (if registered) at the runner's live config so
+	// children inherit the current model, effort and tools.
+	if cfg.Registry != nil {
+		if st, ok := cfg.Registry.Get(subagent.ToolName).(*subagent.Tool); ok {
+			st.SetBase(func() agent.Config { return r.cfg })
+		}
+	}
 
 	th := newTheme()
 	md := newMDRenderer()
@@ -50,6 +96,10 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		sess = newSess
 		r.cfg.Model.SessionID = newSess.ID()
+		// A brand-new session has no stored deny list of its own; only the
+		// global one still applies.
+		m.sessionDisabledTools = nil
+		m.disabledTools = unionTools(m.globalDisabledTools, nil)
 		r.reset()
 		// /new resets to default unless --profile is pinned (§10.3).
 		if m.defaultProfile != "" {
@@ -64,49 +114,20 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		m.sessionTitle = sess.Title()
 	}
 	m.hasSessionTitle = m.sessionTitle != "" && m.sessionTitle != "new"
-	if persistedConfig != nil {
-		m.welcomeStyle = normalizeWelcomeStyle(persistedConfig.WelcomeStyle)
-		m.saveWelcomeStyle = func(style welcomeStyle) error {
-			previous := persistedConfig.WelcomeStyle
-			persistedConfig.WelcomeStyle = string(style)
-			if err := config.Save(persistedConfig); err != nil {
-				persistedConfig.WelcomeStyle = previous
-				return err
-			}
-			return nil
+	m.configurePersistedSettings(persistedConfig)
+
+	// Session-scoped /tools state lives in session-state.json, keyed by
+	// session ID. It is loaded on start and again on /resume, because each
+	// session carries its own list.
+	store := sessionstate.NewFile()
+	pruneSessionState(store)
+	m.sessionDisabledTools = loadSessionTools(store, sess)
+	m.disabledTools = unionTools(m.globalDisabledTools, m.sessionDisabledTools)
+	m.saveSessionTools = func(disabled []string) error {
+		if sess == nil {
+			return fmt.Errorf("no active session")
 		}
-		m.promptStyle = normalizePromptStyle(persistedConfig.PromptStyle)
-		m.savePromptStyle = func(style promptStyle) error {
-			previous := persistedConfig.PromptStyle
-			persistedConfig.PromptStyle = string(style)
-			if err := config.Save(persistedConfig); err != nil {
-				persistedConfig.PromptStyle = previous
-				return err
-			}
-			return nil
-		}
-		if parsed, err := llm.ParseEffort(persistedConfig.DefaultEffort); err == nil {
-			m.defaultEffort = parsed
-		}
-		m.saveDefaultEffort = func(effort llm.Effort) error {
-			previous := persistedConfig.DefaultEffort
-			persistedConfig.DefaultEffort = string(effort)
-			if err := config.Save(persistedConfig); err != nil {
-				persistedConfig.DefaultEffort = previous
-				return err
-			}
-			return nil
-		}
-		m.disabledTools = append([]string(nil), persistedConfig.DisabledTools...)
-		m.saveDisabledTools = func(disabled []string) error {
-			previous := persistedConfig.DisabledTools
-			persistedConfig.DisabledTools = append([]string(nil), disabled...)
-			if err := config.Save(persistedConfig); err != nil {
-				persistedConfig.DisabledTools = previous
-				return err
-			}
-			return nil
-		}
+		return store.Set(sess.ID(), sessionToolsKey, disabled, sess.Path())
 	}
 	m.syncComposerStyle()
 	m.setTerminalTitle = terminal.SetTitle
@@ -150,7 +171,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if m.statusMsg != "" {
 			m.statusMsg += " · " + pluginNotice
 		} else {
-		m.statusMsg = pluginNotice
+			m.statusMsg = pluginNotice
 		}
 	}
 	if m.pluginBundle != nil {
@@ -232,8 +253,10 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		if catalog != nil {
 			model = catalog.Enrich(model)
 		}
-		persistedConfig.DefaultModel = providerName + "/" + modelID
-		if err := config.Save(persistedConfig); err != nil {
+		if err := config.Update(func(cfg *config.Config) error {
+			cfg.DefaultModel = providerName + "/" + modelID
+			return nil
+		}); err != nil {
 			return nil, llm.Model{}, err
 		}
 		return provider, model, nil
@@ -263,6 +286,9 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		sess = resumed
 		r.cfg.Model.SessionID = resumed.ID()
+		// The resumed session may carry its own /tools deny list.
+		m.sessionDisabledTools = loadSessionTools(store, resumed)
+		m.disabledTools = unionTools(m.globalDisabledTools, m.sessionDisabledTools)
 		// /new and /resume reset to default unless --profile is pinned (§10.3).
 		if m.defaultProfile != "" {
 			_ = m.applyProfile(m.defaultProfile)
@@ -474,7 +500,7 @@ func seedTranscript(t *transcript, history []types.Message) {
 				}
 			}
 		case types.RoleToolResult:
-			t.endTool(msg.ToolCallID, &types.ToolResult{Content: msg.Content}, msg.IsError)
+			t.endTool(msg.ToolCallID, &types.ToolResult{Content: msg.Content, Details: msg.Details}, msg.IsError)
 		}
 	}
 }

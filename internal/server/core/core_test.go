@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AlvinPlayz23/myagent/internal/config"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/session"
 	"github.com/AlvinPlayz23/myagent/internal/types"
@@ -560,7 +561,7 @@ func TestSetDisabledToolsFiltersRegistry(t *testing.T) {
 	if got, want := ss.DisabledTools(), []string{"bash", "write"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("DisabledTools = %v, want %v", got, want)
 	}
-	want := []string{"read", "edit"}
+	want := []string{"read", "edit", "subagent"}
 	if got := ss.cfg.Registry.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("registry = %v, want %v", got, want)
 	}
@@ -572,8 +573,8 @@ func TestSetDisabledToolsFiltersRegistry(t *testing.T) {
 	if err := m.SetDisabledTools("conn1", ss.ID(), nil); err != nil {
 		t.Fatalf("SetDisabledTools clear: %v", err)
 	}
-	if got := len(ss.cfg.Registry.Names()); got != 4 {
-		t.Fatalf("registry after clear has %d tools, want 4", got)
+	if got := len(ss.cfg.Registry.Names()); got != 5 {
+		t.Fatalf("registry after clear has %d tools, want 5", got)
 	}
 }
 
@@ -598,5 +599,152 @@ func TestSetDisabledToolsBusyGuard(t *testing.T) {
 	}
 	if got := ss.DisabledTools(); len(got) != 0 {
 		t.Errorf("disabled tools changed despite ErrBusy: %v", got)
+	}
+}
+
+// newTestManagerWithSaver builds a Manager whose SaveDisabledTools hook records
+// every persisted deny list, mirroring the server's config.json wiring.
+func newTestManagerWithSaver(t *testing.T, provider llm.Provider) (*Manager, *[][]string, func(error)) {
+	t.Helper()
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	saved := &[][]string{}
+	var saveErr error
+	save := func(disabled []string) error {
+		if saveErr != nil {
+			return saveErr
+		}
+		*saved = append(*saved, append([]string(nil), disabled...))
+		return nil
+	}
+	m := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			if modelID == "" {
+				modelID = "test-model"
+			}
+			return provider, llm.Model{ID: modelID, Provider: "test", BaseURL: "http://unused"}, nil
+		},
+		DefaultCwd:        t.TempDir(),
+		SaveDisabledTools: save,
+	})
+	t.Cleanup(func() {
+		cancel()
+		m.Shutdown()
+	})
+	return m, saved, func(err error) { saveErr = err }
+}
+
+func TestSetDisabledToolsPersistsToConfig(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	provider := &scriptedProvider{reply: "ok"}
+	m, saved, _ := newTestManagerWithSaver(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash"}); err != nil {
+		t.Fatalf("SetDisabledTools: %v", err)
+	}
+	if len(*saved) != 1 {
+		t.Fatalf("save calls = %d, want 1", len(*saved))
+	}
+	if want := []string{"bash"}; !reflect.DeepEqual((*saved)[0], want) {
+		t.Fatalf("persisted = %v, want %v", (*saved)[0], want)
+	}
+}
+
+func TestSetDisabledToolsSaveErrorLeavesSessionUntouched(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m, saved, setErr := newTestManagerWithSaver(t, provider)
+	setErr(errors.New("disk full"))
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash"}); err == nil {
+		t.Fatal("SetDisabledTools = nil, want save error")
+	}
+	if got := ss.DisabledTools(); len(got) != 0 {
+		t.Errorf("session disabled tools = %v, want unchanged after save failure", got)
+	}
+	if got := ss.cfg.Registry.Names(); !reflect.DeepEqual(got, []string{"read", "write", "edit", "bash", "subagent"}) {
+		t.Errorf("registry = %v, want all 4 tools after save failure", got)
+	}
+	if len(*saved) != 0 {
+		t.Errorf("saver recorded %v, want nothing", *saved)
+	}
+}
+
+func TestSetDisabledToolsUpdatesNewSessionDefault(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m, _, _ := newTestManagerWithSaver(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash", "write"}); err != nil {
+		t.Fatalf("SetDisabledTools: %v", err)
+	}
+	// A session created after the change inherits it, so the boot-time list
+	// does not resurrect the tools the user just turned off.
+	ss2, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ss2.cfg.Registry.Names(), []string{"read", "edit", "subagent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("new session registry = %v, want %v", got, want)
+	}
+}
+
+// TestSetDisabledToolsPersistsConfigJSON exercises the real config.Save wiring
+// (as serve.go installs it) and confirms the deny list is readable from
+// config.json on the next load.
+func TestSetDisabledToolsPersistsConfigJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MYAGENT_DIR", dir)
+	provider := &scriptedProvider{reply: "ok"}
+	ctx, cancel := context.WithCancel(context.Background())
+	m := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			return provider, llm.Model{ID: "test-model", Provider: "test", BaseURL: "http://unused"}, nil
+		},
+		DefaultCwd: t.TempDir(),
+		SaveDisabledTools: func(disabled []string) error {
+			return config.Update(func(current *config.Config) error {
+				current.DisabledTools = append([]string(nil), disabled...)
+				return nil
+			})
+		},
+	})
+	defer func() {
+		cancel()
+		m.Shutdown()
+	}()
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update(func(cfg *config.Config) error {
+		cfg.WelcomeStyle = "rain"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash", "edit"}); err != nil {
+		t.Fatalf("SetDisabledTools: %v", err)
+	}
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"bash", "edit"}; !reflect.DeepEqual(reloaded.DisabledTools, want) {
+		t.Fatalf("config.json disabledTools = %v, want %v", reloaded.DisabledTools, want)
+	}
+	if reloaded.WelcomeStyle != "rain" {
+		t.Fatal("tools save lost an external welcome style update")
 	}
 }

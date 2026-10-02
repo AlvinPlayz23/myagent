@@ -264,30 +264,65 @@ func buildPluginHelpExtra(items []commandItem) string {
 	return b.String()
 }
 
-// applyToolToggles publishes the /tools deny list: it rebuilds the effective
-// registry (profile allowlist first, disabled filter last), persists the
-// choice, and swaps the runner's registry + system prompt. Callers must refuse
-// while a run is active. An empty list re-enables every tool.
+// applyToolToggles publishes the /tools deny list globally: it rebuilds the
+// effective registry (profile allowlist first, disabled filter last), persists
+// the choice to config.json, and swaps the runner's registry + system prompt.
 func (m *model) applyToolToggles(pending []string) {
+	m.applyToolTogglesScoped(pending, scopeGlobal)
+}
+
+// applyToolTogglesScoped publishes a staged deny list to the chosen scope. The
+// pending list is the full set the user toggled; it is written to that scope
+// only, leaving the other scope's list untouched. The effective deny list is
+// the union of both, so a tool disabled globally stays disabled even if this
+// session's list omits it.
+//
+// Callers must refuse while a run is active. An empty list re-enables every
+// tool in the chosen scope.
+func (m *model) applyToolTogglesScoped(pending []string, scope toolScope) {
 	if m.working {
 		m.statusMsg = "Cancel the current run before changing tools."
 		return
 	}
-	previous := m.disabledTools
-	if m.saveDisabledTools != nil {
-		if err := m.saveDisabledTools(pending); err != nil {
-			m.statusMsg = "Could not save tools: " + err.Error()
+	previousGlobal := m.globalDisabledTools
+	previousSession := m.sessionDisabledTools
+	previousEffective := m.disabledTools
+
+	if scope == scopeSession {
+		if m.saveSessionTools == nil {
+			m.statusMsg = "Session-scoped tools are unavailable."
 			return
 		}
+		if err := m.saveSessionTools(pending); err != nil {
+			m.statusMsg = "Could not save tools for this session: " + err.Error()
+			return
+		}
+		m.sessionDisabledTools = append([]string(nil), pending...)
+	} else {
+		if m.saveDisabledTools != nil {
+			if err := m.saveDisabledTools(pending); err != nil {
+				m.statusMsg = "Could not save tools: " + err.Error()
+				return
+			}
+		}
+		m.globalDisabledTools = append([]string(nil), pending...)
 	}
-	m.disabledTools = append([]string(nil), pending...)
+
+	// Union of both scopes: a tool disabled in either stays disabled.
+	m.disabledTools = unionTools(m.globalDisabledTools, m.sessionDisabledTools)
+
 	if m.activeProfile != "" {
 		// Re-apply the profile so its instructions and effort survive the
 		// change; applyProfile routes the disabled list through plugin.Apply.
 		if err := m.applyProfile(m.activeProfile); err != nil {
-			m.disabledTools = previous
-			if m.saveDisabledTools != nil {
-				_ = m.saveDisabledTools(previous)
+			// Roll every scope back so memory matches what is still on disk.
+			m.globalDisabledTools = previousGlobal
+			m.sessionDisabledTools = previousSession
+			m.disabledTools = previousEffective
+			if scope == scopeSession && m.saveSessionTools != nil {
+				_ = m.saveSessionTools(previousSession)
+			} else if m.saveDisabledTools != nil {
+				_ = m.saveDisabledTools(previousGlobal)
 			}
 			m.statusMsg = err.Error()
 			return
@@ -297,10 +332,12 @@ func (m *model) applyToolToggles(pending []string) {
 		m.runner.setTools(base, agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...))
 	}
 	switch {
-	case len(pending) == 0:
+	case len(m.disabledTools) == 0:
 		m.statusMsg = "All tools enabled."
+	case scope == scopeSession:
+		m.statusMsg = fmt.Sprintf("Tools updated for this session: %d disabled.", len(m.disabledTools))
 	default:
-		m.statusMsg = fmt.Sprintf("Tools updated: %d disabled.", len(pending))
+		m.statusMsg = fmt.Sprintf("Tools updated globally: %d disabled.", len(m.disabledTools))
 	}
 	m.refreshViewport()
 }

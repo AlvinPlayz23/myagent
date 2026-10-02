@@ -99,8 +99,12 @@ func TestApplyToolTogglesRebuildsRegistryAndPersists(t *testing.T) {
 	if !reflect.DeepEqual(saved, []string{"write", "bash"}) {
 		t.Fatalf("saved = %v, want [write bash]", saved)
 	}
-	if !reflect.DeepEqual(m.disabledTools, []string{"write", "bash"}) {
-		t.Fatalf("disabledTools = %v", m.disabledTools)
+	// disabledTools is the effective union, which is sorted for stability.
+	if want := []string{"bash", "write"}; !reflect.DeepEqual(m.disabledTools, want) {
+		t.Fatalf("disabledTools = %v, want %v", m.disabledTools, want)
+	}
+	if want := []string{"write", "bash"}; !reflect.DeepEqual(m.globalDisabledTools, want) {
+		t.Fatalf("globalDisabledTools = %v, want %v", m.globalDisabledTools, want)
 	}
 	names := m.runner.cfg.Registry.Names()
 	want := []string{"read", "edit"}
@@ -169,7 +173,7 @@ func TestToolsCommandOpensPanelAndEscApplies(t *testing.T) {
 		t.Fatal("expected the panel to list tools")
 	}
 
-	// Disable bash, then esc saves.
+	// Disable bash, then esc stages the change and opens the scope panel.
 	for i, n := range m.tools.names {
 		if n == "bash" {
 			m.tools.sel = i
@@ -180,7 +184,21 @@ func TestToolsCommandOpensPanelAndEscApplies(t *testing.T) {
 		t.Fatal("space did not toggle bash")
 	}
 	if _, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})); m.tools.active {
-		t.Fatal("esc did not close the panel")
+		t.Fatal("esc did not close the tools panel")
+	}
+	if !m.scope.active {
+		t.Fatal("esc did not open the scope panel")
+	}
+	if saved != nil {
+		t.Fatalf("staging wrote %v before a scope was chosen", saved)
+	}
+
+	// Choose Global (move down from the session default) and save.
+	if _, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown})); m.scope.choice().scope != scopeGlobal {
+		t.Fatalf("down selected %v, want scopeGlobal", m.scope.choice().scope)
+	}
+	if _, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); m.scope.active {
+		t.Fatal("enter did not close the scope panel")
 	}
 	if !reflect.DeepEqual(saved, []string{"bash"}) {
 		t.Fatalf("saved = %v, want [bash]", saved)

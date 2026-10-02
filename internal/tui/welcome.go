@@ -243,6 +243,44 @@ func (m *model) renderWelcomeLocation() string {
 
 // --- menu ---
 
+// --- hint ---
+
+// welcomeHintPlain returns the unstyled hint text: the disabled-tools notice
+// when a deny list is in effect, otherwise the prompt hint narrowed to fit the
+// terminal. Shared by every welcome style so the rain, hero box, and stacked
+// layouts report the same thing.
+func (m *model) welcomeHintPlain() string {
+	names := unionTools(m.disabledTools, nil)
+	if len(names) == 0 {
+		if m.width < 34 {
+			return "Type a prompt to begin"
+		}
+		if m.width < 44 {
+			return "Type a prompt · /help for commands"
+		}
+		return "Type a prompt to begin · /help for commands"
+	}
+	// Sorted by unionTools so the line reads the same on every restart,
+	// whatever order the toggles were applied in.
+	scope := ""
+	if len(m.sessionDisabledTools) > 0 {
+		scope = " (session)"
+	} else if len(m.globalDisabledTools) > 0 {
+		scope = " (global)"
+	}
+	return "Disabled tools: " + strings.Join(names, ", ") + scope
+}
+
+// welcomeHint returns the styled, centered hint line. Truncates from the right
+// so a long deny list cannot wrap and push the layout down a row.
+func (m *model) welcomeHint() string {
+	plain := m.welcomeHintPlain()
+	if m.width > 1 && lipgloss.Width(plain) > m.width {
+		plain = ansi.Truncate(plain, m.width, "…")
+	}
+	return centerLine(m.th.muted.Render(plain), m.width)
+}
+
 // welcomeMenuItems lists the `label … key` rows: action left (bold),
 // key right (gray). Keys shown are all real (typed text or real binds).
 // welcomeMenuActions runs parallel: the click/hover target per row.
@@ -342,7 +380,7 @@ func (m *model) renderDefaultWelcome() string {
 	vh := m.welcomeViewportHeight()
 	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
-	hint := centerLine(m.th.muted.Render("Type a prompt to begin · /help for commands"), m.width)
+	hint := m.welcomeHint()
 	location := m.renderWelcomeLocation()
 
 	// Measure the middle so centering weights toward the top (/3).
@@ -391,7 +429,7 @@ func (m *model) renderMyagentWelcome() string {
 // overflows.
 func (m *model) renderMyagentStacked(vh int, compact bool) string {
 	title := centerLine(m.th.cmdPickerSel.Render("myagent"), m.width)
-	hint := centerLine(m.th.muted.Render("Type a prompt to begin · /help for commands"), m.width)
+	hint := m.welcomeHint()
 	location := m.renderWelcomeLocation()
 
 	tier := myagentTierForHeight(vh)
@@ -512,7 +550,7 @@ func (m *model) renderHeroBox(vh int) (string, bool) {
 		Render(strings.Join(inner, "\n"))
 	centered := lipgloss.Place(m.width, lipgloss.Height(side), lipgloss.Center, lipgloss.Top, side)
 
-	hint := centerLine(m.th.muted.Render("Type a prompt to begin · /help for commands"), m.width)
+	hint := m.welcomeHint()
 	location := m.renderWelcomeLocation()
 	used := 1 + lipgloss.Height(side) + 1 + 1 + 1
 	padTop := (vh - used) / 3

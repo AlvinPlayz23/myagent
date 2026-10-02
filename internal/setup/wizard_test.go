@@ -297,6 +297,196 @@ func TestManagerAddsEditsAndSelectsProvider(t *testing.T) {
 	}
 }
 
+func newPersistedWizardForTest(t *testing.T) *wizardModel {
+	t.Helper()
+	setTempDir(t)
+	if err := config.Save(&config.Config{Providers: map[string]config.ProviderConfig{
+		"openai":  {Type: config.DefaultProviderType, BaseURL: config.DefaultBaseURL, Model: "gpt-4o"},
+		"local":   {Type: config.DefaultProviderType, BaseURL: "http://localhost:11434/v1", Model: "qwen3"},
+		"other":   {Type: config.DefaultProviderType, BaseURL: "http://localhost:9000/v1", Model: "other-model"},
+		"removed": {Type: config.DefaultProviderType, BaseURL: "http://localhost:9002/v1", Model: "removed-model"},
+	}, DefaultModel: "openai/gpt-4o"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	m := newWizardModel()
+	_, _ = m.Update(readyWindow())
+	if m.err != "" {
+		t.Fatalf("new wizard error = %q", m.err)
+	}
+	return m
+}
+
+func TestWizardWritersPreserveFreshConfig(t *testing.T) {
+	savedProvider := config.ProviderConfig{Type: config.DefaultProviderType, BaseURL: "http://localhost:8001/v1", Model: "new-model"}
+	for _, tt := range []struct {
+		name  string
+		write func(*testing.T, *wizardModel)
+		want  func(*config.Config)
+	}{
+		{
+			name: "onBuiltinModelKey",
+			write: func(t *testing.T, m *wizardModel) {
+				m.builtinModels = []modelcatalog.Model{{Provider: "openrouter", ID: "chosen-model"}}
+				m.screen = screenBuiltinModel
+				_, _ = m.onBuiltinModelKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			},
+			want: func(cfg *config.Config) { cfg.DefaultModel = "openrouter/chosen-model" },
+		},
+		{
+			name: "onDeleteKey",
+			write: func(t *testing.T, m *wizardModel) {
+				m.selected = m.indexOf("local")
+				m.screen = screenDelete
+				_, _ = m.onDeleteKey(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+			},
+			want: func(cfg *config.Config) { delete(cfg.Providers, "local") },
+		},
+		{
+			name: "saveProvider add",
+			write: func(t *testing.T, m *wizardModel) {
+				m.openEditor("")
+				saveProvider(t, m, "added", "", savedProvider.BaseURL, savedProvider.Model)
+			},
+			want: func(cfg *config.Config) {
+				cfg.Providers["added"] = savedProvider
+				cfg.DefaultModel = "added/new-model"
+			},
+		},
+		{
+			name: "saveProvider edit",
+			write: func(t *testing.T, m *wizardModel) {
+				m.openEditor("local")
+				saveProvider(t, m, "local", "", savedProvider.BaseURL, savedProvider.Model)
+			},
+			want: func(cfg *config.Config) {
+				cfg.Providers["local"] = savedProvider
+				cfg.DefaultModel = "local/new-model"
+			},
+		},
+		{
+			name: "saveProvider rename",
+			write: func(t *testing.T, m *wizardModel) {
+				m.openEditor("local")
+				saveProvider(t, m, "renamed", "", savedProvider.BaseURL, savedProvider.Model)
+			},
+			want: func(cfg *config.Config) {
+				delete(cfg.Providers, "local")
+				cfg.Providers["renamed"] = savedProvider
+				cfg.DefaultModel = "renamed/new-model"
+			},
+		},
+		{
+			name:  "makeDefault",
+			write: func(t *testing.T, m *wizardModel) { m.makeDefault("local") },
+			want:  func(cfg *config.Config) { cfg.DefaultModel = "local/qwen3" },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newPersistedWizardForTest(t)
+			before := m.cfg
+			// Another writer changes the file after the wizard retains its snapshot.
+			if err := config.Update(func(cfg *config.Config) error {
+				cfg.DisabledTools = []string{"bash", "write"}
+				cfg.WelcomeStyle, cfg.PromptStyle, cfg.DefaultEffort = "compact", "plain", "high"
+				cfg.Retry = &config.RetryConfig{MaxAttempts: 1, BaseDelayMs: 250, MaxDelayMs: 1000}
+				cfg.Providers["external"] = config.ProviderConfig{Type: config.DefaultProviderType, BaseURL: "http://localhost:10000/v1", Model: "external-model"}
+				delete(cfg.Providers, "removed")
+				other := cfg.Providers["other"]
+				other.BaseURL, other.Model, other.Transport = "http://localhost:9001/v1", "updated-model", "responses"
+				cfg.Providers["other"] = other
+				cfg.DefaultModel = "external/external-model"
+				return nil
+			}); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			want, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			tt.want(want)
+			tt.write(t, m)
+			if m.err != "" {
+				t.Fatalf("writer error = %q", m.err)
+			}
+			persisted, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !reflect.DeepEqual(persisted, want) {
+				t.Fatal("writer changed unrelated fresh config or failed to apply its focused mutation")
+			}
+			if m.cfg == before || !reflect.DeepEqual(m.cfg, persisted) || m.result != m.cfg {
+				t.Fatal("wizard snapshot/result did not synchronize with the successful save")
+			}
+		})
+	}
+}
+
+func TestWizardUpdateErrorsKeepSnapshot(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		external  func(*config.Config)
+		write     func(*testing.T, *wizardModel)
+		wantError string
+	}{
+		{
+			name:     "delete fresh default",
+			external: func(cfg *config.Config) { cfg.DefaultModel = "local/qwen3" },
+			write: func(t *testing.T, m *wizardModel) {
+				m.selected = m.indexOf("local")
+				m.screen = screenDelete
+				_, _ = m.onDeleteKey(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+			},
+			wantError: "select another provider as default",
+		},
+		{
+			name: "rename to fresh provider",
+			external: func(cfg *config.Config) {
+				cfg.Providers["renamed"] = config.ProviderConfig{Type: config.DefaultProviderType, BaseURL: "http://localhost:10000/v1", Model: "external-model"}
+			},
+			write: func(t *testing.T, m *wizardModel) {
+				m.openEditor("local")
+				saveProvider(t, m, "renamed", "", "http://localhost:8001/v1", "new-model")
+			},
+			wantError: "already exists",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newPersistedWizardForTest(t)
+			before := m.cfg
+			wantSnapshot, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if err := config.Update(func(cfg *config.Config) error {
+				cfg.DisabledTools = []string{"bash", "write"}
+				tt.external(cfg)
+				return nil
+			}); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			wantPersisted, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			tt.write(t, m)
+			if !strings.Contains(m.err, "Failed to write config:") || !strings.Contains(m.err, tt.wantError) {
+				t.Fatalf("writer error = %q, want update failure containing %q", m.err, tt.wantError)
+			}
+			if m.cfg != before || !reflect.DeepEqual(m.cfg, wantSnapshot) || m.result != nil || m.done {
+				t.Fatal("failed update mutated or replaced the wizard snapshot/result")
+			}
+			persisted, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !reflect.DeepEqual(persisted, wantPersisted) {
+				t.Fatal("failed update changed the persisted config")
+			}
+		})
+	}
+}
+
 func TestManagerDeletesNonDefaultProvider(t *testing.T) {
 	setTempDir(t)
 	m := newWizardModel()

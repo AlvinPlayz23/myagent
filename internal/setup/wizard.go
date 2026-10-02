@@ -439,8 +439,10 @@ func (m *wizardModel) onBuiltinModelKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 	case "enter":
 		model := m.builtinModels[m.builtinModelSel]
-		m.cfg.DefaultModel = model.Ref()
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.updateConfig(func(cfg *config.Config) error {
+			cfg.DefaultModel = model.Ref()
+			return nil
+		}); err != nil {
 			m.err = "Failed to write config: " + err.Error()
 			return m, nil
 		}
@@ -494,8 +496,14 @@ func (m *wizardModel) onDeleteKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.Keystroke() {
 	case "y":
 		name := m.selectedProvider()
-		delete(m.cfg.Providers, name)
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.updateConfig(func(cfg *config.Config) error {
+			defaultName, _, _ := strings.Cut(cfg.DefaultModel, "/")
+			if defaultName == name {
+				return fmt.Errorf("select another provider as default before deleting this one")
+			}
+			delete(cfg.Providers, name)
+			return nil
+		}); err != nil {
 			m.err = "Failed to write config: " + err.Error()
 			m.screen = screenList
 			return m, nil
@@ -743,19 +751,20 @@ func (m *wizardModel) saveProvider() (tea.Model, tea.Cmd) {
 		m.err = err.Error()
 		return m, nil
 	}
-	if m.cfg.Providers == nil {
-		m.cfg.Providers = make(map[string]config.ProviderConfig)
-	}
-	if m.editing != "" && m.editing != name {
-		if _, exists := m.cfg.Providers[name]; exists {
-			m.err = fmt.Sprintf("Provider %q already exists.", name)
-			return m, nil
+	if err := m.updateConfig(func(cfg *config.Config) error {
+		if cfg.Providers == nil {
+			cfg.Providers = make(map[string]config.ProviderConfig)
 		}
-		delete(m.cfg.Providers, m.editing)
-	}
-	m.cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model, ReasoningDialect: reasoningDialect, Transport: string(transport)}
-	m.cfg.DefaultModel = name + "/" + model
-	if err := config.Save(m.cfg); err != nil {
+		if m.editing != "" && m.editing != name {
+			if _, exists := cfg.Providers[name]; exists {
+				return fmt.Errorf("Provider %q already exists.", name)
+			}
+			delete(cfg.Providers, m.editing)
+		}
+		cfg.Providers[name] = config.ProviderConfig{Type: config.DefaultProviderType, APIKey: apiKey, BaseURL: baseURL, Model: model, ReasoningDialect: reasoningDialect, Transport: string(transport)}
+		cfg.DefaultModel = name + "/" + model
+		return nil
+	}); err != nil {
 		m.err = "Failed to write config: " + err.Error()
 		return m, nil
 	}
@@ -799,13 +808,31 @@ func (m *wizardModel) makeDefault(name string) {
 		m.err = "Edit this provider to choose its model before making it default."
 		return
 	}
-	m.cfg.DefaultModel = name + "/" + model
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.updateConfig(func(cfg *config.Config) error {
+		cfg.DefaultModel = name + "/" + model
+		return nil
+	}); err != nil {
 		m.err = "Failed to write config: " + err.Error()
 		return
 	}
 	m.result = m.cfg
 	m.err = ""
+}
+
+// updateConfig replaces the display snapshot only after the merged save succeeds.
+func (m *wizardModel) updateConfig(fn func(*config.Config) error) error {
+	var updated *config.Config
+	if err := config.Update(func(cfg *config.Config) error {
+		if err := fn(cfg); err != nil {
+			return err
+		}
+		updated = cfg
+		return nil
+	}); err != nil {
+		return err
+	}
+	m.cfg = updated
+	return nil
 }
 
 func (m *wizardModel) refreshProviders() {

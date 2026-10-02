@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AlvinPlayz23/myagent/internal/auth"
+	"github.com/AlvinPlayz23/myagent/internal/filelock"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 )
 
@@ -72,12 +73,12 @@ type ProviderConfig struct {
 // DefaultEffort persists the /effort selection across restarts; empty means
 // use the provider default.
 type Config struct {
-	Providers    map[string]ProviderConfig `json:"providers"`
-	DefaultModel string                    `json:"default_model"`
-	DefaultEffort string                   `json:"default_effort,omitempty"`
-	Retry        *RetryConfig              `json:"retry,omitempty"`
-	WelcomeStyle string                    `json:"welcomeStyle,omitempty"`
-	PromptStyle  string                    `json:"promptStyle,omitempty"`
+	Providers     map[string]ProviderConfig `json:"providers"`
+	DefaultModel  string                    `json:"default_model"`
+	DefaultEffort string                    `json:"default_effort,omitempty"`
+	Retry         *RetryConfig              `json:"retry,omitempty"`
+	WelcomeStyle  string                    `json:"welcomeStyle,omitempty"`
+	PromptStyle   string                    `json:"promptStyle,omitempty"`
 	// DisabledTools lists tool names hidden from the model. Unknown names are
 	// ignored; new tools default to enabled, so this stays a deny list.
 	DisabledTools []string `json:"disabledTools,omitempty"`
@@ -153,6 +154,37 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// Update reloads config.json and applies only the caller's mutation before
+// saving it. Unlike Save, it preserves unrelated changes made since a caller
+// loaded its own snapshot. A callback error leaves the file unchanged.
+// The complete operation holds a cross-process lock; callbacks must not call
+// Update recursively. Lock acquisition is bounded by filelock.DefaultTimeout.
+func Update(fn func(*Config) error) (err error) {
+	if fn == nil {
+		return errors.New("config: update callback is nil")
+	}
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	lock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	if err := fn(cfg); err != nil {
+		return err
+	}
+	return Save(cfg)
 }
 
 // Resolve selects a configured provider and model. providerName, modelID, and
@@ -269,6 +301,7 @@ func NeedsSetup() (bool, error) {
 
 // Save writes cfg to config.json under Dir(), creating the directory if
 // needed. The file is atomically replaced and stored with 0600 permissions.
+// It replaces the entire snapshot; use Update for live setting changes.
 func Save(cfg *Config) error {
 	dir, err := Dir()
 	if err != nil {

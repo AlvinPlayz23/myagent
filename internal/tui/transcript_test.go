@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -140,6 +141,21 @@ func TestToolHeaderParts(t *testing.T) {
 		if name != tc.wantName || target != tc.wantTarget {
 			t.Errorf("toolHeaderParts(%q) = (%q, %q), want (%q, %q)", tc.name, name, target, tc.wantName, tc.wantTarget)
 		}
+	}
+}
+
+func TestRenderSubagentShowsTruncatedModel(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.startTool("call", "subagent", map[string]any{"prompt": "do the thing"})
+	long := "provider-with-a-very-long-model-identifier-v1234567890"
+	tr.endTool("call", types.TextResult("done", subagent.Details{Model: long}), false)
+
+	plain := ansi.Strip(tr.renderTool(tr.blocks[0], 100))
+	if !strings.Contains(plain, truncateDots(long, 32)) || strings.Contains(plain, long) {
+		t.Fatalf("model not shown truncated: %q", plain)
+	}
+	if !strings.Contains(plain, "...") {
+		t.Fatalf("missing ellipsis: %q", plain)
 	}
 }
 

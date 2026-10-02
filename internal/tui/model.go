@@ -420,6 +420,7 @@ type model struct {
 	providers       providerPicker
 	customize       customizePicker
 	tools           toolsPicker
+	scope           scopePicker
 	exportPick      exportPicker
 	exportName      textinput.Model
 	exportFormat    export.Format
@@ -483,6 +484,16 @@ type model struct {
 	// base or profile registry is active (a profile cannot re-enable a tool).
 	disabledTools     []string
 	saveDisabledTools func([]string) error
+	// globalDisabledTools is the config.json deny list, kept separately from
+	// disabledTools (the effective union) so the startup notice can label
+	// which tools came from where.
+	globalDisabledTools []string
+	// sessionDisabledTools is the session-scoped deny list from
+	// session-state.json; it applies to this conversation only.
+	sessionDisabledTools []string
+	// saveSessionTools persists a session-scoped deny list. Optional: when nil
+	// the session scope is unavailable and the panel says so.
+	saveSessionTools func([]string) error
 	exportSession      func(export.Format, string, bool) (string, error)
 
 	// Plugin system (PLUGINS.md): bundle loaded at startup, active profile,
@@ -896,6 +907,9 @@ func (m *model) panelHeight() int {
 	} else if m.tools.active {
 		desired = m.tools.height()
 	}
+	if m.scope.active {
+		desired = m.scope.height()
+	}
 	return min(desired, max(0, available))
 }
 
@@ -1047,6 +1061,25 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.scope.active {
+		switch ks {
+		case "up":
+			m.scope.move(-1)
+		case "down":
+			m.scope.move(1)
+		case "enter":
+			pending := m.scope.pending
+			choice := m.scope.choice() // selected scope (session/global/exit)
+			m.scope.close()
+			m.applyToolTogglesScoped(pending, choice.scope)
+		case "esc":
+			// Back out to the toggles with the staged deny list intact (q exits all).
+			pending := m.scope.pending
+			m.scope.close()
+			m.tools.reopen(pending)
+		}
+		return m, nil
+	}
 	if m.tools.active {
 		switch ks {
 		case "up":
@@ -1056,9 +1089,10 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "space", "enter":
 			m.tools.toggle()
 		case "esc":
-			pending := m.tools.pending()
+			// Stage the deny list and ask where to save it.
+			m.scope.open(m.tools.pending())
 			m.tools.close()
-			m.applyToolToggles(pending)
+			m.statusMsg = "Choose where to save the tool changes."
 			m.updateLayout()
 		}
 		return m, nil
@@ -1489,6 +1523,19 @@ func (m *model) confirmInlineRow(item int) (tea.Model, tea.Cmd) {
 		if item >= 0 && item < len(m.tools.names) {
 			m.tools.sel = item
 		}
+		return m, nil
+	case m.scope.active:
+		if item < 0 || item >= len(scopeChoices) {
+			return m, nil
+		}
+		if m.scope.sel == item {
+			pending := m.scope.pending
+			choice := scopeChoices[item]
+			m.scope.close()
+			m.applyToolTogglesScoped(pending, choice.scope)
+			return m, nil
+		}
+		m.scope.sel = item
 		return m, nil
 	case m.exportPick.active:
 		if m.exportPick.sel == item {
@@ -2376,14 +2423,7 @@ func (m *model) renderWelcome() string {
 	}
 
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
-	hint := "Type a prompt to begin · /help for commands"
-	if m.width < 44 {
-		hint = "Type a prompt · /help for commands"
-	}
-	if m.width < 34 {
-		hint = "Type a prompt to begin"
-	}
-	hint = centerLine(m.th.muted.Render(hint), m.width)
+	hint := m.welcomeHint()
 	compact := m.viewport.Height() < 14
 
 	switch m.welcomeStyle {
@@ -2544,14 +2584,11 @@ func (m *model) rainTitleRow(blockRows, height int, compact bool) int {
 
 // rainHint returns the width-appropriate hint text, mirroring renderWelcome.
 func (m *model) rainHint() string {
-	hint := "Type a prompt to begin · /help for commands"
-	if m.width < 44 {
-		hint = "Type a prompt · /help for commands"
+	plain := m.welcomeHintPlain()
+	if m.width > 1 && lipgloss.Width(plain) > m.width {
+		plain = ansi.Truncate(plain, m.width, "…")
 	}
-	if m.width < 34 {
-		hint = "Type a prompt to begin"
-	}
-	return hint
+	return plain
 }
 
 // rainRow renders one viewport row: a rain cell row spanning the full
@@ -2983,6 +3020,9 @@ func (m *model) renderPanel() string {
 	if m.tools.active {
 		return m.renderToolsPicker()
 	}
+	if m.scope.active {
+		return m.renderScopePicker()
+	}
 	if m.keyFor.ID != "" {
 		return m.renderProviderKeyEntry()
 	}
@@ -3186,6 +3226,47 @@ func (m *model) renderToolsPicker() string {
 		m.inlineRowItems = append(m.inlineRowItems, i)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderScopePicker draws the chained scope panel: a title plus one row per
+// choice. Session scope is unavailable when no saver was wired, so the row is
+// shown disabled with the reason rather than silently failing on selection.
+func (m *model) renderScopePicker() string {
+	height := m.panelHeight()
+	if height == 0 {
+		return ""
+	}
+	lines := []string{m.th.cmdPickerSel.MaxWidth(max(1, m.width)).Render(m.scope.summary())}
+	m.inlineRowItems = append(m.inlineRowItems, -1)
+	count := min(height-1, len(scopeChoices))
+	for i := 0; i < count; i++ {
+		c := scopeChoices[i]
+		marker, style := "  ", m.th.cmdPickerItem
+		if i == m.scope.sel {
+			marker, style = "> ", m.th.cmdPickerSel
+		} else if m.hoverKind == hoverInline && m.hoverIdx == len(lines) {
+			style = m.th.rowHover
+		}
+		desc := c.description
+		if c.scope == scopeSession && m.saveSessionTools == nil {
+			desc = "unavailable: no session store"
+		}
+		line := fmt.Sprintf("  %s%-22s %s", marker, c.label, m.th.muted.Render(desc))
+		lines = append(lines, style.MaxWidth(max(1, m.width)).Render(line))
+		m.inlineRowItems = append(m.inlineRowItems, i)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// reopen reopens the tools picker from a staged deny list, used when the user
+// backs out of the scope panel. Toggles that were staged are preserved.
+func (p *toolsPicker) reopen(pending []string) {
+	p.sel = 0
+	p.disabled = make(map[string]bool, len(pending))
+	for _, n := range pending {
+		p.disabled[n] = true
+	}
+	p.active = true
 }
 
 func (m *model) renderEffortPicker() string {

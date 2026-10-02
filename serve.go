@@ -145,6 +145,14 @@ func runServe(argv []string) error {
 		NoPlugins:            noPlugins,
 		DefaultProfile:       profileFlag,
 		DefaultDisabledTools: cfg.DisabledTools,
+		// Persist /tools choices to config.json so a deny list set from a
+		// client survives a restart without overwriting other settings.
+		SaveDisabledTools: func(disabled []string) error {
+			return config.Update(func(current *config.Config) error {
+				current.DisabledTools = append([]string(nil), disabled...)
+				return nil
+			})
+		},
 	})
 	defer manager.Shutdown()
 

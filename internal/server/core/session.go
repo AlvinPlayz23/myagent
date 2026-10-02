@@ -107,6 +107,14 @@ func (s *ServerSession) Model() llm.Model {
 	return s.cfg.Model
 }
 
+// Config returns a snapshot of the session's agent config (used by the
+// subagent tool to inherit the live model, effort and tools).
+func (s *ServerSession) Config() agent.Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg
+}
+
 // Effort returns the reasoning effort currently configured for the session.
 func (s *ServerSession) Effort() llm.Effort {
 	s.mu.Lock()
