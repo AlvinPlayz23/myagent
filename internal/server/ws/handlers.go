@@ -208,6 +208,21 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		}
 		return map[string]any{"profile": pp.Profile}, nil
 
+	case "session.tools":
+		ss, rpcErr := c.sessionFromParams(req)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		available, disabled, running, err := c.manager.ToolCatalog(c.id, ss.ID())
+		if err != nil {
+			return nil, coreError(err)
+		}
+		return map[string]any{
+			"tools":    available,
+			"disabled": namesOrEmpty(disabled),
+			"running":  running,
+		}, nil
+
 	case "session.setTools":
 		var p struct {
 			SessionID string   `json:"sessionId"`
@@ -226,7 +241,7 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 		if err != nil {
 			return nil, coreError(err)
 		}
-		return map[string]any{"disabled": ss.DisabledTools()}, nil
+		return map[string]any{"disabled": namesOrEmpty(ss.DisabledTools())}, nil
 
 	case "session.rename":
 		var p sessionRename
@@ -401,6 +416,16 @@ func messagesOrEmpty(msgs []types.Message) []types.Message {
 		return []types.Message{}
 	}
 	return msgs
+}
+
+// namesOrEmpty guarantees a JSON array (never null) for name lists. The tool
+// deny list is stored as a nil slice when nothing is disabled, which would
+// otherwise reach a client as `null` and make every consumer null-check.
+func namesOrEmpty(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
 }
 
 func sessionResult(ss *core.ServerSession, includeMessages bool) map[string]any {

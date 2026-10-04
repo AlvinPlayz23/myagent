@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -20,11 +21,14 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-// fakeProvider replies to every request with canned text.
+// fakeProvider replies to every request with canned text. A non-nil block
+// channel holds the stream open after its first delta until the channel closes,
+// which is how a test observes "a run is in flight" without racing the reply.
 type fakeProvider struct {
 	mu       sync.Mutex
 	requests []llm.Request
 	reply    string
+	block    chan struct{}
 }
 
 func (p *fakeProvider) Stream(ctx context.Context, model llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
@@ -36,6 +40,13 @@ func (p *fakeProvider) Stream(ctx context.Context, model llm.Model, req llm.Requ
 		defer close(out)
 		out <- llm.StreamEvent{Type: "start", Partial: &types.Message{Role: types.RoleAssistant}}
 		out <- llm.StreamEvent{Type: "text_delta", Delta: p.reply}
+		if p.block != nil {
+			select {
+			case <-p.block:
+			case <-ctx.Done():
+				return
+			}
+		}
 		out <- llm.StreamEvent{Type: "done", Message: &types.Message{
 			Role:       types.RoleAssistant,
 			Content:    []types.ContentBlock{types.TextBlock(p.reply)},
@@ -480,6 +491,146 @@ func TestAuthRejection(t *testing.T) {
 	} else if resp != nil && resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
 	}
+}
+
+// toolsResult mirrors the session.tools wire shape.
+type toolsResult struct {
+	Tools []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	} `json:"tools"`
+	Disabled []string `json:"disabled"`
+	Running  bool     `json:"running"`
+}
+
+func (r toolsResult) names() []string {
+	out := make([]string, 0, len(r.Tools))
+	for _, tool := range r.Tools {
+		out = append(out, tool.Name)
+	}
+	return out
+}
+
+// session.tools drives the desktop /tools picker: read the catalog, apply a
+// deny list, read it back.
+func TestSessionToolsRoundTrip(t *testing.T) {
+	url, _ := testServer(t, &fakeProvider{reply: "ok"})
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+
+	var catalog toolsResult
+	c.result(c.call("session.tools", map[string]any{"sessionId": created.SessionID}), &catalog)
+	want := []string{"read", "write", "edit", "bash", "subagent"}
+	if got := catalog.names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog = %v, want %v", got, want)
+	}
+	// `disabled` must arrive as [] and not null, or every client has to
+	// null-check before it can render the count.
+	if catalog.Disabled == nil {
+		t.Error("disabled = null, want []")
+	}
+	if len(catalog.Disabled) != 0 {
+		t.Errorf("disabled = %v, want empty", catalog.Disabled)
+	}
+	if catalog.Running {
+		t.Error("running = true on an idle session")
+	}
+	for _, tool := range catalog.Tools {
+		if strings.TrimSpace(tool.Description) == "" {
+			t.Errorf("tool %q has no description", tool.Name)
+		}
+	}
+
+	// Apply a deny list.
+	var applied struct {
+		Disabled []string `json:"disabled"`
+	}
+	c.result(c.call("session.setTools", map[string]any{
+		"sessionId": created.SessionID,
+		"disabled":  []string{"bash", "write"},
+	}), &applied)
+	if !reflect.DeepEqual(applied.Disabled, []string{"bash", "write"}) {
+		t.Fatalf("setTools disabled = %v, want [bash write]", applied.Disabled)
+	}
+
+	// The catalog still offers bash (so it can be re-enabled) and reports the
+	// new deny list.
+	var after toolsResult
+	c.result(c.call("session.tools", map[string]any{"sessionId": created.SessionID}), &after)
+	if got := after.names(); !reflect.DeepEqual(got, want) {
+		t.Errorf("catalog after deny = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(after.Disabled, []string{"bash", "write"}) {
+		t.Errorf("catalog disabled = %v, want [bash write]", after.Disabled)
+	}
+
+	// Clearing restores everything, again as [] rather than null.
+	c.result(c.call("session.setTools", map[string]any{
+		"sessionId": created.SessionID,
+		"disabled":  []string{},
+	}), &applied)
+	var cleared toolsResult
+	c.result(c.call("session.tools", map[string]any{"sessionId": created.SessionID}), &cleared)
+	if cleared.Disabled == nil {
+		t.Error("cleared disabled = null, want []")
+	}
+	if len(cleared.Disabled) != 0 {
+		t.Errorf("cleared disabled = %v, want empty", cleared.Disabled)
+	}
+}
+
+func TestSessionToolsParamValidation(t *testing.T) {
+	url, _ := testServer(t, &fakeProvider{reply: "ok"})
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	if resp := c.call("session.tools", nil); resp.Error == nil || resp.Error.Code != rpc.CodeInvalidParams {
+		t.Errorf("session.tools without sessionId = %#v, want invalid params", resp.Error)
+	}
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	if resp := c.call("session.tools", map[string]any{"sessionId": "nope"}); resp.Error == nil || resp.Error.Code != rpc.CodeSessionNotFound {
+		t.Errorf("session.tools for an unknown session = %#v, want session not found", resp.Error)
+	}
+}
+
+// A save is refused mid-run, and session.tools is what tells the client to
+// disable its Save button up front.
+func TestSessionToolsReportsRunningDuringRun(t *testing.T) {
+	provider := &fakeProvider{reply: "ok", block: make(chan struct{})}
+	url, _ := testServer(t, provider)
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "go"}), &struct{}{})
+
+	var catalog toolsResult
+	c.result(c.call("session.tools", map[string]any{"sessionId": created.SessionID}), &catalog)
+	if !catalog.Running {
+		t.Error("running = false while a prompt is in flight")
+	}
+
+	resp := c.call("session.setTools", map[string]any{
+		"sessionId": created.SessionID,
+		"disabled":  []string{"bash"},
+	})
+	if resp.Error == nil || resp.Error.Code != rpc.CodeSessionBusy {
+		t.Errorf("setTools while running = %#v, want busy", resp.Error)
+	}
+
+	close(provider.block)
+	c.waitNotif("session.done")
 }
 
 func TestSessionListAndResume(t *testing.T) {

@@ -382,7 +382,16 @@ on disk and can be resumed after reconnecting (they interop with the TUI's
 | `session.messages` | `{sessionId}`                     | `{messages}`                        |
 | `session.setModel` | `{sessionId, provider, model}`    | `{}` (idle only)                    |
 | `session.setEffort` | `{sessionId, effort}`             | `{}` (idle only; empty clears)      |
+| `session.tools`   | `{sessionId}`                     | `{tools: [{name, description}], disabled, running}` |
+| `session.setTools`| `{sessionId, disabled}`           | `{disabled}` (idle only; persisted to `config.json`) |
 | `session.close`    | `{sessionId}`                     | `{}` — JSONL file is kept           |
+
+`session.tools` reports the tool set a client may offer for toggling: the base
+registry (built-ins, `subagent`, plugin shell tools) with the active profile's
+allowlist applied but the `/tools` deny list **not** applied, so a disabled tool
+is still listed and can be re-enabled. `running` reports whether an agent run is
+in flight — `session.setTools` is refused with `busy` while it is, because the
+registry swap must not land mid-turn.
 
 `session.prompt` returns immediately. The run then streams as server→client
 notifications:

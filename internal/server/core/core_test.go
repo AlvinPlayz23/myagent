@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -599,6 +602,231 @@ func TestSetDisabledToolsBusyGuard(t *testing.T) {
 	}
 	if got := ss.DisabledTools(); len(got) != 0 {
 		t.Errorf("disabled tools changed despite ErrBusy: %v", got)
+	}
+}
+
+// catalogNames flattens a ToolCatalog result to names, which is what a client
+// renders as rows.
+func catalogNames(infos []ToolInfo) []string {
+	out := make([]string, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, info.Name)
+	}
+	return out
+}
+
+func TestToolCatalogListsRegistryTools(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m, _ := newTestManager(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	available, disabled, running, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog: %v", err)
+	}
+	// Registry order, not sorted: read/write/edit/bash then subagent.
+	if got, want := catalogNames(available), []string{"read", "write", "edit", "bash", "subagent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog = %v, want %v", got, want)
+	}
+	if len(disabled) != 0 {
+		t.Errorf("initial disabled = %v, want empty", disabled)
+	}
+	if running {
+		t.Error("running = true on an idle session")
+	}
+	// Descriptions come from the tools themselves, so a client never has to
+	// hardcode what a tool does.
+	for _, info := range available {
+		if strings.TrimSpace(info.Description) == "" {
+			t.Errorf("tool %q has no description", info.Name)
+		}
+	}
+}
+
+// A disabled tool must still be OFFERED so the client can re-enable it; only
+// the deny list changes, never the row set.
+func TestToolCatalogKeepsDisabledToolsOffered(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m, _ := newTestManager(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetDisabledTools("conn1", ss.ID(), []string{"bash"}); err != nil {
+		t.Fatalf("SetDisabledTools: %v", err)
+	}
+	available, disabled, _, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog: %v", err)
+	}
+	if got, want := catalogNames(available), []string{"read", "write", "edit", "bash", "subagent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog after disabling bash = %v, want %v", got, want)
+	}
+	if got, want := disabled, []string{"bash"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled = %v, want %v", got, want)
+	}
+}
+
+// newProfiledManager builds a Manager whose DefaultCwd carries a plugins.json
+// declaring one profile with a restricted tool allowlist.
+func newProfiledManager(t *testing.T, provider llm.Provider, profileName string, allow []string) *Manager {
+	t.Helper()
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, ".myagent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	allowJSON, err := json.Marshal(allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// description is required by plugin.validateProfile; without it the profile
+	// is skipped with a warning rather than failing the load.
+	body := `{"profiles":[{"name":"` + profileName +
+		`","description":"test profile","tools":` + string(allowJSON) + `}]}`
+	if err := os.WriteFile(filepath.Join(cwd, ".myagent", "plugins.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m := NewManager(ctx, Options{
+		Resolve: func(providerName, modelID string) (llm.Provider, llm.Model, error) {
+			if modelID == "" {
+				modelID = "test-model"
+			}
+			return provider, llm.Model{ID: modelID, Provider: "test", BaseURL: "http://unused"}, nil
+		},
+		DefaultCwd: cwd,
+	})
+	t.Cleanup(func() {
+		cancel()
+		m.Shutdown()
+	})
+	return m
+}
+
+// A tool the active profile excludes is not toggleable, so the catalog must
+// omit it — offering it would let the client stage a name that can never take
+// effect.
+//
+// Activation goes through Manager.SetProfile rather than CreateParams.Profile
+// because wrap() applies a create-time profile to the registry without
+// recording it as the session's active profile (see
+// TestToolCatalogCreateTimeProfileIsNotRecorded).
+func TestToolCatalogExcludesProfileFilteredTools(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m := newProfiledManager(t, provider, "readonly", []string{"read", "edit"})
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetProfile("conn1", ss.ID(), "readonly"); err != nil {
+		t.Fatalf("SetProfile: %v", err)
+	}
+	if got := ss.ActiveProfile(); got != "readonly" {
+		t.Fatalf("active profile = %q, want readonly", got)
+	}
+	available, _, _, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog: %v", err)
+	}
+	if got, want := catalogNames(available), []string{"read", "edit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog under profile = %v, want %v", got, want)
+	}
+}
+
+// wrap() applies a create-time profile to the session's registry but never
+// records it, so ActiveProfile() reads "". The registry is genuinely filtered —
+// only the record is missing.
+//
+// This is a pre-existing gap, not something ToolCatalog introduces, but it is
+// what a /tools client observes: the catalog cannot tell that the session is
+// running under a profile. Pinned here so the day wrap() starts recording the
+// profile, this test fails and the catalog's behavior is re-examined
+// deliberately rather than by accident.
+func TestToolCatalogCreateTimeProfileIsNotRecorded(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m := newProfiledManager(t, provider, "readonly", []string{"read", "edit"})
+
+	ss, err := m.Create("conn1", CreateParams{Profile: "readonly"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The session's own registry IS filtered...
+	if got, want := ss.Config().Registry.Names(), []string{"read", "edit"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("session registry = %v, want %v", got, want)
+	}
+	// ...but the profile is not recorded as active.
+	if got := ss.ActiveProfile(); got != "" {
+		t.Errorf("active profile = %q, want empty (see test doc)", got)
+	}
+	// So the catalog offers the unfiltered base set for such a session.
+	available, _, _, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog: %v", err)
+	}
+	if got, want := catalogNames(available), []string{"read", "write", "edit", "bash", "subagent"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("catalog for create-time profile = %v, want %v", got, want)
+	}
+}
+
+// An unknown profile name must not break the catalog: the client would
+// otherwise be unable to show the picker at all. The base registry is offered
+// instead. (SetDisabledTools still errors here, since silently dropping the
+// profile would rewrite the session's system prompt.)
+func TestToolCatalogToleratesUnknownProfile(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok"}
+	m := newProfiledManager(t, provider, "readonly", []string{"read", "edit"})
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force a stale profile the way an edited plugins.json would.
+	if err := ss.SetProfile(nil, "", "", "deleted", nil); err != nil {
+		t.Fatalf("SetProfile: %v", err)
+	}
+	available, _, _, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog with unknown profile: %v", err)
+	}
+	if got, want := catalogNames(available), []string{"read", "write", "edit", "bash", "subagent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog with unknown profile = %v, want %v", got, want)
+	}
+}
+
+func TestToolCatalogOwnershipAndBusy(t *testing.T) {
+	provider := &scriptedProvider{reply: "ok", block: make(chan struct{})}
+	m, _ := newTestManager(t, provider)
+
+	ss, err := m.Create("conn1", CreateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another connection does not own the session.
+	if _, _, _, err := m.ToolCatalog("conn2", ss.ID()); !errors.Is(err, ErrNotOwner) {
+		t.Errorf("ToolCatalog from a foreign connection = %v, want ErrNotOwner", err)
+	}
+	if err := ss.Prompt("hi"); err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, ss)
+	// Reading is allowed mid-run — only saving is refused — but `running` must
+	// report true so a client can disable its Save button up front.
+	_, _, running, err := m.ToolCatalog("conn1", ss.ID())
+	if err != nil {
+		t.Fatalf("ToolCatalog while running: %v", err)
+	}
+	if !running {
+		t.Error("running = false while a run is in flight")
+	}
+	close(provider.block)
+	if _, err := drainUntilDone(t, ss); err != nil {
+		t.Fatal(err)
 	}
 }
 

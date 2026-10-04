@@ -193,8 +193,10 @@ func (m *Manager) Resume(connID, sessionID string) (*ServerSession, error) {
 	return ss, nil
 }
 
-// newBase builds the unfiltered base registry (built-ins + subagent). cfg
-// supplies the owning session's live config to the subagent tool.
+// newBase builds the unfiltered core registry (built-ins + subagent). cfg
+// supplies the owning session's live config to the subagent tool. Callers that
+// need the full model-visible set use baseRegistry, which also merges plugin
+// shell tools.
 func (m *Manager) newBase(cwd string, cfg func() agent.Config) *tools.Registry {
 	reg := tools.DefaultRegistry(cwd)
 	reg.Add(subagent.New(
@@ -205,20 +207,34 @@ func (m *Manager) newBase(cwd string, cfg func() agent.Config) *tools.Registry {
 	return reg
 }
 
+// baseRegistry builds the unfiltered registry a session's tool set is derived
+// from: the core tools plus one ShellTool per plugin-provided tool. sessionID
+// binds plugin shell tools to the owning session and is "" for a session that
+// has no id yet. The loaded bundle is returned alongside it so callers that
+// then apply a profile do not pay for a second Load.
+//
+// Every registry-recomposing path (session wrap, SetDisabledTools, SetProfile,
+// ToolCatalog) starts here so a new tool source cannot be added to one path
+// and silently missed by the others.
+func (m *Manager) baseRegistry(cwd, sessionID string, cfg func() agent.Config) (*tools.Registry, *plugin.Bundle) {
+	bundle := plugin.Load(cwd, m.opts.NoPlugins)
+	reg := m.newBase(cwd, cfg)
+	for _, st := range plugin.ShellTools(bundle.Tools, cwd, sessionID) {
+		reg.Add(st)
+	}
+	return reg, bundle
+}
+
 // wrap builds the ServerSession over an open session file. An Apply failure
 // (unknown profile, bad deny regex, invalid effort) is returned so callers
 // fail fast instead of silently starting the session without the profile.
 func (m *Manager) wrap(sess *session.Session, provider llm.Provider, model llm.Model, cwd string, effort llm.Effort, profile ...string) (*ServerSession, error) {
 	var ss *ServerSession
-	registry := m.newBase(cwd, func() agent.Config { return ss.Config() })
-	bundle := plugin.Load(cwd, m.opts.NoPlugins)
 	sessID := ""
 	if sess != nil {
 		sessID = sess.ID()
 	}
-	for _, st := range plugin.ShellTools(bundle.Tools, cwd, sessID) {
-		registry.Add(st)
-	}
+	registry, bundle := m.baseRegistry(cwd, sessID, func() agent.Config { return ss.Config() })
 	basePrompt := agent.BuildSystemPrompt(registry, cwd)
 	systemPrompt := basePrompt
 	// Snapshot the deny list under cfgMu: a concurrent client may be saving a
@@ -289,11 +305,7 @@ func (m *Manager) SetDisabledTools(connID, sessionID string, disabled []string) 
 	if ss.Running() {
 		return ErrBusy
 	}
-	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-	base := m.newBase(ss.Cwd(), ss.Config)
-	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
-		base.Add(st)
-	}
+	base, bundle := m.baseRegistry(ss.Cwd(), ss.ID(), ss.Config)
 	profile := ss.ActiveProfile()
 	reg, prompt := base, agent.BuildSystemPrompt(base, ss.Cwd())
 	if profile == "" {
@@ -310,6 +322,46 @@ func (m *Manager) SetDisabledTools(connID, sessionID string, disabled []string) 
 		return err
 	}
 	return ss.SetDisabledTools(reg, prompt, disabled)
+}
+
+// ToolInfo describes one tool a client may enable or disable. Description is
+// the model's own tool description, passed through verbatim so a client never
+// has to hardcode a tool's purpose (or invent one for a plugin tool).
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// ToolCatalog reports the tools a client should offer for toggling, plus the
+// session's current deny list and whether a run is in flight.
+//
+// The offered set is the base registry with the active profile's allowlist
+// applied but the deny list NOT applied, mirroring what the TUI's /tools picker
+// shows: a tool the profile excluded is not toggleable here (the profile decides
+// it), while a tool that is merely disabled still appears so it can be
+// re-enabled. Registry order is preserved.
+//
+// An unknown profile name (plugins changed since the session started) is not an
+// error: the base registry is offered instead, because refusing to describe the
+// tool set would leave the client unable to show the picker at all. It is still
+// an error for SetDisabledTools, where silently dropping a profile would change
+// the session's system prompt.
+func (m *Manager) ToolCatalog(connID, sessionID string) (available []ToolInfo, disabled []string, running bool, err error) {
+	ss, err := m.Get(connID, sessionID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	base, bundle := m.baseRegistry(ss.Cwd(), ss.ID(), ss.Config)
+	if profile := ss.ActiveProfile(); profile != "" {
+		if def := bundle.Profile(profile); def != nil {
+			base = plugin.FilteredRegistry(base, def.Tools)
+		}
+	}
+	available = make([]ToolInfo, 0, len(base.Names()))
+	for _, t := range base.All() {
+		available = append(available, ToolInfo{Name: t.Name(), Description: t.Description()})
+	}
+	return available, ss.DisabledTools(), ss.Running(), nil
 }
 
 // persistDisabledTools writes the deny list through Options.SaveDisabledTools,
@@ -340,11 +392,7 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 		return err
 	}
 	if profile == "" || profile == "reset" {
-		bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-		base := m.newBase(ss.Cwd(), ss.Config)
-		for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
-			base.Add(st)
-		}
+		base, _ := m.baseRegistry(ss.Cwd(), ss.ID(), ss.Config)
 		base = base.Without(ss.DisabledTools())
 		effort, nerr := llm.NormalizeEffort(ss.Model(), m.opts.DefaultEffort)
 		if nerr != nil {
@@ -352,11 +400,7 @@ func (m *Manager) SetProfile(connID, sessionID, profile string) error {
 		}
 		return ss.SetProfile(base, agent.BuildSystemPrompt(base, ss.Cwd(), ss.DisabledTools()...), effort, "", ss.DisabledTools())
 	}
-	bundle := plugin.Load(ss.Cwd(), m.opts.NoPlugins)
-	base := m.newBase(ss.Cwd(), ss.Config)
-	for _, st := range plugin.ShellTools(bundle.Tools, ss.Cwd(), ss.ID()) {
-		base.Add(st)
-	}
+	base, bundle := m.baseRegistry(ss.Cwd(), ss.ID(), ss.Config)
 	applied, err := plugin.Apply(bundle, base, agent.BuildSystemPrompt(base, ss.Cwd()), ss.Cwd(), profile, ss.DisabledTools()...)
 	if err != nil {
 		return err
