@@ -76,7 +76,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 	// children inherit the current model, effort and tools.
 	if cfg.Registry != nil {
 		if st, ok := cfg.Registry.Get(subagent.ToolName).(*subagent.Tool); ok {
-			st.SetBase(func() agent.Config { return r.cfg })
+			st.SetBase(func() agent.Config { return r.config() })
 		}
 	}
 
@@ -95,7 +95,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 		}
 		sess = newSess
-		r.cfg.Model.SessionID = newSess.ID()
+		r.setSessionID(newSess.ID())
 		// A brand-new session has no stored deny list of its own; only the
 		// global one still applies.
 		m.sessionDisabledTools = nil
@@ -290,7 +290,7 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 			}
 		}
 		sess = resumed
-		r.cfg.Model.SessionID = resumed.ID()
+		r.setSessionID(resumed.ID())
 		// The resumed session may carry its own /tools deny list.
 		m.sessionDisabledTools = loadSessionTools(store, resumed)
 		m.disabledTools = unionTools(m.globalDisabledTools, m.sessionDisabledTools)
@@ -300,9 +300,12 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		} else {
 			// The persisted /tools deny list still applies on top of the reset.
 			base := m.baseRegistry.Without(m.disabledTools)
-			r.cfg.Registry = base
-			r.cfg.SystemPrompt = agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...)
-			r.cfg.Effort = m.baseEffort
+			prompt := agent.BuildSystemPrompt(base, m.cwd, m.disabledTools...)
+			r.update(func(c *agent.Config) {
+				c.Registry = base
+				c.SystemPrompt = prompt
+				c.Effort = m.baseEffort
+			})
 			m.activeProfile = ""
 		}
 		history := resumed.Messages()
@@ -324,7 +327,8 @@ func Run(ctx context.Context, cfg agent.Config, persistedConfig *config.Config, 
 		}
 		titleCtx, cancel := context.WithTimeout(parent, 4*time.Second)
 		defer cancel()
-		title, err := titlegen.Generate(titleCtx, r.cfg.Provider, r.cfg.Model, prompt)
+		cfg := r.config()
+		title, err := titlegen.Generate(titleCtx, cfg.Provider, cfg.Model, prompt)
 		if err != nil {
 			return "", err
 		}

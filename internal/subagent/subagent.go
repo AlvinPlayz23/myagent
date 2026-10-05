@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -22,7 +24,29 @@ const (
 	ToolName       = "subagent"
 	DefaultTimeout = 10 * time.Minute
 	maxResultBytes = 50_000
+
+	// Bounds for the report kept in the parent's context and persisted session.
+	maxTrajectoryText    = 4_000
+	maxToolArgsBytes     = 2_000
+	maxTrajectoryEntries = 200
+	maxTrajectoryBytes   = 200_000
 )
+
+// truncateUTF8 shortens s to at most max bytes without splitting a rune and
+// appends a marker; the marker is not counted against max.
+func truncateUTF8(s string, max int) string {
+	if max < 0 {
+		max = 0
+	}
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.ToValidUTF8(s[:cut], "") + fmt.Sprintf("\n[truncated: %d of %d bytes omitted]", len(s)-cut, len(s))
+}
 
 // ResolveFunc maps (provider, model) names to a live provider and model.
 type ResolveFunc func(provider, model string) (llm.Provider, llm.Model, error)
@@ -50,9 +74,9 @@ type Tool struct {
 // Option configures a Tool.
 type Option func(*Tool)
 
-func WithResolve(r ResolveFunc) Option     { return func(t *Tool) { t.resolve = r } }
-func WithCwd(cwd string) Option            { return func(t *Tool) { t.cwd = cwd } }
-func WithTimeout(d time.Duration) Option   { return func(t *Tool) { t.timeout = d } }
+func WithResolve(r ResolveFunc) Option      { return func(t *Tool) { t.resolve = r } }
+func WithCwd(cwd string) Option             { return func(t *Tool) { t.cwd = cwd } }
+func WithTimeout(d time.Duration) Option    { return func(t *Tool) { t.timeout = d } }
 func WithBase(f func() agent.Config) Option { return func(t *Tool) { t.base = f } }
 
 // New builds the tool. base returns the parent's live agent.Config; it may be
@@ -80,20 +104,34 @@ func (t *Tool) Description() string {
 		"conversation, so the prompt must be complete. The task runs in the background: this call returns " +
 		"immediately with a task id, several subagents can run concurrently, and each one's full report " +
 		"(prompt, trajectory, final answer) arrives automatically as a system-generated message when it " +
-		"finishes. Do not poll or repeat the task. The subagent has the same tools as you except subagent itself."
+		"finishes. Do not poll or repeat the task. The subagent has the same tools as you except subagent itself. " +
+		"Do not run concurrent subagents that edit the same files: give each subagent a disjoint scope, " +
+		"and prefer read-only research tasks when running several at once."
 }
 
 func (t *Tool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"prompt": map[string]any{"type": "string", "description": "Complete task description for the subagent. Include all needed context; say which tools to prefer if that matters."},
-			"model":  map[string]any{"type": "string", "description": "Leave unset. Only set if the user explicitly asked for a specific model (provider/model or model id)."},
-			"effort": map[string]any{"type": "string", "description": "Leave unset. Only set if the user explicitly asked for a specific effort."},
+			"prompt":  map[string]any{"type": "string", "description": "Complete task description for the subagent. Include all needed context; say which tools to prefer if that matters."},
+			"model":   map[string]any{"type": "string", "description": "Leave unset. Only set if the user explicitly asked for a specific model (provider/model or model id)."},
+			"effort":  map[string]any{"type": "string", "description": "Leave unset. Only set if the user explicitly asked for a specific effort."},
 			"timeout": map[string]any{"type": "number", "description": "Optional timeout in seconds (capped at 600)."},
 		},
 		"required": []string{"prompt"},
 	}
+}
+
+func numberArg(args map[string]any, key string) (float64, bool) {
+	switch v := args[key].(type) {
+	case float64:
+		return v, !math.IsNaN(v) && !math.IsInf(v, 0)
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	}
+	return 0, false
 }
 
 func str(args map[string]any, key string) string {
@@ -149,15 +187,16 @@ func (t *Tool) prepare(args map[string]any, cfg agent.Config) (*prepared, error)
 		}
 		cfg.Effort = eff
 	}
-	cfg.SystemPrompt = agent.BuildSystemPrompt(cfg.Registry, t.cwd)
+	cfg.SystemPrompt = agent.ChildSystemPrompt(cfg.SystemPrompt, cfg.Registry, t.cwd)
 	cfg.Queue = nil
 
 	timeout := t.timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	if secs, ok := args["timeout"].(float64); ok && secs > 0 && time.Duration(secs*float64(time.Second)) < timeout {
-		timeout = time.Duration(secs * float64(time.Second))
+	// Compare in float seconds: converting huge values to Duration overflows.
+	if secs, ok := numberArg(args, "timeout"); ok && secs > 0 && secs < timeout.Seconds() {
+		timeout = max(time.Duration(secs*float64(time.Second)), time.Millisecond)
 	}
 	return &prepared{cfg: cfg, prompt: prompt, timeout: timeout}, nil
 }
@@ -174,10 +213,7 @@ func (t *Tool) baseConfig() (agent.Config, error) {
 
 // Execute is the blocking, final-answer-only path. The agent loop prefers
 // PrepareBackground; this remains for callers that run tools directly.
-func (t *Tool) Execute(ctx context.Context, _ string, args map[string]any) (res *types.ToolResult, err error) {
-	if str(args, "prompt") == "" {
-		return nil, fmt.Errorf("subagent: missing required 'prompt' argument")
-	}
+func (t *Tool) Execute(ctx context.Context, _ string, args map[string]any) (*types.ToolResult, error) {
 	base, err := t.baseConfig()
 	if err != nil {
 		return nil, err
@@ -186,37 +222,16 @@ func (t *Tool) Execute(ctx context.Context, _ string, args map[string]any) (res 
 	if err != nil {
 		return nil, err
 	}
-	cfg, prompt, timeout := p.cfg, p.prompt, p.timeout
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	details := Details{Model: cfg.Model.ID, Effort: string(cfg.Effort)}
-	msgs, runErr := runLoop(runCtx, cfg, prompt, &details, nil)
-	text := lastAssistantText(msgs)
-
-	switch {
-	case ctx.Err() != nil:
-		return nil, ctx.Err()
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return nil, fmt.Errorf("subagent: timed out after %s%s", timeout, partial(text))
-	case runErr != nil:
-		return nil, fmt.Errorf("subagent: %w", runErr)
+	rep := t.runPrepared(ctx, p, newTaskID(), "")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if last := lastAssistant(msgs); last != nil {
-		switch last.StopReason {
-		case types.StopError:
-			return nil, fmt.Errorf("subagent: %s%s", orDefault(last.ErrorMessage, "model error"), partial(text))
-		case types.StopAborted:
-			return nil, fmt.Errorf("subagent: aborted%s", partial(text))
-		}
+	if rep.Status != StatusCompleted {
+		return nil, fmt.Errorf("subagent: %s%s", rep.Error, partial(rep.FinalResult))
 	}
-	if text == "" {
-		text = "(subagent produced no output)"
-	}
-	if len(text) > maxResultBytes {
-		text = text[:maxResultBytes] + "\n[output truncated]"
-	}
-	return types.TextResult(text, details), nil
+	return types.TextResult(rep.FinalResult, Details{
+		Model: rep.Model, Effort: rep.Effort, Turns: rep.Turns, ToolCalls: rep.ToolCallsN, Usage: rep.Usage,
+	}), nil
 }
 
 func newTaskID() string {
@@ -259,7 +274,10 @@ func (t *Tool) PrepareBackground(_ context.Context, callID string, args map[stri
 		OnError: func(err error) types.Message {
 			rep := t.newReport(p, id, callID)
 			rep.Status, rep.Error = StatusFailed, err.Error()
-			if errors.Is(err, context.Canceled) {
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				rep.Status = StatusTimedOut
+			case errors.Is(err, context.Canceled):
 				rep.Status = StatusCancelled
 			}
 			rep.EndedAt = time.Now().UnixMilli()
@@ -270,23 +288,22 @@ func (t *Tool) PrepareBackground(_ context.Context, callID string, args map[stri
 
 func (t *Tool) newReport(p *prepared, id, callID string) TaskReport {
 	rep := TaskReport{
-		Version:      ReportVersion,
-		TaskID:       id,
-		ToolCallID:   callID,
-		Prompt:       p.prompt,
-		SystemPrompt: p.cfg.SystemPrompt,
-		Cwd:          t.cwd,
-		Provider:     p.cfg.Model.Provider,
-		Model:        p.cfg.Model.ID,
-		Effort:       string(p.cfg.Effort),
-		TimeoutMs:    p.timeout.Milliseconds(),
-		StartedAt:    time.Now().UnixMilli(),
-		Tools:        []ToolContext{},
-		Trajectory:   []PublicMessage{},
+		Version:    ReportVersion,
+		TaskID:     id,
+		ToolCallID: callID,
+		Prompt:     p.prompt,
+		Cwd:        t.cwd,
+		Provider:   p.cfg.Model.Provider,
+		Model:      p.cfg.Model.ID,
+		Effort:     string(p.cfg.Effort),
+		TimeoutMs:  p.timeout.Milliseconds(),
+		StartedAt:  time.Now().UnixMilli(),
+		Tools:      []ToolContext{},
+		Trajectory: []PublicMessage{},
 	}
 	if p.cfg.Registry != nil {
 		for _, tl := range p.cfg.Registry.All() {
-			rep.Tools = append(rep.Tools, ToolContext{Name: tl.Name(), Description: tl.Description(), Parameters: tl.Parameters()})
+			rep.Tools = append(rep.Tools, ToolContext{Name: tl.Name()})
 		}
 	}
 	return rep
@@ -300,21 +317,24 @@ func (t *Tool) runPrepared(ctx context.Context, p *prepared, id, callID string) 
 	defer cancel()
 
 	details := Details{Model: p.cfg.Model.ID, Effort: string(p.cfg.Effort)}
+	traj := newTrajectory()
 	msgs, runErr := runLoop(runCtx, p.cfg, p.prompt, &details, func(ev types.AgentEvent) {
 		switch ev.Type {
 		case types.EventMessageEnd:
 			if ev.Message != nil {
-				rep.Trajectory = append(rep.Trajectory, publicMessage(*ev.Message))
+				traj.add(publicMessage(*ev.Message))
+				rep.countTools(*ev.Message)
 			}
 		case types.EventCompactionEnd:
 			if ev.Compaction != nil {
-				rep.Trajectory = append(rep.Trajectory, PublicMessage{
+				traj.add(PublicMessage{
 					Role: "compaction",
 					Note: fmt.Sprintf("context compacted (%d -> %d tokens): %s", ev.Compaction.TokensBefore, ev.Compaction.TokensAfter, ev.Compaction.Summary),
 				})
 			}
 		}
 	})
+	rep.Trajectory = traj.finish()
 	text := lastAssistantText(msgs)
 	rep.Status = StatusCompleted
 	switch {
@@ -337,7 +357,7 @@ func (t *Tool) runPrepared(ctx context.Context, p *prepared, id, callID string) 
 	if text == "" && rep.Status == StatusCompleted {
 		text = "(subagent produced no output)"
 	}
-	rep.FinalResult = text
+	rep.FinalResult = truncateUTF8(text, maxResultBytes)
 	rep.Turns, rep.ToolCallsN, rep.Usage = details.Turns, details.ToolCalls, details.Usage
 	rep.EndedAt = time.Now().UnixMilli()
 	return rep
@@ -345,12 +365,19 @@ func (t *Tool) runPrepared(ctx context.Context, p *prepared, id, callID string) 
 
 // resolveModel accepts "provider/model" or a bare model id.
 func (t *Tool) resolveModel(ref string) (llm.Provider, llm.Model, error) {
-	if i := strings.Index(ref, "/"); i > 0 {
-		if p, m, err := t.resolve(ref[:i], ref[i+1:]); err == nil {
-			return p, m, nil
-		}
+	i := strings.Index(ref, "/")
+	if i <= 0 {
+		return t.resolve("", ref)
 	}
-	return t.resolve("", ref)
+	p, m, err := t.resolve(ref[:i], ref[i+1:])
+	if err == nil {
+		return p, m, nil
+	}
+	p, m, err2 := t.resolve("", ref)
+	if err2 != nil {
+		return nil, llm.Model{}, fmt.Errorf("resolve %q as provider/model: %w; resolve %q as model id: %w", ref, err, ref, err2)
+	}
+	return p, m, nil
 }
 
 // runLoop runs the child. onEvent, if non-nil, observes every event after the
@@ -380,7 +407,12 @@ func runLoop(ctx context.Context, cfg agent.Config, prompt string, d *Details, o
 				d.Usage.Output += u.Output
 				d.Usage.CacheRead += u.CacheRead
 				d.Usage.CacheWrite += u.CacheWrite
+				d.Usage.Reasoning += u.Reasoning
 				d.Usage.TotalTokens += u.TotalTokens
+				d.Usage.Cost.Input += u.Cost.Input
+				d.Usage.Cost.Output += u.Cost.Output
+				d.Usage.Cost.CacheRead += u.Cost.CacheRead
+				d.Usage.Cost.CacheWrite += u.Cost.CacheWrite
 				d.Usage.Cost.Total += u.Cost.Total
 			}
 		}
