@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
 	"github.com/AlvinPlayz23/myagent/internal/images"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
@@ -146,6 +147,53 @@ func (c *conn) handle(req *rpc.Request) (any, *rpc.Error) {
 			return nil, rpcErr
 		}
 		return map[string]any{"messages": messagesOrEmpty(ss.Messages())}, nil
+	case "session.context":
+		var p struct {
+			SessionID       string `json:"sessionId"`
+			IncludeMessages bool   `json:"includeMessages"`
+		}
+		if rpcErr := rpc.UnmarshalParams(req.Params, &p); rpcErr != nil {
+			return nil, rpcErr
+		}
+		if p.SessionID == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "sessionId is required")
+		}
+		ss, err := c.manager.Get(c.id, p.SessionID)
+		if err != nil {
+			return nil, coreError(err)
+		}
+		model, cfg, messages := ss.ContextSnapshot()
+		estimate := compaction.EstimateContextTokens(messages)
+		source := "estimate"
+		if estimate.LastUsageIndex >= 0 {
+			source = "usage-and-estimate"
+		}
+		response := sessionContext{
+			Model:                model,
+			ModelContextWindow:   c.modelContextWindow(model),
+			HarnessContextWindow: compaction.ContextWindow,
+			CompactionThreshold:  compaction.ContextWindow - cfg.CompactionSettings.ReserveTokens,
+			EstimatedTokens:      estimate.Tokens,
+			EstimateSource:       source,
+			Tools:                []contextTool{},
+			CompactionEnabled:    cfg.CompactionSettings.Enabled,
+		}
+		for _, message := range messages {
+			if compaction.IsSummaryMessage(message) {
+				response.HasCompaction = true
+				break
+			}
+		}
+		if p.IncludeMessages {
+			response.Messages = messagesOrEmpty(messages)
+			response.SystemPrompt = cfg.SystemPrompt
+			if cfg.Registry != nil {
+				for _, tool := range cfg.Registry.All() {
+					response.Tools = append(response.Tools, contextTool{Name: tool.Name(), Description: tool.Description()})
+				}
+			}
+		}
+		return response, nil
 
 	case "session.setModel":
 		var p struct {
@@ -455,4 +503,48 @@ func sessionInfoJSON(info session.Info) map[string]any {
 		"preview":      info.Preview,
 		"title":        info.Title,
 	}
+}
+
+type contextTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type sessionContext struct {
+	Model                string          `json:"model"`
+	ModelContextWindow   int             `json:"modelContextWindow,omitempty"`
+	HarnessContextWindow int             `json:"harnessContextWindow"`
+	CompactionThreshold  int             `json:"compactionThreshold"`
+	EstimatedTokens      int             `json:"estimatedTokens"`
+	EstimateSource       string          `json:"estimateSource"`
+	Messages             []types.Message `json:"messages,omitempty"`
+	SystemPrompt         string          `json:"systemPrompt,omitempty"`
+	Tools                []contextTool   `json:"tools"`
+	CompactionEnabled    bool            `json:"compactionEnabled"`
+	HasCompaction        bool            `json:"hasCompaction,omitempty"`
+}
+
+func (c *conn) modelContextWindow(ref string) int {
+	if c.providers == nil {
+		return 0
+	}
+	provider, id, ok := strings.Cut(ref, "/")
+	if !ok {
+		return 0
+	}
+	list, err := c.providers.List()
+	if err != nil {
+		return 0
+	}
+	for _, item := range list.Providers {
+		if item.Name != provider {
+			continue
+		}
+		for _, model := range item.ModelDetails {
+			if model.ID == id {
+				return model.ContextWindow
+			}
+		}
+	}
+	return 0
 }

@@ -144,6 +144,7 @@ func (s *providerService) modelDetails(provider string, ids []string) []ws.Model
 			if model, ok := s.catalog.FindBuiltinModel(provider, id); ok {
 				record.ReasoningKnown, record.Reasoning = true, model.Reasoning
 				record.SupportedEfforts = llm.EffortStrings(llm.SupportedEffortsFor(model.Reasoning))
+				record.ContextWindow, record.OutputLimit = model.ContextWindow, model.OutputLimit
 			}
 		}
 		details = append(details, record)

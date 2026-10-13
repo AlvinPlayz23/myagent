@@ -14,8 +14,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/session"
-	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/titlegen"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -62,8 +62,8 @@ type ServerSession struct {
 	// first, disabled filter last).
 	activeProfile string
 	disabledTools []string
-	owner     string // connection id; "" = unowned
-	closed    bool
+	owner         string // connection id; "" = unowned
+	closed        bool
 
 	events  chan Event
 	closeCh chan struct{}
@@ -132,6 +132,14 @@ func (s *ServerSession) Messages() []types.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]types.Message(nil), s.sess.Messages()...)
+}
+
+// ContextSnapshot returns the current model, effective config, and transcript
+// from one session-lock interval.
+func (s *ServerSession) ContextSnapshot() (string, agent.Config, []types.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.modelID, s.cfg, append([]types.Message{}, s.sess.Messages()...)
 }
 
 // Running reports whether an agent run is in flight.

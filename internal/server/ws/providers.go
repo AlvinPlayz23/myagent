@@ -21,6 +21,8 @@ type ModelRecord struct {
 	ReasoningKnown   bool     `json:"reasoningKnown"`
 	Reasoning        bool     `json:"reasoning"`
 	SupportedEfforts []string `json:"supportedEfforts,omitempty"`
+	ContextWindow    int      `json:"contextWindow,omitempty"`
+	OutputLimit      int      `json:"outputLimit,omitempty"`
 }
 
 type ProviderOption struct {

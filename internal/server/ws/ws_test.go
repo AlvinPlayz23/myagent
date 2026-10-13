@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/AlvinPlayz23/myagent/internal/agent/compaction"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	"github.com/AlvinPlayz23/myagent/internal/server/core"
 	"github.com/AlvinPlayz23/myagent/internal/server/rpc"
@@ -308,6 +309,71 @@ func TestEndToEndPromptFlow(t *testing.T) {
 	c.result(c.call("session.messages", map[string]any{"sessionId": created.SessionID}), &msgs)
 	if len(msgs.Messages) != 2 {
 		t.Errorf("messages = %d, want 2", len(msgs.Messages))
+	}
+}
+
+func TestSessionContextRPC(t *testing.T) {
+	url, _ := testServer(t, &fakeProvider{reply: "ok"})
+	c := dial(t, url)
+	c.waitNotif("server.hello")
+
+	var created struct {
+		SessionID string `json:"sessionId"`
+	}
+	c.result(c.call("session.create", nil), &created)
+	c.result(c.call("session.prompt", map[string]any{"sessionId": created.SessionID, "message": "hello context"}), &struct{}{})
+	c.waitNotif("session.done")
+
+	var lightweight struct {
+		Messages     json.RawMessage   `json:"messages"`
+		SystemPrompt json.RawMessage   `json:"systemPrompt"`
+		Tools        []json.RawMessage `json:"tools"`
+	}
+	c.result(c.call("session.context", map[string]any{"sessionId": created.SessionID}), &lightweight)
+	if len(lightweight.Messages) != 0 || len(lightweight.SystemPrompt) != 0 || len(lightweight.Tools) != 0 {
+		t.Errorf("lightweight context leaked detail fields: messages=%s systemPrompt=%s tools=%s", lightweight.Messages, lightweight.SystemPrompt, lightweight.Tools)
+	}
+
+	var snapshot struct {
+		Model                string          `json:"model"`
+		ModelContextWindow   int             `json:"modelContextWindow"`
+		HarnessContextWindow int             `json:"harnessContextWindow"`
+		CompactionThreshold  int             `json:"compactionThreshold"`
+		EstimatedTokens      int             `json:"estimatedTokens"`
+		EstimateSource       string          `json:"estimateSource"`
+		Messages             []types.Message `json:"messages"`
+		SystemPrompt         string          `json:"systemPrompt"`
+		Tools                []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+		CompactionEnabled bool `json:"compactionEnabled"`
+	}
+	c.result(c.call("session.context", map[string]any{"sessionId": created.SessionID, "includeMessages": true}), &snapshot)
+
+	if snapshot.Model != "test/test-model" {
+		t.Errorf("model = %q", snapshot.Model)
+	}
+	if snapshot.ModelContextWindow != 0 {
+		t.Errorf("modelContextWindow = %d, want omitted without catalog metadata", snapshot.ModelContextWindow)
+	}
+	if snapshot.HarnessContextWindow != compaction.ContextWindow || snapshot.CompactionThreshold != compaction.ContextWindow {
+		t.Errorf("context limits = %d/%d, want %d/%d", snapshot.HarnessContextWindow, snapshot.CompactionThreshold, compaction.ContextWindow, compaction.ContextWindow)
+	}
+	if snapshot.CompactionEnabled {
+		t.Error("compactionEnabled = true for disabled settings")
+	}
+	if snapshot.EstimateSource != "estimate" {
+		t.Errorf("estimateSource = %q, want estimate", snapshot.EstimateSource)
+	}
+	if len(snapshot.Messages) != 2 || snapshot.EstimatedTokens != compaction.EstimateContextTokens(snapshot.Messages).Tokens {
+		t.Errorf("messages/tokens = %d/%d, want 2/%d", len(snapshot.Messages), snapshot.EstimatedTokens, compaction.EstimateContextTokens(snapshot.Messages).Tokens)
+	}
+	if snapshot.SystemPrompt == "" {
+		t.Error("systemPrompt is empty")
+	}
+	if len(snapshot.Tools) == 0 || snapshot.Tools[0].Name != "read" || snapshot.Tools[0].Description == "" {
+		t.Errorf("effective tools = %+v", snapshot.Tools)
 	}
 }
 
