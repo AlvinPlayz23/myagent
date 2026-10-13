@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/AlvinPlayz23/myagent/internal/agent"
 	"github.com/AlvinPlayz23/myagent/internal/llm"
@@ -43,7 +44,7 @@ func TestPrepareBackgroundRejectsBlankPrompt(t *testing.T) {
 }
 
 func TestPrepareBackgroundBuildsFullReport(t *testing.T) {
-	long := strings.Repeat("é", maxResultBytes) // untruncated, multibyte
+	long := strings.Repeat("é", maxResultBytes) // multibyte, over the cap
 	task, err := New(WithCwd("/work")).PrepareBackground(context.Background(), "call-1",
 		map[string]any{"prompt": "  do it  "}, parentConfig(long))
 	if err != nil {
@@ -69,8 +70,9 @@ func TestPrepareBackgroundBuildsFullReport(t *testing.T) {
 	if rep.Prompt != "do it" {
 		t.Fatalf("prompt = %q", rep.Prompt)
 	}
-	if rep.FinalResult != long {
-		t.Fatalf("final result truncated: %d bytes", len(rep.FinalResult))
+	if !utf8.ValidString(rep.FinalResult) || !strings.HasSuffix(rep.FinalResult, "bytes omitted]") ||
+		len(rep.FinalResult) > maxResultBytes+100 || !strings.HasPrefix(rep.FinalResult, "éé") {
+		t.Fatalf("final result not capped cleanly: %d bytes", len(rep.FinalResult))
 	}
 	for _, tl := range rep.Tools {
 		if tl.Name == ToolName {

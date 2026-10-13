@@ -74,8 +74,8 @@ type denyBashTool struct {
 	deny  func(command string) error
 }
 
-func (d *denyBashTool) Name() string                { return d.inner.Name() }
-func (d *denyBashTool) Description() string         { return d.inner.Description() }
+func (d *denyBashTool) Name() string               { return d.inner.Name() }
+func (d *denyBashTool) Description() string        { return d.inner.Description() }
 func (d *denyBashTool) Parameters() map[string]any { return d.inner.Parameters() }
 
 func (d *denyBashTool) Execute(ctx context.Context, id string, args map[string]any) (*types.ToolResult, error) {
@@ -124,7 +124,7 @@ func Apply(b *Bundle, base *tools.Registry, basePrompt, cwd, name string, disabl
 	filtered = filtered.Without(disabled)
 	prompt := agent.BuildSystemPrompt(filtered, cwd, disabled...)
 	if strings.TrimSpace(def.Instructions) != "" {
-		prompt += "\n\nMode instructions:\n" + def.Instructions
+		prompt += agent.ModeInstructionsHeading + def.Instructions
 	}
 	var effort llm.Effort
 	if strings.TrimSpace(def.Effort) != "" {
@@ -133,6 +133,5 @@ func Apply(b *Bundle, base *tools.Registry, basePrompt, cwd, name string, disabl
 			return AppliedProfile{}, fmt.Errorf("profile %q: %v", name, err)
 		}
 	}
-	_ = basePrompt
 	return AppliedProfile{Def: def, Registry: filtered, SystemPrompt: prompt, Effort: effort}, nil
 }

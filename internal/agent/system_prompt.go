@@ -8,6 +8,17 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 )
 
+// ModeInstructionsHeading separates the base system prompt from a profile's
+// instructions; plugin.Apply appends it and ChildSystemPrompt recovers it.
+const ModeInstructionsHeading = "\n\nMode instructions:\n"
+
+const (
+	disabledPrefix     = "Disabled tools (do not use or offer these; use only the available tools above): "
+	guidelinesMarker   = "\nGuidelines:\n"
+	cwdMarker          = "\n\nCurrent working directory: "
+	repoGuidanceMarker = "\n\nRepository instructions:\n"
+)
+
 // toolSnippets are the one-line "Available tools" descriptions. Adapted from pi
 // promptSnippet values for the four core tools.
 var toolSnippets = map[string]string{
@@ -62,12 +73,12 @@ func BuildSystemPrompt(reg *tools.Registry, cwd string, disabled ...string) stri
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nGuidelines:\n")
+	b.WriteString(guidelinesMarker)
 	b.WriteString(guidelines)
-	b.WriteString("\n\nCurrent working directory: ")
+	b.WriteString(cwdMarker)
 	b.WriteString(promptCwd)
 	if guidance := loadRepositoryGuidance(cwd); guidance != "" {
-		b.WriteString("\n\nRepository instructions:\n")
+		b.WriteString(repoGuidanceMarker)
 		b.WriteString(guidance)
 	}
 	return b.String()
@@ -138,7 +149,84 @@ func disabledLine(disabled []string, enabled map[string]bool) string {
 	if len(names) == 0 {
 		return ""
 	}
-	return "Disabled tools (do not use or offer these; use only the available tools above): " + strings.Join(names, ", ")
+	return disabledPrefix + strings.Join(names, ", ")
+}
+
+// parseDisabledLine recovers the tool names from the disabled-tools line of a
+// prompt built by BuildSystemPrompt. The line is the last one before the
+// Guidelines section, so only that region is searched and repository guidance
+// further down cannot spoof it.
+func parseDisabledLine(prompt string) []string {
+	head := prompt
+	if i := strings.Index(prompt, guidelinesMarker); i >= 0 {
+		head = prompt[:i]
+	}
+	head = strings.TrimRight(head, "\n")
+	line := head[strings.LastIndex(head, "\n")+1:]
+	if !strings.HasPrefix(line, disabledPrefix) {
+		return nil
+	}
+	var names []string
+	for _, n := range strings.Split(strings.TrimPrefix(line, disabledPrefix), ", ") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// parseModeInstructions returns the profile instructions plugin.Apply appended
+// to prompt, or "" when there are none. The suffix sits after the repository
+// guidance, so when the guidance for cwd is identifiable the heading must start
+// exactly where it ends; this keeps a heading quoted inside AGENTS.md from
+// matching. If the guidance cannot be matched (different cwd), the last
+// occurrence of the heading is used as a best effort.
+func parseModeInstructions(prompt, cwd string) string {
+	start := 0
+	if i := strings.Index(prompt, guidelinesMarker); i >= 0 {
+		start = i
+	}
+	rest := prompt[start:]
+	i := strings.Index(rest, cwdMarker)
+	if i < 0 {
+		return ""
+	}
+	rest = rest[i+len(cwdMarker):]
+	if nl := strings.Index(rest, "\n"); nl >= 0 {
+		rest = rest[nl:]
+	} else {
+		return ""
+	}
+	if strings.HasPrefix(rest, ModeInstructionsHeading) {
+		return rest[len(ModeInstructionsHeading):]
+	}
+	if !strings.HasPrefix(rest, repoGuidanceMarker) {
+		return ""
+	}
+	if guidance := loadRepositoryGuidance(cwd); guidance != "" {
+		if after, ok := strings.CutPrefix(rest, repoGuidanceMarker+guidance); ok {
+			if instr, ok := strings.CutPrefix(after, ModeInstructionsHeading); ok {
+				return instr
+			}
+			return ""
+		}
+	}
+	if j := strings.LastIndex(rest, ModeInstructionsHeading); j >= 0 {
+		return rest[j+len(ModeInstructionsHeading):]
+	}
+	return ""
+}
+
+// ChildSystemPrompt builds the system prompt for a delegated child agent that runs with childReg. It rebuilds the prompt from childReg and carries over, from parentPrompt, the disabled-tools notice and the profile mode instructions.
+func ChildSystemPrompt(parentPrompt string, childReg *tools.Registry, cwd string) string {
+	if childReg == nil {
+		childReg = tools.NewRegistry()
+	}
+	prompt := BuildSystemPrompt(childReg, cwd, parseDisabledLine(parentPrompt)...)
+	if instr := parseModeInstructions(parentPrompt, cwd); instr != "" {
+		prompt += ModeInstructionsHeading + instr
+	}
+	return prompt
 }
 
 // buildGuidelines returns the prompt's operating guidelines, tailored to the

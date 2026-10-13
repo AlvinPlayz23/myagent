@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -53,6 +54,9 @@ type eventChannelClosedMsg struct{}
 // underlying message history, mirroring pi where the interactive loop keeps
 // one conversation alive across turns.
 type runner struct {
+	// mu guards cfg: setters run on the UI goroutine while the run goroutine
+	// and the subagent base accessor read it. Use config() off the UI goroutine.
+	mu      sync.RWMutex
 	cfg     agent.Config
 	queue   *msgQueue
 	history []types.Message
@@ -136,7 +140,7 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 				return sctx.Err()
 			}
 		}
-		loop := agent.New(r.cfg, r.history, sink)
+		loop := agent.New(r.config(), r.history, sink)
 		err := action(loop)
 		// Persist the full conversation so subsequent prompts continue it.
 		r.history = loop.Messages()
@@ -146,25 +150,46 @@ func (r *runner) run(ctx context.Context, generation uint64, action func(*agent.
 	}
 }
 
+// config returns a snapshot of the live agent config; safe from any goroutine.
+func (r *runner) config() agent.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cfg
+}
+
+func (r *runner) update(fn func(*agent.Config)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fn(&r.cfg)
+}
+
 func (r *runner) setModel(provider llm.Provider, model llm.Model) {
-	// Preserve the conversation's session-affinity ID across model switches:
-	// freshly resolved models never carry one.
-	if model.SessionID == "" {
-		model.SessionID = r.cfg.Model.SessionID
-	}
-	r.cfg.Provider = provider
-	r.cfg.Model = model
+	r.update(func(c *agent.Config) {
+		// Preserve the conversation's session-affinity ID across model
+		// switches: freshly resolved models never carry one.
+		if model.SessionID == "" {
+			model.SessionID = c.Model.SessionID
+		}
+		c.Provider = provider
+		c.Model = model
+	})
 }
 
 func (r *runner) setEffort(effort llm.Effort) {
-	r.cfg.Effort = effort
+	r.update(func(c *agent.Config) { c.Effort = effort })
+}
+
+func (r *runner) setSessionID(id string) {
+	r.update(func(c *agent.Config) { c.Model.SessionID = id })
 }
 
 // setTools swaps the tool registry and system prompt (profile switching).
 // Callers must refuse while a run is active.
 func (r *runner) setTools(reg *tools.Registry, systemPrompt string) {
-	r.cfg.Registry = reg
-	r.cfg.SystemPrompt = systemPrompt
+	r.update(func(c *agent.Config) {
+		c.Registry = reg
+		c.SystemPrompt = systemPrompt
+	})
 }
 
 // discardEvents makes buffered events from earlier operations invisible.
