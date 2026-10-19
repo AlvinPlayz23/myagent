@@ -1,0 +1,84 @@
+---
+import Base from '../components/Base.astro';
+import '../styles.css';
+
+const installCmd = 'curl -fsSL https://raw.githubusercontent.com/AlvinPlayz23/myagent/main/install.sh | bash';
+---
+
+<Base>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#"><span class="mark">_</span>myagent</a>
+    <div class="nav-links">
+      <a class="plain" href="#modes">Modes</a>
+      <a class="btn" href="https://github.com/AlvinPlayz23/myagent">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <span class="pill"><span class="pulse"></span>v0.1 · Go · open source</span>
+    <h1>
+      <span class="w" style="--i:0">The</span>
+      <span class="w" style="--i:1">coding</span>
+      <span class="w" style="--i:2">agent</span><br />
+      <span class="w thin" style="--i:3">in</span>
+      <span class="w thin" style="--i:4">your</span>
+      <span class="w thin" style="--i:5">terminal.</span>
+    </h1>
+    <p class="lede">One agent, three surfaces — a full-screen TUI, a one-shot mode for scripts, and a server for everything else.</p>
+    <div>
+      <div class="install">
+        <code id="installCmd">{installCmd}</code>
+        <button class="copy" id="copyBtn" type="button">Copy</button>
+      </div>
+    </div>
+
+    <div class="term-zone">
+      <div class="term-frame">
+        <div class="term">
+          <div class="term-bar">
+            <span class="dot" style="background:#ff5f57"></span>
+            <span class="dot" style="background:#febc2e"></span>
+            <span class="dot" style="background:#28c840"></span>
+            <span id="modeLabel">interactive — go run .</span>
+          </div>
+          <div class="term-body" id="termBody" aria-live="polite"></div>
+          <div class="term-foot">
+            <div class="progress"><i id="progress"></i></div>
+            <span id="termMeta">esc aborts</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="modes rv" id="modes">
+    <a class="mrow" href="https://github.com/AlvinPlayz23/myagent">
+      <code>go run .</code>
+      <div><h3>Interactive</h3><p>Full-screen chat. Review diffs, switch models with /model.</p></div>
+    </a>
+    <a class="mrow" href="https://github.com/AlvinPlayz23/myagent">
+      <code>-p "prompt"</code>
+      <div><h3>Print</h3><p>One-shot answers for pipes and CI. Stdout stays clean.</p></div>
+    </a>
+    <a class="mrow" href="https://github.com/AlvinPlayz23/myagent">
+      <code>serve</code>
+      <div><h3>Server</h3><p>Many sessions over WebSocket JSON-RPC.</p></div>
+    </a>
+  </section>
+
+  <p class="providers rv">Works with <b>OpenAI · Ollama · LM Studio · vLLM</b> and any OpenAI-compatible endpoint.</p>
+
+  <div class="cta rv">
+    <p>One file of config. Keys never leave your machine.</p>
+    <a class="btn" href="https://github.com/AlvinPlayz23/myagent">Get myagent</a>
+  </div>
+
+  <footer>
+    <span>myagent · bubbletea / lipgloss / glamour</span>
+    <span><a href="https://github.com/AlvinPlayz23/myagent">Source</a></span>
+  </footer>
+</div>
+
+<script src="/landing.js" is:inline></script>
+</Base>
