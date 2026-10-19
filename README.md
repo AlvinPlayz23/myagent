@@ -257,12 +257,30 @@ go run . "Write a haiku about Go."   # same thing
 | **Enter**            | Send (queue a follow-up if a turn is currently running) |
 | **Alt+Enter**        | Steer the currently running turn                      |
 | **Esc**              | Abort the current turn                                |
-| **Ctrl+C**           | Quit                                                  |
+| **Ctrl+C**           | Clear the draft prompt (if any); press again to quit  |
 | **Ctrl+O**           | Expand / collapse tool blocks and retry error details |
 | **Up / Down**        | Browse submitted prompts when the input is empty      |
 | **PgUp / PgDn**      | Scroll transcript                                     |
 | **Mouse drag**       | Select displayed transcript text; release to copy     |
+| **Alt+V**            | Attach an image from the clipboard                    |
+| **Ctrl+V**           | Attach an image from the clipboard (often intercepted by the terminal) |
 | **Tab**              | Focus the input area                                  |
+
+#### Pasting images
+
+Use **Alt+V** to attach an image from the clipboard. On most terminals
+**Ctrl+V** does not work for this: the terminal intercepts the keystroke for
+its own text paste, so the image branch in `onKey` never runs. **Alt+V** is the
+binding that reliably reaches the app.
+
+If neither binding works, run the `/paste` slash command — it reads the
+clipboard through the same code path and is the dependable fallback.
+
+Attached images stay in memory and appear above the prompt as
+`[image] N attached`. On an empty prompt, **Backspace** removes the most
+recent one. Limits: 6 images per message, 8 MiB each, 20 MiB total. You can
+also attach an image file by mentioning it with `@path` (PNG, JPEG, GIF, or
+WebP).
 
 ### TUI slash commands
 
@@ -283,6 +301,7 @@ to run, or **Esc** to dismiss it.
 | `/providers`         | Add API keys for compatible catalog providers |
 | `/customize`         | Choose the default text or animated orb startup style |
 | `/tools`             | Enable or disable tools the model can call             |
+| `/paste`             | Attach an image from the clipboard (fallback for Alt+V / Ctrl+V) |
 | `/compact`           | Force context compaction when a safe boundary exists    |
 | `/clear`             | Clear the visible transcript; retain conversation context |
 | `/new`               | Start a fresh persisted conversation                    |

@@ -134,10 +134,16 @@ func (m *model) trackClick(row int) {
 // armPending shows "Press <key> again to <label>." and expires after
 // pendingTTL, mirroring grok's PendingHint.
 func (m *model) armPending(key, label string) tea.Cmd {
+	return m.armPendingStatus(key, label, fmt.Sprintf("Press %s again to %s.", key, label))
+}
+
+// armPendingStatus is armPending with a custom status line, for cases where
+// the first press also did something else (e.g. clearing the draft).
+func (m *model) armPendingStatus(key, label, status string) tea.Cmd {
 	m.pendingKey, m.pendingLabel = key, label
 	m.pendingUntil = time.Now().Add(pendingTTL)
-	m.pendingStatus = fmt.Sprintf("Press %s again to %s.", key, label)
-	m.statusMsg = m.pendingStatus
+	m.pendingStatus = status
+	m.statusMsg = status
 	return tea.Tick(pendingTTL, func(time.Time) tea.Msg { return pendingTimeoutMsg{key: key} })
 }
 
@@ -155,6 +161,20 @@ func (m *model) requestQuit() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, m.armPending("ctrl+c", "quit")
+}
+
+// clearDraft drops the composer text, pending image attachments, and any open
+// pickers, reporting whether there was anything to clear.
+func (m *model) clearDraft() bool {
+	if m.input.Value() == "" && m.attachments.len() == 0 {
+		return false
+	}
+	m.input.Reset()
+	m.attachments.clear()
+	m.historyIndex = -1
+	m.syncPickers()
+	m.updateLayout()
+	return true
 }
 
 // --- toast queue ---

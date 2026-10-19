@@ -93,10 +93,11 @@ func (s *Session) Title() string {
 }
 
 // Title returns the first non-summary user prompt in messages, or "new" for
-// an empty conversation.
+// an empty conversation. System-generated user-role messages (e.g. subagent
+// completions) are skipped so they can never become the session title.
 func Title(messages []types.Message) string {
 	for _, message := range messages {
-		if message.Role != types.RoleUser || compaction.IsSummaryMessage(message) {
+		if message.Role != types.RoleUser || message.Source != "" || compaction.IsSummaryMessage(message) {
 			continue
 		}
 		for _, content := range message.Content {

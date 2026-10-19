@@ -199,6 +199,54 @@ func TestQuitNeedsSecondPress(t *testing.T) {
 	}
 }
 
+func TestCtrlCClearsDraftBeforeQuitting(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+	m.input.SetValue("half-typed prompt")
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	if err := m.attachments.add(png); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd == nil || m.pendingKey != "ctrl+c" {
+		t.Fatal("first ctrl+c did not arm quit confirm")
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("draft not cleared: %q", got)
+	}
+	if m.attachments.len() != 0 {
+		t.Fatalf("attachments not cleared: %d", m.attachments.len())
+	}
+	if m.statusMsg != "Cleared the prompt. Press ctrl+c again to quit." {
+		t.Fatalf("status = %q", m.statusMsg)
+	}
+
+	// The second press quits even though the draft is already gone.
+	_, cmd = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd == nil || reflect.ValueOf(cmd).Pointer() != reflect.ValueOf(tea.Quit).Pointer() {
+		t.Fatal("second ctrl+c did not quit")
+	}
+}
+
+func TestCtrlCClearsDraftWithoutAttachments(t *testing.T) {
+	m := newModel(nil, nil, newMsgQueue(), newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+	m.input.SetValue("/mod")
+	m.syncPickers()
+	if !m.picker.active {
+		t.Fatal("picker did not open for the draft")
+	}
+
+	_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd == nil || m.pendingKey != "ctrl+c" {
+		t.Fatal("first ctrl+c did not arm quit confirm")
+	}
+	if m.input.Value() != "" || m.picker.active {
+		t.Fatalf("draft/picker not cleared: %q/%v", m.input.Value(), m.picker.active)
+	}
+}
+
 func TestPendingExpiresAndEscCancels(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(80, 20)

@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -96,5 +97,33 @@ func TestOnErrorReportsCancellation(t *testing.T) {
 	rep := task.OnError(context.Canceled).Details.(TaskReport)
 	if rep.Status != StatusCancelled || rep.Prompt != "x" {
 		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// An aborted child has nothing to say, so its report opts out of delivery.
+// Every other status must still reach the conversation: a timeout, a failure
+// and a completed run all carry something the parent needs.
+func TestSuppressDropsOnlyCancelledReports(t *testing.T) {
+	task, err := New().PrepareBackground(context.Background(), "c", map[string]any{"prompt": "x"}, parentConfig("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Suppress == nil {
+		t.Fatal("task must opt into suppressing cancelled reports")
+	}
+	if !task.Suppress(task.OnError(context.Canceled)) {
+		t.Fatal("cancelled report must be suppressed")
+	}
+	for _, err := range []error{context.DeadlineExceeded, errors.New("boom")} {
+		if task.Suppress(task.OnError(err)) {
+			t.Errorf("%v report must still be delivered", err)
+		}
+	}
+	done, err := task.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Suppress(done) {
+		t.Fatal("completed report must still be delivered")
 	}
 }

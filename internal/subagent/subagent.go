@@ -283,6 +283,14 @@ func (t *Tool) PrepareBackground(_ context.Context, callID string, args map[stri
 			rep.EndedAt = time.Now().UnixMilli()
 			return completionMessage(rep)
 		},
+		// An aborted child has no result to report: its notice would only say
+		// that the user cancelled what the user asked to cancel. Dropping it
+		// keeps the transcript free of records of deliberate interruptions,
+		// while timeouts, failures and completions still get through.
+		Suppress: func(msg types.Message) bool {
+			rep, ok := msg.Details.(TaskReport)
+			return ok && rep.Status == StatusCancelled
+		},
 	}, nil
 }
 

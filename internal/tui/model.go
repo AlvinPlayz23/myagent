@@ -604,9 +604,10 @@ func (m *model) setSessionTitle(title string) {
 	m.updateTerminalTitle()
 }
 
-// Init starts the event pump and the animation ticker.
+// Init starts the event pump and the animation ticker, and asks the terminal
+// for its background color so adaptive theme colors resolve correctly.
 func (m *model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.runner.waitForEvent(), tickCmd()}
+	cmds := []tea.Cmd{m.runner.waitForEvent(), tickCmd(), tea.RequestBackgroundColor}
 	if m.statusMsg != "" {
 		cmds = append(cmds, clearStatusCmd(m.statusMsg))
 	}
@@ -624,6 +625,13 @@ func clearStatusCmd(status string) tea.Cmd {
 // Update handles messages: key input, window resize, agent events, and ticks.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// The terminal's reply to tea.RequestBackgroundColor (sent from Init).
+		// Adaptive theme colors read this flag at render time, so the next
+		// paint already uses the right light/dark variants.
+		setDarkBackground(msg.IsDark())
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.cancelSelection()
 		return m.onResize(msg.Width, msg.Height)
@@ -1174,9 +1182,15 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch ks {
 	case "ctrl+c":
-		// Abort a running turn if any; otherwise quit (via confirm).
+		// Abort a running turn if any; otherwise clear a draft and quit (via
+		// confirm). Clearing first keeps a half-typed prompt from being thrown
+		// away silently: the same press both reports and preserves the intent
+		// to quit.
 		if m.abortActiveRun() {
 			return m, nil
+		}
+		if !m.pendingArmed("ctrl+c") && m.clearDraft() {
+			return m, m.armPendingStatus("ctrl+c", "quit", "Cleared the prompt. Press ctrl+c again to quit.")
 		}
 		return m.requestQuit()
 

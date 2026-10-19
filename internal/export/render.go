@@ -28,7 +28,10 @@ func RenderMarkdown(doc Document) ([]byte, error) {
 
 func writeMarkdownMessage(b *strings.Builder, m types.Message, results map[string]types.Message) {
 	role := "Assistant"
-	if m.Role == types.RoleUser {
+	switch {
+	case m.Source == types.SourceSubagentCompletion:
+		role = "Subagent"
+	case m.Role == types.RoleUser:
 		role = "User"
 	}
 	fmt.Fprintf(b, "\n## %s\n\n", role)
@@ -78,7 +81,7 @@ func toolResultText(m types.Message) string {
 func RenderHTML(doc Document) ([]byte, error) {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title><style>
-:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--blue:#58a6ff;--green:#3fb950;--tool:#21262d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}#app{display:flex;min-height:100vh}aside{position:sticky;top:0;width:280px;height:100vh;overflow:auto;flex:none;padding:16px 10px;background:var(--panel);border-right:1px solid var(--line)}aside h2{font-size:13px;margin:0 8px 12px;color:var(--muted)}.nav-item{display:block;width:100%%;padding:7px 8px;text-align:left;color:var(--muted);background:none;border:0;border-radius:4px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nav-item:hover,.nav-item.active{background:#21262d;color:var(--text)}.nav-user{color:var(--blue)}.nav-assistant{color:var(--green)}main{width:min(900px,100%%);margin:0 auto;padding:32px 28px}.header{padding-bottom:22px;margin-bottom:24px;border-bottom:1px solid var(--line)}h1{font-size:22px;margin:0 0 8px;word-break:break-word}.meta{color:var(--muted);font-size:12px;word-break:break-all}.actions{margin-top:14px}.actions button{font:inherit;font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;cursor:pointer}.actions button:hover{border-color:var(--blue)}.message{margin:20px 0}.message-head{font-size:12px;font-weight:bold;margin-bottom:7px}.user .message-head{color:var(--blue)}.assistant .message-head{color:var(--green)}.bubble{padding:14px;border:1px solid var(--line);border-radius:7px;background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}.assistant .bubble{background:transparent;border:0;padding:0}.text+ .text{margin-top:12px}details{margin-top:12px;border:1px solid var(--line);border-radius:6px;background:var(--tool)}summary{padding:8px 10px;cursor:pointer;color:var(--muted);list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';display:inline-block;margin-right:8px;color:var(--blue);transition:transform .15s}details[open]>summary:before{transform:rotate(90deg)}.tool-body{padding:0 10px 10px}.tool-preview{color:var(--muted);font-size:12px;margin:0 0 8px;white-space:pre-wrap;overflow:hidden;text-overflow:ellipsis}.tool-output{margin:0;max-height:520px;overflow:auto;padding:10px;background:#0d1117;border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}.thinking summary{color:#d2a8ff}.empty{color:var(--muted);font-style:italic}@media(max-width:720px){#app{display:block}aside{position:relative;width:100%%;height:auto;border-right:0;border-bottom:1px solid var(--line);display:flex;gap:2px;overflow-x:auto;padding:8px}.nav-item{width:auto;flex:none;max-width:180px}aside h2{display:none}main{padding:22px 16px}}
+:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--blue:#58a6ff;--green:#3fb950;--tool:#21262d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}#app{display:flex;min-height:100vh}aside{position:sticky;top:0;width:280px;height:100vh;overflow:auto;flex:none;padding:16px 10px;background:var(--panel);border-right:1px solid var(--line)}aside h2{font-size:13px;margin:0 8px 12px;color:var(--muted)}.nav-item{display:block;width:100%%;padding:7px 8px;text-align:left;color:var(--muted);background:none;border:0;border-radius:4px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nav-item:hover,.nav-item.active{background:#21262d;color:var(--text)}.nav-user{color:var(--blue)}.nav-assistant{color:var(--green)}.nav-subagent{color:var(--muted)}main{width:min(900px,100%%);margin:0 auto;padding:32px 28px}.header{padding-bottom:22px;margin-bottom:24px;border-bottom:1px solid var(--line)}h1{font-size:22px;margin:0 0 8px;word-break:break-word}.meta{color:var(--muted);font-size:12px;word-break:break-all}.actions{margin-top:14px}.actions button{font:inherit;font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;cursor:pointer}.actions button:hover{border-color:var(--blue)}.message{margin:20px 0}.message-head{font-size:12px;font-weight:bold;margin-bottom:7px}.user .message-head{color:var(--blue)}.assistant .message-head{color:var(--green)}.subagent .message-head{color:var(--muted)}.bubble{padding:14px;border:1px solid var(--line);border-radius:7px;background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}.assistant .bubble{background:transparent;border:0;padding:0}.text+ .text{margin-top:12px}details{margin-top:12px;border:1px solid var(--line);border-radius:6px;background:var(--tool)}summary{padding:8px 10px;cursor:pointer;color:var(--muted);list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';display:inline-block;margin-right:8px;color:var(--blue);transition:transform .15s}details[open]>summary:before{transform:rotate(90deg)}.tool-body{padding:0 10px 10px}.tool-preview{color:var(--muted);font-size:12px;margin:0 0 8px;white-space:pre-wrap;overflow:hidden;text-overflow:ellipsis}.tool-output{margin:0;max-height:520px;overflow:auto;padding:10px;background:#0d1117;border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}.thinking summary{color:#d2a8ff}.empty{color:var(--muted);font-style:italic}@media(max-width:720px){#app{display:block}aside{position:relative;width:100%%;height:auto;border-right:0;border-bottom:1px solid var(--line);display:flex;gap:2px;overflow-x:auto;padding:8px}.nav-item{width:auto;flex:none;max-width:180px}aside h2{display:none}main{padding:22px 16px}}
 </style></head><body><div id="app"><aside><h2>Conversation</h2>`, html.EscapeString(doc.Title))
 
 	visible := 0
@@ -88,7 +91,10 @@ func RenderHTML(doc Document) ([]byte, error) {
 		}
 		role := "Assistant"
 		class := "nav-assistant"
-		if m.Role == types.RoleUser {
+		switch {
+		case m.Source == types.SourceSubagentCompletion:
+			role, class = "Subagent", "nav-subagent"
+		case m.Role == types.RoleUser:
 			role, class = "User", "nav-user"
 		}
 		fmt.Fprintf(&b, `<button class="nav-item %s" data-target="message-%d">%d · %s: %s</button>`, class, i, visible+1, role, html.EscapeString(shortText(messageText(m), 52)))
@@ -111,7 +117,10 @@ func RenderHTML(doc Document) ([]byte, error) {
 
 func writeHTMLMessage(b *bytes.Buffer, m types.Message, index int, results map[string]types.Message) {
 	role, class := "Assistant", "assistant"
-	if m.Role == types.RoleUser {
+	switch {
+	case m.Source == types.SourceSubagentCompletion:
+		role, class = "Subagent", "subagent"
+	case m.Role == types.RoleUser:
 		role, class = "User", "user"
 	}
 	fmt.Fprintf(b, `<section class="message %s" id="message-%d"><div class="message-head">%s</div><div class="bubble">`, class, index, role)

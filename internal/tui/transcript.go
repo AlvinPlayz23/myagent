@@ -270,13 +270,20 @@ func subagentModelArg(name string, args map[string]any) string {
 	return strings.TrimSpace(toolArg(args, "model"))
 }
 
-// subagentModel extracts the model id from a subagent result's details, which
-// are a subagent.Details live and a decoded map in resumed history.
+// subagentModel extracts the model id from a subagent result's details. The
+// background path returns subagent.AckDetails; the synchronous Execute path
+// returns subagent.Details; resumed history carries either as a decoded map.
 func subagentModel(details any) string {
 	switch d := details.(type) {
 	case subagent.Details:
 		return d.Model
 	case *subagent.Details:
+		if d != nil {
+			return d.Model
+		}
+	case subagent.AckDetails:
+		return d.Model
+	case *subagent.AckDetails:
 		if d != nil {
 			return d.Model
 		}

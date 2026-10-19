@@ -1,57 +1,89 @@
 package tui
 
 import (
+	"image/color"
 	"sync"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/compat"
 	"github.com/charmbracelet/glamour"
 )
+
+// adaptiveColor resolves to Light or Dark at render time based on the terminal
+// background reported by Bubble Tea. It deliberately replaces the AdaptiveColor
+// type from lipgloss/v2/compat: importing that package runs
+// lipgloss.HasDarkBackground(os.Stdin, os.Stdout) during package init, which on
+// Windows blocks forever in ReadConsole when the console never answers the
+// OSC 11 query (the cancel reader behind its timeout cannot interrupt an
+// in-flight console read). The running program instead requests the background
+// with tea.RequestBackgroundColor, and Bubble Tea's input loop feeds the reply
+// back as tea.BackgroundColorMsg.
+type adaptiveColor struct {
+	Light color.Color
+	Dark  color.Color
+}
+
+func (c adaptiveColor) RGBA() (uint32, uint32, uint32, uint32) {
+	if darkBackground.Load() {
+		return c.Dark.RGBA()
+	}
+	return c.Light.RGBA()
+}
+
+// darkBackground is the terminal background detected by the running program.
+// It defaults to true — the same fallback compat uses when detection is
+// unavailable — so renders before the first BackgroundColorMsg stay dark.
+var darkBackground atomic.Bool
+
+func init() { darkBackground.Store(true) }
+
+// setDarkBackground records the terminal background reported by the program.
+func setDarkBackground(dark bool) { darkBackground.Store(dark) }
 
 // palette is the set of adaptive colors the theme is built from. Every color
 // has a light and a dark variant resolved at render time from the terminal's
 // background, so the TUI reads well on both (kj's theme/styles.go model).
 type palette struct {
-	primary     compat.AdaptiveColor // brand accent: prompt markers, chips, selection
-	secondary   compat.AdaptiveColor // teal: highlights, user-block border
-	textPrimary compat.AdaptiveColor // main content foreground
-	textBright  compat.AdaptiveColor // emphasized content foreground
-	textDim     compat.AdaptiveColor // secondary info, footer, descriptions
-	rule        compat.AdaptiveColor // hairlines: composer rules, box borders
-	userBlockBg compat.AdaptiveColor // user message block background
-	rowHoverBg  compat.AdaptiveColor // hovered (not selected) picker rows
-	selectionBg compat.AdaptiveColor // text-selection background
-	pending     compat.AdaptiveColor // amber: in-flight tool state, warnings
-	success     compat.AdaptiveColor // green: completed tool state
-	failure     compat.AdaptiveColor // red: errors, failed tool state
-	diffHunk    compat.AdaptiveColor // blue: @@ hunk headers
-	orbDim      compat.AdaptiveColor
-	orbMedium   compat.AdaptiveColor
-	orbBright   compat.AdaptiveColor
+	primary     adaptiveColor // brand accent: prompt markers, chips, selection
+	secondary   adaptiveColor // teal: highlights, user-block border
+	textPrimary adaptiveColor // main content foreground
+	textBright  adaptiveColor // emphasized content foreground
+	textDim     adaptiveColor // secondary info, footer, descriptions
+	rule        adaptiveColor // hairlines: composer rules, box borders
+	userBlockBg adaptiveColor // user message block background
+	rowHoverBg  adaptiveColor // hovered (not selected) picker rows
+	selectionBg adaptiveColor // text-selection background
+	pending     adaptiveColor // amber: in-flight tool state, warnings
+	success     adaptiveColor // green: completed tool state
+	failure     adaptiveColor // red: errors, failed tool state
+	diffHunk    adaptiveColor // blue: @@ hunk headers
+	orbDim      adaptiveColor
+	orbMedium   adaptiveColor
+	orbBright   adaptiveColor
 }
 
 func newPalette() palette {
 	return palette{
-		primary:     compat.AdaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("#5FB4D9")},
-		secondary:   compat.AdaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("#649FA9")},
-		textPrimary: compat.AdaptiveColor{Light: lipgloss.Color("#2A2A2A"), Dark: lipgloss.Color("#D0D0D0")},
-		textBright:  compat.AdaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")},
-		textDim:     compat.AdaptiveColor{Light: lipgloss.Color("#757575"), Dark: lipgloss.Color("#8A8A8A")},
-		rule:        compat.AdaptiveColor{Light: lipgloss.Color("#BDBDBD"), Dark: lipgloss.Color("#585858")},
-		userBlockBg: compat.AdaptiveColor{Light: lipgloss.Color("#E4E4E4"), Dark: lipgloss.Color("#303030")},
-		rowHoverBg:  compat.AdaptiveColor{Light: lipgloss.Color("#D0D0D0"), Dark: lipgloss.Color("#444444")},
-		selectionBg: compat.AdaptiveColor{Light: lipgloss.Color("#B2D7EE"), Dark: lipgloss.Color("#005F87")},
-		pending:     compat.AdaptiveColor{Light: lipgloss.Color("#B26A00"), Dark: lipgloss.Color("#FFAF00")},
+		primary:     adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("#5FB4D9")},
+		secondary:   adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("#649FA9")},
+		textPrimary: adaptiveColor{Light: lipgloss.Color("#2A2A2A"), Dark: lipgloss.Color("#D0D0D0")},
+		textBright:  adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")},
+		textDim:     adaptiveColor{Light: lipgloss.Color("#757575"), Dark: lipgloss.Color("#8A8A8A")},
+		rule:        adaptiveColor{Light: lipgloss.Color("#BDBDBD"), Dark: lipgloss.Color("#585858")},
+		userBlockBg: adaptiveColor{Light: lipgloss.Color("#E4E4E4"), Dark: lipgloss.Color("#303030")},
+		rowHoverBg:  adaptiveColor{Light: lipgloss.Color("#D0D0D0"), Dark: lipgloss.Color("#444444")},
+		selectionBg: adaptiveColor{Light: lipgloss.Color("#B2D7EE"), Dark: lipgloss.Color("#005F87")},
+		pending:     adaptiveColor{Light: lipgloss.Color("#B26A00"), Dark: lipgloss.Color("#FFAF00")},
 		// Success/failure keep the exact ANSI-256 greens/reds the diff tests
 		// assert on in dark mode; the light variants deepen them for contrast.
-		success: compat.AdaptiveColor{Light: lipgloss.Color("#2E7D32"), Dark: lipgloss.Color("35")},
-		failure: compat.AdaptiveColor{Light: lipgloss.Color("#C62828"), Dark: lipgloss.Color("203")},
+		success: adaptiveColor{Light: lipgloss.Color("#2E7D32"), Dark: lipgloss.Color("35")},
+		failure: adaptiveColor{Light: lipgloss.Color("#C62828"), Dark: lipgloss.Color("203")},
 		// Hunk headers keep the ANSI-256 blue in dark mode for consistency
 		// with the diffAdd/diffRemove encoding.
-		diffHunk: compat.AdaptiveColor{Light: lipgloss.Color("#1565C0"), Dark: lipgloss.Color("75")},
-		orbDim:    compat.AdaptiveColor{Light: lipgloss.Color("#4A7A94"), Dark: lipgloss.Color("24")},
-		orbMedium: compat.AdaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("31")},
-		orbBright: compat.AdaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("39")},
+		diffHunk: adaptiveColor{Light: lipgloss.Color("#1565C0"), Dark: lipgloss.Color("75")},
+		orbDim:    adaptiveColor{Light: lipgloss.Color("#4A7A94"), Dark: lipgloss.Color("24")},
+		orbMedium: adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("31")},
+		orbBright: adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("39")},
 	}
 }
 
@@ -151,7 +183,7 @@ func newTheme() *theme {
 		// inverted secondary keeps it readable without stealing the accent.
 		chip: lipgloss.NewStyle().
 			Background(p.secondary).
-			Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("16")}).
+			Foreground(adaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("16")}).
 			Bold(true).
 			Padding(0, 1),
 		// Context-window indicator tiers (kj's context_status.go thresholds):

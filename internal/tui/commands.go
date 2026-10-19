@@ -248,7 +248,7 @@ func buildHelpText(extra ...string) string {
 	for _, e := range extra {
 		b.WriteString(e)
 	}
-	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v or alt+v paste, /paste fallback, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c quit")
+	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v or alt+v paste, /paste fallback, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c clear draft then quit")
 	b.WriteString("\nImages: press ctrl+v or alt+v (or run /paste) for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")
 	return b.String()
 }

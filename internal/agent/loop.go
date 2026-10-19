@@ -65,16 +65,20 @@ func (l *Loop) Messages() []types.Message { return l.messages }
 
 // Run drives the agent to completion for the given prompts. It mirrors pi's
 // runAgentLoop: emit agent_start/turn_start, the prompt messages, then the
-// tool-call loop, finishing with agent_end. Returns the messages produced
-// during this run (prompts + assistant + tool results).
-func (l *Loop) Run(ctx context.Context, prompts []types.Message) ([]types.Message, error) {
-	var produced []types.Message
-
+// tool-call loop, finishing with agent_end. On an early exit (abort or error)
+// background completions still waiting to be delivered are flushed to history
+// and the event stream first. Returns the messages produced during this run
+// (prompts + assistant + tool results + any flushed completions).
+func (l *Loop) Run(ctx context.Context, prompts []types.Message) (produced []types.Message, _ error) {
 	// Background tasks are owned by this run: cancelled and joined on every
 	// exit path so none can outlive it or leak into a later Run.
 	l.sched = newBackgroundScheduler(ctx, l.cfg.MaxBackgroundTasks)
 	defer func() {
-		l.sched.close()
+		// Safety net for the exit paths that never reach agent_end (abort,
+		// sink failure, panic): the launch acknowledgement promised every task
+		// a report, so nothing undelivered may be dropped. runLoop already
+		// drained ahead of its own agent_end, so this is a no-op there.
+		l.drainCompletions(ctx, &produced)
 		l.sched = nil
 	}()
 
@@ -181,6 +185,7 @@ outer:
 				if err := l.emit(ctx, types.AgentEvent{Type: types.EventTurnEnd, Message: &msg}); err != nil {
 					return err
 				}
+				l.drainCompletions(ctx, produced)
 				return l.emit(ctx, types.AgentEvent{Type: types.EventAgentEnd, Messages: l.messages})
 			}
 
@@ -243,6 +248,11 @@ outer:
 		}
 	}
 
+	// Reaching here means no worker is running and done is empty (see the idle loop
+	// above), so this drain is a no-op today. It is kept so "agent_end is the last
+	// event and its Messages snapshot is complete" holds by construction rather than
+	// by an argument about the idle loop's exit conditions.
+	l.drainCompletions(ctx, produced)
 	return l.emit(ctx, types.AgentEvent{Type: types.EventAgentEnd, Messages: l.messages})
 }
 
@@ -524,15 +534,56 @@ func (l *Loop) schedState() (running, ready int) {
 	return l.sched.state()
 }
 
+// drainTimeout bounds the final delivery of background completions. The drain
+// has to outlive a cancelled run context, but it must not be able to wedge the
+// run goroutine forever when an event consumer has gone away: the sinks block
+// on an unbounded channel send, so a missing consumer would otherwise hang the
+// run long after the work it was waiting on finished.
+const drainTimeout = 5 * time.Second
+
+// drainCompletions closes the scheduler and delivers every report it still
+// holds. close() cancels and joins the workers, so done is final by the time
+// the drain starts: no report can be lost, and none can be delivered twice.
+// Calling it more than once is safe — the scheduler close is idempotent and the
+// second drain finds done empty.
+//
+// Every caller must run it before emitting EventAgentEnd: agent_end is
+// terminal, so a report delivered after it would arrive out of order and would
+// be missing from agent_end's Messages snapshot.
+//
+// The drain uses a non-cancellable, time-bounded context. The run context is
+// normally already dead here, and both the TUI runner and the server session
+// drop events on a cancelled context, so WithoutCancel is what makes the
+// reports reach history at all; the timeout restores the bound that dropping
+// cancellation would otherwise remove. A sink failure can no longer be reported
+// to the caller, so reports that cannot be delivered stay lost.
+func (l *Loop) drainCompletions(ctx context.Context, produced *[]types.Message) {
+	if l.sched == nil {
+		return
+	}
+	l.sched.close()
+	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+	defer cancel()
+	_ = l.injectCompletions(drainCtx, produced)
+}
+
 // injectCompletions commits each ready completion: message_start/end are
 // emitted first and the message is appended and marked delivered only after
 // both succeed. A sink failure is terminal for the run.
+//
+// A report its own task suppresses is dropped instead of emitted, but is still
+// marked delivered: the task is over either way, and leaving it queued would
+// keep the scheduler pinned at its task limit for the rest of the run.
 func (l *Loop) injectCompletions(ctx context.Context, produced *[]types.Message) error {
 	if l.sched == nil {
 		return nil
 	}
-	for _, m := range l.sched.ready() {
-		msg := m
+	for _, c := range l.sched.ready() {
+		if c.task.Suppress != nil && c.task.Suppress(c.msg) {
+			l.sched.delivered()
+			continue
+		}
+		msg := c.msg
 		if err := l.emit(ctx, types.AgentEvent{Type: types.EventMessageStart, Message: &msg}); err != nil {
 			return err
 		}

@@ -58,3 +58,13 @@ func TestTitleForEmptyConversation(t *testing.T) {
 		t.Fatalf("Title() = %q, want %q", got, want)
 	}
 }
+
+func TestTitleSkipsSystemGeneratedMessages(t *testing.T) {
+	messages := []types.Message{
+		{Role: types.RoleUser, Source: types.SourceSubagentCompletion, Content: []types.ContentBlock{types.TextBlock("Subagent task sub_1 finished.")}},
+		{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("real prompt")}},
+	}
+	if got, want := Title(messages), "real prompt"; got != want {
+		t.Fatalf("Title() = %q, want %q", got, want)
+	}
+}

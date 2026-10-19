@@ -6,6 +6,8 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -405,5 +407,113 @@ func TestTrajectoryBounds(t *testing.T) {
 	pm := publicMessage(types.Message{Role: types.RoleToolResult, Content: []types.ContentBlock{types.TextBlock(strings.Repeat("é", maxTrajectoryText))}})
 	if !utf8.ValidString(pm.Text) || len(pm.Text) > maxTrajectoryText+100 || !strings.Contains(pm.Text, "[truncated") {
 		t.Fatalf("message text not bounded: %d", len(pm.Text))
+	}
+}
+
+// firstLine is the first line of a message's text, enough to identify which
+// message an emitted event carried without asserting on the whole report.
+func firstLine(m types.Message) string {
+	for _, c := range m.Content {
+		if c.Type == types.ContentText && c.Text != "" {
+			return strings.SplitN(c.Text, "\n", 2)[0]
+		}
+	}
+	return ""
+}
+
+// abortingProvider plays both roles in one run. While the request still exposes
+// the subagent tool it is the parent: it launches exactly one background child
+// and then stops. The child's requests no longer expose the tool, so from then
+// on it just blocks — which means the child can only ever end by being aborted.
+type abortingProvider struct {
+	parentCalls  atomic.Int32
+	childStarted chan struct{}
+	childOnce    sync.Once
+}
+
+func (p *abortingProvider) Stream(ctx context.Context, _ llm.Model, req llm.Request) (<-chan llm.StreamEvent, error) {
+	for _, tl := range req.Tools {
+		if tl.Name != ToolName {
+			continue
+		}
+		msg := &types.Message{Role: types.RoleAssistant, StopReason: types.StopStop,
+			Content: []types.ContentBlock{types.TextBlock("launched")}}
+		if p.parentCalls.Add(1) == 1 {
+			msg.StopReason = types.StopToolUse
+			msg.Content = []types.ContentBlock{{
+				Type: types.ContentToolCall, ID: "call-1", Name: ToolName,
+				Arguments: map[string]any{"prompt": "go"},
+			}}
+		}
+		out := make(chan llm.StreamEvent, 1)
+		out <- llm.StreamEvent{Type: "done", Message: msg}
+		close(out)
+		return out, nil
+	}
+	p.childOnce.Do(func() { close(p.childStarted) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestAbortedSubagentLeavesNoCompletion is the end-to-end case behind
+// BackgroundTask.Suppress: aborting a run must not leave a cancellation notice
+// behind. The parent acknowledged the launch, so history must show the ack and
+// nothing else — the child's "I was cancelled" report carries no result, and
+// persisting it would put a record of the user's own interruption into every
+// future prompt.
+func TestAbortedSubagentLeavesNoCompletion(t *testing.T) {
+	prov := &abortingProvider{childStarted: make(chan struct{})}
+	var mu sync.Mutex
+	var emitted []string
+	sink := func(_ context.Context, ev types.AgentEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if ev.Type == types.EventMessageEnd && ev.Message != nil {
+			emitted = append(emitted, string(ev.Message.Role)+": "+firstLine(*ev.Message))
+		}
+		return nil
+	}
+	l := agent.New(agent.Config{
+		Provider: prov,
+		Model:    llm.Model{ID: "m"},
+		Registry: tools.NewRegistry(New()),
+	}, nil, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := l.Run(ctx, []types.Message{{Role: types.RoleUser, Content: []types.ContentBlock{types.TextBlock("go")}}})
+		runDone <- err
+	}()
+
+	select {
+	case <-prov.childStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("subagent never started")
+	}
+	cancel()
+	if err := <-runDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+
+	// The launch happened, so this is not passing vacuously.
+	var acked bool
+	for _, m := range l.Messages() {
+		if m.Source == types.SourceSubagentCompletion {
+			t.Fatalf("aborted subagent left a completion in history: %q", firstLine(m))
+		}
+		if m.Role == types.RoleToolResult && strings.Contains(firstLine(m), "started in the background") {
+			acked = true
+		}
+	}
+	if !acked {
+		t.Fatal("no launch acknowledgement in history; the subagent tool never ran")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, e := range emitted {
+		if strings.Contains(e, string(types.SourceSubagentCompletion)) || strings.Contains(e, "cancelled") {
+			t.Fatalf("aborted subagent was announced to the model: %q", e)
+		}
 	}
 }

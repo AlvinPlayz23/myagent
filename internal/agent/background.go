@@ -32,6 +32,23 @@ type BackgroundTask struct {
 	Run func(ctx context.Context) (types.Message, error)
 	// OnError builds a completion message when Run errors or panics.
 	OnError func(err error) types.Message
+	// Suppress, when set, reports messages that carry nothing worth keeping in
+	// the conversation, so the loop delivers them to nobody. It exists for work
+	// the caller deliberately cut short: a task cancelled by an abort has no
+	// result to report, and persisting a notice for each one would fill the
+	// permanent transcript with a record of an action the user took on purpose
+	// instead of with work. nil means deliver every report.
+	//
+	// It is consulted at delivery time on every path, not only during teardown,
+	// so a suppressed report can never leak in through the normal turn loop.
+	Suppress func(msg types.Message) bool
+}
+
+// completion pairs a published report with the task that produced it, so the
+// task's Suppress policy can be applied when the report is delivered.
+type completion struct {
+	task *BackgroundTask
+	msg  types.Message
 }
 
 // backgroundScheduler is owned by a single Run. Workers only run task code and
@@ -44,7 +61,7 @@ type backgroundScheduler struct {
 	mu      sync.Mutex
 	closed  bool
 	running map[string]struct{}
-	done    []types.Message // FIFO by publication order
+	done    []completion // FIFO by publication order
 	wg      sync.WaitGroup
 	wakeCh  chan struct{}
 }
@@ -94,9 +111,7 @@ func (s *backgroundScheduler) work(task *BackgroundTask) {
 	msg := s.runTask(task)
 	s.mu.Lock()
 	delete(s.running, task.ID)
-	if !s.closed {
-		s.done = append(s.done, msg)
-	}
+	s.done = append(s.done, completion{task: task, msg: msg})
 	s.mu.Unlock()
 	select {
 	case s.wakeCh <- struct{}{}:
@@ -134,10 +149,10 @@ func safeOnError(task *BackgroundTask, err error) (msg types.Message) {
 }
 
 // ready returns a snapshot of undelivered completions in FIFO order.
-func (s *backgroundScheduler) ready() []types.Message {
+func (s *backgroundScheduler) ready() []completion {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]types.Message(nil), s.done...)
+	return append([]completion(nil), s.done...)
 }
 
 // delivered drops the oldest completion after it was committed to history.
@@ -158,7 +173,14 @@ func (s *backgroundScheduler) state() (running, ready int) {
 
 func (s *backgroundScheduler) wake() <-chan struct{} { return s.wakeCh }
 
-// close cancels all workers, joins them, and discards undelivered reports.
+// close cancels all workers and joins them. Reports published before or during
+// the join stay in done for the owner to drain — Loop.drainCompletions closes
+// before it reads, so this is what lets a report survive its own abort, and it
+// is why the launch acknowledgement's promise to report every task holds. It is
+// safe to call more than once: cancel is idempotent and the counter is zero by
+// the time the first call returns.
+//
+// closed only gates start: once close has run no new task may be admitted.
 func (s *backgroundScheduler) close() {
 	s.mu.Lock()
 	s.closed = true
