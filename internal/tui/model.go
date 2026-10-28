@@ -628,8 +628,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		// The terminal's reply to tea.RequestBackgroundColor (sent from Init).
 		// Adaptive theme colors read this flag at render time, so the next
-		// paint already uses the right light/dark variants.
-		setDarkBackground(msg.IsDark())
+		// paint already uses the right light/dark variants. The markdown
+		// renderer bakes colors into a cached glamour renderer, so it has to
+		// be rebuilt (and the transcript re-rendered) for the new variant.
+		if darkBackground.Load() != msg.IsDark() {
+			setDarkBackground(msg.IsDark())
+			m.md.reset()
+			m.transcript.invalidate()
+			m.refreshViewport()
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:

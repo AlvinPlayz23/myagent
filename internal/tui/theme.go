@@ -2,11 +2,9 @@ package tui
 
 import (
 	"image/color"
-	"sync"
 	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/glamour"
 )
 
 // adaptiveColor resolves to Light or Dark at render time based on the terminal
@@ -193,76 +191,4 @@ func newTheme() *theme {
 		ctxCritical: lipgloss.NewStyle().Foreground(p.failure),
 		rowHover:    lipgloss.NewStyle().Foreground(p.textBright).Background(p.rowHoverBg),
 	}
-}
-
-// myagentDarkStyle is a minimal dark glamour style tuned to the TUI palette:
-// neutral 252 body, quiet headings, subtle 235 code background, 39 links.
-var myagentDarkStyle = []byte(`{
-  "document": {"block_prefix": "\n", "block_suffix": "\n", "color": "252", "margin": 2},
-  "block_quote": {"indent": 1, "indent_token": "│ "},
-  "paragraph": {},
-  "list": {"level_indent": 2},
-  "heading": {"block_suffix": "\n", "color": "252", "bold": true},
-  "h1": {"prefix": "# ", "color": "252", "bold": true},
-  "h2": {"prefix": "## ", "color": "252", "bold": true},
-  "h3": {"prefix": "### ", "color": "250"},
-  "h4": {"prefix": "#### ", "color": "250"},
-  "h5": {"prefix": "##### ", "color": "250"},
-  "h6": {"prefix": "###### ", "color": "250"},
-  "text": {},
-  "strikethrough": {"crossed_out": true},
-  "emph": {"italic": true},
-  "strong": {"bold": true},
-  "hr": {"color": "240", "format": "\n────────\n"},
-  "item": {"block_prefix": "• "},
-  "enumeration": {"block_prefix": ". "},
-  "task": {"ticked": "[✓] ", "unticked": "[ ] "},
-  "link": {"color": "39", "underline": true},
-  "link_text": {"color": "39", "bold": true},
-  "image": {"color": "212", "underline": true},
-  "image_text": {"color": "243", "format": "Image: {{.text}}"},
-  "code": {"prefix": " ", "suffix": " ", "color": "86", "background_color": "235"},
-  "code_block": {"color": "252", "margin": 2},
-  "table": {},
-  "definition_list": {},
-  "definition_term": {},
-  "definition_description": {"block_prefix": "\n▪ "},
-  "html_block": {},
-  "html_span": {}
-}`)
-
-// mdRenderer caches a glamour renderer per word-wrap width. glamour is not
-// reactive, so we rebuild (and cache) a renderer whenever the width changes.
-type mdRenderer struct {
-	mu    sync.Mutex
-	width int
-	r     *glamour.TermRenderer
-}
-
-func newMDRenderer() *mdRenderer { return &mdRenderer{} }
-
-// render renders markdown to ANSI wrapped at width. A width <= 0 falls back to
-// returning the raw markdown so we never panic on an unsized terminal.
-func (m *mdRenderer) render(md string, width int) string {
-	if width <= 0 {
-		return md
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.r == nil || m.width != width {
-		r, err := glamour.NewTermRenderer(
-			glamour.WithStylesFromJSONBytes(myagentDarkStyle),
-			glamour.WithWordWrap(width),
-		)
-		if err != nil {
-			return md
-		}
-		m.r = r
-		m.width = width
-	}
-	out, err := m.r.Render(md)
-	if err != nil {
-		return md
-	}
-	return out
 }

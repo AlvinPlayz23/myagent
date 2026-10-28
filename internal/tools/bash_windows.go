@@ -5,6 +5,7 @@ package tools
 import (
 	"fmt"
 	"os/exec"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -18,9 +19,22 @@ type processGroup struct {
 	release func()
 }
 
-// prepareProcessGroup is a no-op on Windows; containment is set up after
-// Start via the Job Object.
-func prepareProcessGroup(cmd *exec.Cmd) {}
+// prepareProcessGroup hides the console window Windows would otherwise
+// allocate for the shell. Windows creates a console for a console-subsystem
+// child when its parent has none, so a shell spawned by a console-less parent
+// (the desktop app's `myagent serve`) gets a *new visible* conhost window for
+// the lifetime of every command. Stdio is piped and stdin is NUL, so the
+// window can never show anything useful. HideWindow adds STARTF_USESHOWWINDOW
+// + SW_HIDE and CREATE_NO_WINDOW suppresses console creation outright; setting
+// both is belt-and-braces. Tree containment is unaffected: it is attached as a
+// Job Object after Start.
+func prepareProcessGroup(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+}
 
 // attachProcessGroup assigns the started process to a fresh Job Object. The
 // job deliberately does NOT use JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: background

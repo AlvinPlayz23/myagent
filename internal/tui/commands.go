@@ -208,7 +208,7 @@ const initPrompt = `Analyse this repository and create an AGENTS.md file at its 
 
 AGENTS.md is read automatically at the start of every future run in this
 directory, so it should capture what an agent cannot cheaply rediscover each
-time. Work in this order:
+time. (A global file at ~/.myagent/AGENTS.md also applies to every run; keep his file focused on this repository.) Work in this order:
 
 1. Explore before writing. Read the README, the build/package manifests, the
    CI configuration, and enough of the source tree to understand how the code

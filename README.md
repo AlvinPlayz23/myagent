@@ -214,11 +214,13 @@ run under `cmd.exe`.
 
 ### Repository guidance (`AGENTS.md`)
 
-Before every agent run, myagent looks for `AGENTS.md` starting at the current
-working directory and walking upward to the filesystem root. All discovered
-files are included in the system prompt from outermost to innermost directory,
-so instructions closer to the working directory are more specific. Missing,
-unreadable, or non-file `AGENTS.md` entries are ignored and never prevent a run.
+Before every agent run, myagent loads `AGENTS.md` guidance from exactly two
+places: the global config dir (`~/.myagent/AGENTS.md`, honoring `MYAGENT_DIR`)
+and the project (`<cwd>/AGENTS.md`) — the working directory itself, not its
+parent directories. When both exist, the global instructions come first and
+the project ones last, so project guidance appears later in the system prompt
+and takes precedence. Missing, unreadable, or non-file `AGENTS.md` entries are
+ignored and never prevent a run.
 
 ---
 

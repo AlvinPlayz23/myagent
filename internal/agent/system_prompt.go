@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/AlvinPlayz23/myagent/internal/config"
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 )
 
@@ -253,28 +254,34 @@ func buildGuidelines(enabled map[string]bool) string {
 	return strings.Join(g, "\n")
 }
 
-// loadRepositoryGuidance collects AGENTS.md files from the filesystem root to
-// cwd. Instructions in deeper directories appear later and are more specific.
-// Missing, unreadable, and non-regular entries are ignored so guidance never
-// prevents the agent from starting.
+// loadRepositoryGuidance collects AGENTS.md guidance from exactly two places:
+// the global config dir (~/.myagent/AGENTS.md, honoring MYAGENT_DIR) and the
+// project (<cwd>/AGENTS.md). When both exist the global instructions come
+// first and the project ones last, so project guidance appears later in the
+// system prompt and takes precedence. Missing, unreadable, and non-regular
+// entries are ignored so guidance never prevents the agent from starting.
 func loadRepositoryGuidance(cwd string) string {
 	var paths []string
-	for dir := filepath.Clean(cwd); ; {
-		path := filepath.Join(dir, "AGENTS.md")
+	seen := map[string]bool{}
+	add := func(path string) {
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			seen[path] = true
 			paths = append(paths, path)
 		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
 
+	if globalDir, err := config.Dir(); err == nil {
+		add(filepath.Join(globalDir, "AGENTS.md"))
+	}
+	add(filepath.Join(cwd, "AGENTS.md"))
+
 	var b strings.Builder
-	for i := len(paths) - 1; i >= 0; i-- {
-		contents, err := os.ReadFile(paths[i])
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
 		if err != nil || len(contents) == 0 {
 			continue
 		}
@@ -282,7 +289,7 @@ func loadRepositoryGuidance(cwd string) string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString("Instructions from ")
-		b.WriteString(filepath.ToSlash(paths[i]))
+		b.WriteString(filepath.ToSlash(path))
 		b.WriteString(":\n")
 		b.Write(contents)
 	}

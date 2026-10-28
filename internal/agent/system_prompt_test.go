@@ -11,29 +11,26 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-func TestBuildSystemPromptLoadsAGENTSFilesFromRootToCwd(t *testing.T) {
-	root := t.TempDir()
-	nested := filepath.Join(root, "service", "api")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeAGENTS(t, filepath.Join(root, "AGENTS.md"), "root instruction")
-	writeAGENTS(t, filepath.Join(root, "service", "AGENTS.md"), "service instruction")
-	writeAGENTS(t, filepath.Join(nested, "AGENTS.md"), "api instruction")
+func TestBuildSystemPromptLoadsGlobalAndProjectGuidance(t *testing.T) {
+	project := t.TempDir()
+	global := t.TempDir()
+	t.Setenv("MYAGENT_DIR", global)
+	writeAGENTS(t, filepath.Join(global, "AGENTS.md"), "global instruction")
+	writeAGENTS(t, filepath.Join(project, "AGENTS.md"), "project instruction")
 
-	prompt := BuildSystemPrompt(tools.NewRegistry(), nested)
-	rootIndex := strings.Index(prompt, "root instruction")
-	serviceIndex := strings.Index(prompt, "service instruction")
-	apiIndex := strings.Index(prompt, "api instruction")
-	if rootIndex == -1 || serviceIndex == -1 || apiIndex == -1 {
-		t.Fatalf("prompt did not include all AGENTS.md files:\n%s", prompt)
+	prompt := BuildSystemPrompt(tools.NewRegistry(), project)
+	globalIndex := strings.Index(prompt, "global instruction")
+	projectIndex := strings.Index(prompt, "project instruction")
+	if globalIndex == -1 || projectIndex == -1 {
+		t.Fatalf("prompt did not include both guidance files:\n%s", prompt)
 	}
-	if rootIndex > serviceIndex || serviceIndex > apiIndex {
-		t.Fatalf("guidance order is not root to cwd:\n%s", prompt)
+	if globalIndex > projectIndex {
+		t.Fatalf("guidance order is not global then project:\n%s", prompt)
 	}
 }
 
 func TestBuildSystemPromptOmitsGuidanceSectionWhenNoAGENTSFileExists(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
 	prompt := BuildSystemPrompt(tools.NewRegistry(), t.TempDir())
 	if strings.Contains(prompt, "Repository instructions:") {
 		t.Fatalf("prompt unexpectedly contains repository guidance:\n%s", prompt)
@@ -57,12 +54,41 @@ func TestLoadRepositoryGuidanceSkipsNonRegularAGENTSFile(t *testing.T) {
 
 func TestHasRepositoryGuidance(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("MYAGENT_DIR", t.TempDir())
 	if HasRepositoryGuidance(root) {
 		t.Fatal("HasRepositoryGuidance = true without AGENTS.md")
 	}
 	writeAGENTS(t, filepath.Join(root, "AGENTS.md"), "follow the rules")
 	if !HasRepositoryGuidance(root) {
 		t.Fatal("HasRepositoryGuidance = false with AGENTS.md")
+	}
+}
+
+func TestLoadRepositoryGuidanceGlobalOnly(t *testing.T) {
+	global := t.TempDir()
+	t.Setenv("MYAGENT_DIR", global)
+	writeAGENTS(t, filepath.Join(global, "AGENTS.md"), "global rules")
+	if got := loadRepositoryGuidance(t.TempDir()); !strings.Contains(got, "global rules") {
+		t.Fatalf("guidance missing global file:\n%s", got)
+	}
+}
+
+func TestLoadRepositoryGuidanceProjectOnly(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	project := t.TempDir()
+	writeAGENTS(t, filepath.Join(project, "AGENTS.md"), "project rules")
+	if got := loadRepositoryGuidance(project); !strings.Contains(got, "project rules") {
+		t.Fatalf("guidance missing project file:\n%s", got)
+	}
+}
+
+func TestLoadRepositoryGuidanceDedupesGlobalEqualToCwd(t *testing.T) {
+	same := t.TempDir()
+	t.Setenv("MYAGENT_DIR", same)
+	writeAGENTS(t, filepath.Join(same, "AGENTS.md"), "once only")
+	got := loadRepositoryGuidance(same)
+	if n := strings.Count(got, "once only"); n != 1 {
+		t.Fatalf("guidance loaded %d times, want 1:\n%s", n, got)
 	}
 }
 

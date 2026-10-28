@@ -1,0 +1,53 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on the same branch to save free plan minutes.
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Release binaries are built with CGO_ENABLED=0 (goreleaser), so the
+      # Windows CI job tests that same configuration (purego clipboard path,
+      # no gcc requirement). Linux keeps the default CGO configuration.
+      CGO_ENABLED: ${{ matrix.os == 'windows-latest' && '0' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+
+  race:
+    name: test -race (ubuntu)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The agent loop, queueing, and the WebSocket server are
+      # concurrency-heavy and cannot usefully run -race under cgo on the
+      # author's Windows machine; CI is where race coverage lives.
+      - run: go test -race ./...

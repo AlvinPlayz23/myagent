@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -9,8 +10,9 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-// EditTool performs exact-match text replacements in a single file.
-// Ported from pi edit.ts. Each edit's oldText must match a unique region.
+// EditTool performs text replacements in a single file.
+// Ported from pi edit.ts: matches exactly first, then falls back to a
+// whitespace/Unicode-tolerant match, and preserves CRLF and BOM on write.
 type EditTool struct {
 	Cwd string
 }
@@ -50,11 +52,6 @@ func (t *EditTool) Parameters() map[string]any {
 	}
 }
 
-type editEntry struct {
-	oldText string
-	newText string
-}
-
 func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (*types.ToolResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("Operation aborted")
@@ -63,7 +60,12 @@ func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	if !ok || path == "" {
 		return nil, fmt.Errorf("edit: missing required 'path' argument")
 	}
-	edits, err := parseEdits(args["edits"])
+	editsArg, ok := args["edits"]
+	if !ok || editsArg == nil {
+		// Some models send oldText/newText at the top level instead of edits[].
+		editsArg = args
+	}
+	edits, err := parseEdits(editsArg)
 	if err != nil {
 		return nil, err
 	}
@@ -76,34 +78,52 @@ func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	if err != nil {
 		return nil, fmt.Errorf("Could not edit file: %s. %v.", path, err)
 	}
-	content := string(data)
 
-	// Apply each edit against the ORIGINAL content, requiring a unique match.
-	// Ported from pi applyEditsToNormalizedContent semantics (exact match,
-	// non-unique fails).
-	newContent := content
-	for i, e := range edits {
-		count := strings.Count(content, e.oldText)
-		if count == 0 {
-			return nil, fmt.Errorf("edits[%d].oldText not found in %s", i, path)
-		}
-		if count > 1 {
-			return nil, fmt.Errorf("edits[%d].oldText is not unique in %s (%d matches). Provide a larger, unique oldText.", i, path, count)
-		}
-		newContent = strings.Replace(newContent, e.oldText, e.newText, 1)
+	// Strip the BOM before matching: the model cannot see it, so it will never
+	// include it in oldText. Re-add it when writing.
+	rawContent := string(data)
+	bom := ""
+	if strings.HasPrefix(rawContent, "\uFEFF") {
+		bom = "\uFEFF"
+		rawContent = strings.TrimPrefix(rawContent, "\uFEFF")
+	}
+	originalEnding := detectLineEnding(rawContent)
+	normalizedContent := normalizeToLF(rawContent)
+
+	_, newContent, err := applyEditsToNormalizedContent(normalizedContent, edits, path)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("Operation aborted")
 	}
-	if err := os.WriteFile(abs, []byte(newContent), 0o644); err != nil {
+	finalContent := bom + restoreLineEndings(newContent, originalEnding)
+	if err := os.WriteFile(abs, []byte(finalContent), 0o644); err != nil {
 		return nil, err
 	}
 
 	return types.TextResult(fmt.Sprintf("Successfully replaced %d block(s) in %s.", len(edits), path), nil), nil
 }
 
+// parseEdits accepts the schema shape plus the malformed shapes models
+// occasionally emit: edits as a JSON string, a single edit object, or
+// oldText/newText at the top level. Mirrors pi's prepareEditArguments.
 func parseEdits(v any) ([]editEntry, error) {
+	if s, ok := v.(string); ok {
+		var parsed any
+		if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+			v = parsed
+		}
+	}
+	if m, ok := v.(map[string]any); ok {
+		_, hasOld := m["oldText"].(string)
+		_, hasNew := m["newText"].(string)
+		if hasOld && hasNew {
+			v = []any{m}
+		}
+	}
+
 	arr, ok := v.([]any)
 	if !ok {
 		return nil, fmt.Errorf("edit: 'edits' must be an array")
