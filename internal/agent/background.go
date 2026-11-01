@@ -98,6 +98,15 @@ func (s *backgroundScheduler) start(task *BackgroundTask) (*types.ToolResult, er
 		s.mu.Unlock()
 		return nil, fmt.Errorf("duplicate background task id %q", task.ID)
 	}
+	// Id uniqueness also spans completions that finished but are not yet
+	// delivered: `running` no longer holds them, and admitting a re-used id
+	// here would break callers that dedup on task id for delivery.
+	for _, c := range s.done {
+		if c.task.ID == task.ID {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("duplicate background task id %q", task.ID)
+		}
+	}
 	s.running[task.ID] = struct{}{}
 	s.wg.Add(1)
 	s.mu.Unlock()
