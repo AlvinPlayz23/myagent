@@ -153,7 +153,7 @@ type promptChoice struct {
 }
 
 var promptChoices = []promptChoice{
-	{style: promptDefault, label: "Default", description: "(default) rounded box that grows with input"},
+	{style: promptDefault, label: "Default", description: "(default) raised panel that grows with input"},
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
@@ -552,7 +552,7 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything… (enter send · / commands)"
+	ta.Placeholder = "Ask anything…"
 	ta.ShowLineNumbers = false
 	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()
@@ -912,14 +912,12 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // separators cost no extra rows.
 const chromeHeight = 3
 
-// composerHeight reports the rows the composer occupies, including the chrome
-// around the textarea: the rules in the ruled style, the rounded border in
-// the boxed default.
+// composerHeight includes the editable rows and the active prompt chrome.
 func (m *model) composerHeight() int {
 	if m.promptStyle == promptRuled {
 		return m.input.Height() + composerChromeRows
 	}
-	return m.input.Height() + m.th.composerBox.GetVerticalFrameSize()
+	return m.input.Height() + 5
 }
 
 // fixedHeight is the part of the layout the transcript can never use. The
@@ -2080,24 +2078,29 @@ func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// syncComposerStyle reconfigures the textarea for the active prompt style.
-// Both styles grow with their content between one row and the terminal's
-// budget; MaxContentHeight is what keeps MaxHeight a display cap rather than
-// an input limit. SetWidth must run last: it re-measures the gutter and, in
-// doing so, refits the height to the new bounds. The boxed default renders
-// inside the theme's rounded box, so its textarea is narrowed by the box's
-// own border and padding.
+// syncComposerStyle fits the editable area inside the prompt surface.
 func (m *model) syncComposerStyle() {
-	m.input.Prompt = ruledPrompt
+	m.input.Prompt = ""
+	if m.promptStyle == promptRuled {
+		m.input.Prompt = ruledPrompt
+	}
 	m.input.DynamicHeight = true
 	m.input.MinHeight = composerMinRows
 	m.input.MaxHeight = m.composerGrowthLimit()
 	m.input.MaxContentHeight = composerContentRows
-	width := max(1, m.width)
+	styles := m.input.Styles()
+	bg := m.th.tokens.Background.Raised.Base.Color()
+	base := lipgloss.NewStyle().Foreground(m.th.tokens.Text.Base.Color())
 	if m.promptStyle != promptRuled {
-		width = max(1, m.width-m.th.composerBox.GetHorizontalFrameSize())
+		base = base.Background(bg)
 	}
-	m.input.SetWidth(width)
+	styles.Focused.Base, styles.Blurred.Base = base, base
+	styles.Focused.Text, styles.Blurred.Text = base, base
+	styles.Focused.CursorLine, styles.Blurred.CursorLine = base, base
+	styles.Focused.Placeholder = base.Foreground(m.th.tokens.Text.Muted.Color())
+	styles.Blurred.Placeholder = styles.Focused.Placeholder
+	m.input.SetStyles(styles)
+	m.KitSetComposerWidth(max(1, m.width))
 }
 
 // composerGrowthLimit is the tallest the textarea may render on this
@@ -2107,7 +2110,11 @@ func (m *model) composerGrowthLimit() int {
 	if m.height <= 0 {
 		return composerMaxRows
 	}
-	budget := m.height - chromeHeight - composerChromeRows - composerReserve
+	chrome := composerChromeRows
+	if m.promptStyle != promptRuled {
+		chrome = 5
+	}
+	budget := m.height - chromeHeight - chrome - composerReserve
 	return max(composerMinRows, min(composerMaxRows, budget))
 }
 

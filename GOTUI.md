@@ -643,3 +643,34 @@ TUI starts looking and behaving like OpenCode rather than working like OpenTUI.
 - Design-only references (do not adopt): RuneTUI (on-bubbletea declarative kit, early),
   tuigo / retui / ZeroTUI (pre-1.0, own renderers), rivo/tview (mature but wrong aesthetic
   and weak at streaming re-render).
+
+
+## OpenCode visual parity
+
+The default gotui shell follows OpenCode v2.3.0, checked against the running
+upstream binary and source revision `73de67f` (2026-11-16). This is a Go port of
+the component composition, not an embedded web view or a dependency on OpenCode.
+The myagent wordmark, commands, providers, tools and existing customizations stay
+native to myagent.
+
+Source-to-port map (paths below are in `anomalyco/opencode/packages/tui/src`):
+
+| Upstream component | myagent equivalent |
+| --- | --- |
+| `routes/home.tsx`, `component/logo.tsx` | `internal/tui/welcome.go`, centered home group in `internal/ui/app/shell.go` |
+| `component/prompt/index.tsx`, `component/prompt/metadata.tsx` | Raised left-accent composer in `internal/tui/kit.go`; textarea sizing in `internal/tui/model.go` |
+| `routes/session/index.tsx`, `routes/session/message-parts.tsx` | Transcript message, thinking and tool renderers in `internal/tui/transcript.go` |
+| `ui/dialog.tsx`, `ui/dialog-select.tsx`, `component/command-palette.tsx` | `internal/ui/kit/dialog.go`, `internal/ui/app/picker.go` |
+| `theme/assets/v2/opencode.json` | Semantic tokens in `internal/tui/theme.go` |
+
+The home prompt has a 75-cell maximum width and shares its horizontal bounds
+with the logo. Session content uses a two-cell outer inset. The prompt's wrap
+width is applied before its height is measured, so resizing, a usage rail or a
+long draft cannot make the composer overlap the transcript. The original ruled
+prompt and alternate welcome styles remain available through `/customize`.
+
+Verification includes exact-cell frame goldens, narrow/wide composer sizing,
+home centering and session rail suppression, input/selection interaction tests,
+and screenshots of both real CLIs in a 120×40 terminal. The earlier byte-identical
+legacy/golden claims above describe the initial gotui migration, before this
+intentional visual restyle.

@@ -168,15 +168,15 @@ func TestRenderToolShowsMarkerAndMetadata(t *testing.T) {
 	tr.endTool("call", types.TextResult("line one\nline two", nil), false)
 
 	plain := ansi.Strip(tr.renderTool(b, 80))
-	if !strings.Contains(plain, "● read main.go") {
-		t.Fatalf("missing kj-style header: %q", plain)
+	if !strings.Contains(plain, "   ✓ read main.go") {
+		t.Fatalf("missing OpenCode-style tool row: %q", plain)
 	}
 	// endTool overwrites the pinned duration with the real elapsed time, so
 	// assert the metadata shape rather than an exact duration value.
 	if !strings.Contains(plain, "2 lines") || !strings.Contains(plain, "17 B") {
 		t.Fatalf("missing line/byte metadata: %q", plain)
 	}
-	if !strings.Contains(plain, "└") {
+	if !strings.Contains(plain, "     └") {
 		t.Fatalf("missing metadata leader: %q", plain)
 	}
 }
@@ -188,7 +188,7 @@ func TestRenderToolPendingHasNoMetadata(t *testing.T) {
 	if strings.Contains(plain, "└") {
 		t.Fatalf("pending tool rendered metadata: %q", plain)
 	}
-	if !strings.Contains(plain, "● $ go test ./...") {
+	if !strings.Contains(plain, "   │ $ go test ./...") {
 		t.Fatalf("pending tool missing header: %q", plain)
 	}
 }
@@ -203,7 +203,7 @@ func TestFoldReadsCollapsesConsecutiveReads(t *testing.T) {
 	}
 
 	out := ansi.Strip(tr.render(80))
-	if !strings.Contains(out, "● read 3 files") {
+	if !strings.Contains(out, "   ✓ read 3 files") {
 		t.Fatalf("reads were not folded: %q", out)
 	}
 	for _, path := range []string{"a.go", "b.go", "c.go"} {
@@ -215,10 +215,10 @@ func TestFoldReadsCollapsesConsecutiveReads(t *testing.T) {
 	// ctrl+o restores the individual read blocks.
 	tr.toggleExpand()
 	expanded := ansi.Strip(tr.render(80))
-	if strings.Contains(expanded, "● read 3 files") {
+	if strings.Contains(expanded, "   ✓ read 3 files") {
 		t.Fatalf("expanded view kept the fold: %q", expanded)
 	}
-	if !strings.Contains(expanded, "● read a.go") {
+	if !strings.Contains(expanded, "   ✓ read a.go") {
 		t.Fatalf("expanded view missing individual read: %q", expanded)
 	}
 }
@@ -301,6 +301,13 @@ func TestLongSingleLineBlocksWrapToWidth(t *testing.T) {
 		}
 	}
 
+	tr.addUser(blob)
+	for i, line := range strings.Split(ansi.Strip(tr.render(width)), "\n") {
+		if len([]rune(line)) > width {
+			t.Fatalf("user message line %d exceeds width: %q", i, line)
+		}
+	}
+
 	tr.addErrorText(blob)
 	tr.addNotice(blob)
 	tr.startTool("c1", "read", map[string]any{"path": "f.go"})
@@ -313,6 +320,34 @@ func TestLongSingleLineBlocksWrapToWidth(t *testing.T) {
 	}
 }
 
+func TestMessageComponentsUseOpenCodeLayout(t *testing.T) {
+	tr := newTranscript(newTheme(), newMDRenderer())
+	tr.addUser("user message")
+	user := ansi.Strip(tr.renderBlock(tr.blocks[0], 40))
+	if !strings.Contains(user, "┃ user message") {
+		t.Fatalf("user card missing heavy left rail and padding: %q", user)
+	}
+
+	tr.beginAssistant()
+	tr.appendAssistantDelta("assistant message")
+	assistant := ansi.Strip(tr.renderBlock(tr.blocks[len(tr.blocks)-1], 40))
+	if !strings.Contains(assistant, "   assistant message") {
+		t.Fatalf("assistant markdown missing three-cell indent: %q", assistant)
+	}
+
+	tr.startTool("call", "read", map[string]any{"path": "main.go"})
+	tool := ansi.Strip(tr.renderBlock(tr.blocks[len(tr.blocks)-1], 40))
+	if !strings.Contains(tool, "   │ read main.go") {
+		t.Fatalf("pending tool missing status icon column: %q", tool)
+	}
+
+	tr.beginThinking()
+	tr.appendThinkingDelta("reasoning")
+	thinking := ansi.Strip(tr.renderBlock(tr.blocks[len(tr.blocks)-1], 40))
+	if !strings.Contains(thinking, "   ✻ Thinking") || !strings.Contains(thinking, "   │ reasoning") {
+		t.Fatalf("thinking block missing indented header and rail: %q", thinking)
+	}
+}
 
 func TestRetryNoticeExpandsWithToggle(t *testing.T) {
 	tr := newTranscript(newTheme(), newMDRenderer())

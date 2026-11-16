@@ -471,6 +471,27 @@ func TestDialogSelectMarker(t *testing.T) {
 	}
 }
 
+func TestDialogSelectSearchSpacing(t *testing.T) {
+	selectDialog := NewDialogSelect(DialogSelectOpts{
+		Placeholder: "Search commands",
+		Items:       []SelectItem{{ID: "help", Title: "Help"}},
+	})
+	selectDialog.Layout(Rect{W: 30, H: 4})
+	lines := strings.Split(ansi.Strip(selectDialog.Render(30, 4)), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("rendered dialog has %d rows, want search, gap, and list: %q", len(lines), lines)
+	}
+	if got := strings.TrimSpace(lines[0]); got != "Search commands" {
+		t.Fatalf("search placeholder = %q, want plain placeholder", got)
+	}
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Fatalf("search/list gap = %q, want blank row", lines[1])
+	}
+	if !strings.Contains(lines[2], "Help") {
+		t.Fatalf("list row missing after search gap: %q", lines[2])
+	}
+}
+
 // TestDialogSelectHeightCap: rows cap at floor(h/2)-6 with an "…" overflow row.
 func TestDialogSelectHeightCap(t *testing.T) {
 	sel := NewDialogSelect(DialogSelectOpts{Items: manyItems(12), Placeholder: "search"})
@@ -646,7 +667,7 @@ func TestGoldenDialogFrames(t *testing.T) {
 			raw := root.Render(size.w, size.h)
 			assertFrameSize(t, raw, size.w, size.h)
 			plain := trimRightLines(ansi.Strip(raw))
-			for _, want := range []string{"Select a model", "⌕ search models", "Anthropic", "● Claude Opus", "cancel esc", "confirm enter"} {
+			for _, want := range []string{"Select a model", "search models", "Anthropic", "● Claude Opus", "cancel esc", "confirm enter"} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("frame is missing %q\n%s", want, plain)
 				}

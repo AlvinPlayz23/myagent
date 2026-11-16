@@ -94,14 +94,14 @@ func TestThinkingRenderStates(t *testing.T) {
 	tr.beginThinking()
 	tr.appendThinkingDelta("musing")
 	out := tr.render(80)
-	if !strings.Contains(out, "✻ Thinking…") || !strings.Contains(out, "musing") {
+	if !strings.Contains(out, "   ✻ Thinking…") || !strings.Contains(out, "   │ musing") {
 		t.Fatalf("streaming render = %q", out)
 	}
 	tr.endThinking()
 
 	// Completed state flips the header.
 	out = tr.render(80)
-	if !strings.Contains(out, "✻ Thought") || !strings.Contains(out, "musing") {
+	if !strings.Contains(out, "   ✻ Thought") || !strings.Contains(out, "   │ musing") {
 		t.Fatalf("completed render = %q", out)
 	}
 
@@ -135,7 +135,7 @@ func TestThinkingElapsedRendersDuration(t *testing.T) {
 		t.Fatalf("thinkTimed = %v, thinkDur = %v, want timed ~12s", b.thinkTimed, b.thinkDur)
 	}
 	plain := ansi.Strip(tr.render(80))
-	if !strings.Contains(plain, "✻ Thought for 12s") {
+	if !strings.Contains(plain, "✻ Thought · 12s") {
 		t.Fatalf("completed header missing duration:\n%s", plain)
 	}
 }
@@ -182,13 +182,13 @@ func TestSeededThinkingRendersWithoutDuration(t *testing.T) {
 
 func TestFormatThinkDur(t *testing.T) {
 	cases := map[time.Duration]string{
-		-2 * time.Second:   "1s",
-		0:                 "1s",
+		-2 * time.Second:       "1s",
+		0:                      "1s",
 		400 * time.Millisecond: "1s",
-		12 * time.Second:   "12s",
-		59 * time.Second:   "59s",
-		90 * time.Second:   "1m30s",
-		5 * time.Minute:     "5m0s",
+		12 * time.Second:       "12s",
+		59 * time.Second:       "59s",
+		90 * time.Second:       "1m30s",
+		5 * time.Minute:        "5m0s",
 	}
 	for d, want := range cases {
 		if got := formatThinkDur(d); got != want {

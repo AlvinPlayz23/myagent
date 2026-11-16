@@ -58,8 +58,8 @@ func (s *Shell) syncSelectPicker(state tui.KitPickerState) {
 }
 
 // openPicker builds the dialog surface for the active legacy picker. Enter in
-// the body and the confirm button share KitPickerAccept; Esc and the backdrop
-// share KitPickerCancel through the dialog's Dismissed hook.
+// the body accepts; non-command pickers also expose a confirm footer action.
+// Esc and backdrop dismissal share KitPickerCancel through Dismissed.
 func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 	sel := kit.NewDialogSelect(kit.DialogSelectOpts{
 		ID:          "kit.picker",
@@ -74,18 +74,21 @@ func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 		s.emit(s.host.KitPickerAccept(item.ID))
 		return true
 	}
-	footer := kit.NewDialogFooter(
-		kit.DialogButton{Label: "cancel", Key: "esc", Action: func() bool {
-			s.cancelPicker()
-			return true
-		}},
-		kit.DialogButton{Label: "confirm", Key: "enter", Primary: true, Action: func() bool {
-			if id := sel.SelectedID(); id != "" {
-				s.emit(s.host.KitPickerAccept(id))
-			}
-			return true
-		}},
-	)
+	var footer *kit.DialogFooter
+	if state.Kind != "commands" {
+		footer = kit.NewDialogFooter(
+			kit.DialogButton{Label: "cancel", Key: "esc", Action: func() bool {
+				s.cancelPicker()
+				return true
+			}},
+			kit.DialogButton{Label: "confirm", Key: "enter", Primary: true, Action: func() bool {
+				if id := sel.SelectedID(); id != "" {
+					s.emit(s.host.KitPickerAccept(id))
+				}
+				return true
+			}},
+		)
+	}
 	layout := kit.NewDialogLayout(kit.DialogLayoutOpts{
 		ID:     "kit.picker.dialog",
 		Title:  state.Title,

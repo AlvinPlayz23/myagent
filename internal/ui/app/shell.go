@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/AlvinPlayz23/myagent/internal/tui"
@@ -93,6 +94,7 @@ type Shell struct {
 	lastContentW      int
 	lastTranscriptH   int
 	lastComposerH     int
+	lastComposerW     int
 	lastWidth         int
 	lastNotice        string
 	lastTick          time.Time
@@ -316,6 +318,11 @@ func (s *Shell) Sync() {
 	s.emitNotice(s.host.KitNotice())
 
 	m := s.measure(s.width, s.height)
+	promptW := m.promptWidth(welcome)
+	if host, ok := s.host.(interface{ KitSetComposerWidth(int) }); ok {
+		host.KitSetComposerWidth(promptW)
+		m = s.measure(s.width, s.height)
+	}
 	contentW := m.contentWidth(welcome)
 	s.host.KitSetSize(contentW, m.transcriptH)
 	rev := s.host.KitTranscriptRev()
@@ -333,8 +340,8 @@ func (s *Shell) Sync() {
 	if !s.haveState ||
 		crev != s.lastComposerRev ||
 		s.width != s.lastWidth ||
-		m.composerH != s.lastComposerH {
-		s.composer.setContent(s.host.KitComposer(s.width))
+		m.composerH != s.lastComposerH || promptW != s.lastComposerW {
+		s.composer.setContent(s.host.KitComposer(promptW))
 		dirty = true
 	}
 	if m.transcriptH != s.lastTranscriptH || m.composerH != s.lastComposerH ||
@@ -351,6 +358,7 @@ func (s *Shell) Sync() {
 	s.lastContentW = contentW
 	s.lastTranscriptH = m.transcriptH
 	s.lastComposerH = m.composerH
+	s.lastComposerW = promptW
 	s.lastWidth = s.width
 	s.contentW = contentW
 	s.transcriptH = m.transcriptH
@@ -466,8 +474,7 @@ func mapTodos(items []tui.KitTodo) []kit.TodoItem {
 	return out
 }
 
-// shellMetrics is the S4 geometry resolution. With no tabs/sidebar/todo/jump/
-// footer it collapses to the S3 two-band split exactly.
+// shellMetrics resolves the home group and session bands in terminal cells.
 type shellMetrics struct {
 	tabsH       int
 	sidebarW    int
@@ -482,10 +489,20 @@ type shellMetrics struct {
 }
 
 func (m shellMetrics) contentWidth(welcome bool) int {
-	if welcome || m.mainW <= 0 {
-		return max(0, m.mainW)
+	if welcome {
+		return m.promptWidth(true)
 	}
-	return max(0, m.mainW-1)
+	return max(0, m.mainW-2*m.inset()-1)
+}
+
+func (m shellMetrics) inset() int { return min(2, m.mainW/20) }
+
+func (m shellMetrics) promptWidth(welcome bool) int {
+	w := max(0, m.mainW-2*m.inset())
+	if welcome {
+		return min(75, w)
+	}
+	return w
 }
 
 func (s *Shell) measure(w, h int) shellMetrics {
@@ -494,7 +511,7 @@ func (s *Shell) measure(w, h int) shellMetrics {
 	if s.tabs.Len() > 1 {
 		m.tabsH = 1
 	}
-	if w >= 106 && s.sidebar.Len() > 0 {
+	if !s.host.KitShowWelcome() && w >= 106 && s.sidebar.Len() > 0 {
 		m.sidebarW = 28
 	}
 	m.mainW = max(0, w-m.sidebarW)
@@ -508,6 +525,13 @@ func (s *Shell) measure(w, h int) shellMetrics {
 		m.jumpH = 1
 	}
 	m.transcriptH = max(0, m.bodyH-m.todoH-m.jumpH-m.dockH-m.composerH-m.footerH)
+	if s.host.KitShowWelcome() {
+		if host, ok := s.host.(interface{ KitWelcomeHeight(int) int }); ok {
+			m.transcriptH = clamp(host.KitWelcomeHeight(m.transcriptH), 0, m.transcriptH)
+		} else {
+			m.transcriptH = min(8, m.transcriptH)
+		}
+	}
 	return m
 }
 
@@ -530,22 +554,28 @@ func (s *Shell) Layout(r kit.Rect) {
 	body := kit.Rect{X: r.X, Y: r.Y + m.tabsH, W: m.mainW, H: m.bodyH}
 	s.bodyRect = body
 
+	x := body.X + m.inset()
+	width := m.promptWidth(s.host.KitShowWelcome())
 	y := body.Y
-	s.scroll.Layout(kit.Rect{X: body.X, Y: y, W: body.W, H: m.transcriptH})
+	if s.host.KitShowWelcome() {
+		x = body.X + (body.W-width)/2
+		y += max(0, (body.H-m.footerH-m.transcriptH-m.dockH-m.composerH)/2)
+	}
+	s.scroll.Layout(kit.Rect{X: x, Y: y, W: width, H: m.transcriptH})
 	y += m.transcriptH
-	s.jumpR = kit.Rect{X: body.X, Y: y, W: body.W, H: m.jumpH}
+	s.jumpR = kit.Rect{X: x, Y: y, W: width, H: m.jumpH}
 	s.jump.Layout(s.jumpR)
 	y += m.jumpH
-	s.todoR = kit.Rect{X: body.X, Y: y, W: body.W, H: m.todoH}
+	s.todoR = kit.Rect{X: x, Y: y, W: width, H: m.todoH}
 	s.todo.Layout(s.todoR)
 	y += m.todoH
-	s.dockR = kit.Rect{X: body.X, Y: y, W: body.W, H: m.dockH}
+	s.dockR = kit.Rect{X: x, Y: y, W: width, H: m.dockH}
 	s.dock.Layout(s.dockR)
 	y += m.dockH
-	s.composerR = kit.Rect{X: body.X, Y: y, W: body.W, H: m.composerH}
+	s.composerR = kit.Rect{X: x, Y: y, W: width, H: m.composerH}
 	s.composer.Layout(s.composerR)
 	y += m.composerH
-	s.footerR = kit.Rect{X: body.X, Y: y, W: body.W, H: m.footerH}
+	s.footerR = kit.Rect{X: body.X + m.inset(), Y: body.Y + body.H - m.footerH, W: max(0, body.W-2*m.inset()), H: m.footerH}
 	s.footer.Layout(s.footerR)
 	s.sideR = kit.Rect{X: body.X + body.W, Y: body.Y, W: m.sidebarW, H: m.bodyH}
 	s.sidebar.Layout(s.sideR)
@@ -561,55 +591,20 @@ func (s *Shell) Layout(r kit.Rect) {
 	s.layoutDirty = false
 }
 
-// Render paints the bands exactly. Root stamps this into its full-screen base
-// layer, so the concatenation must be exactly w by h.
+// renderBands uses the same bounds for painting and hit testing.
 func (s *Shell) renderBands(w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
-	mainW := w
-	if s.sidebarW > 0 && s.sidebarW < w {
-		mainW = w - s.sidebarW
-	}
-	bodyH := max(0, h-s.tabsH)
-	var lines []string
-	add := func(content string, rows int) {
-		if rows <= 0 {
-			return
+	layers := []*lipgloss.Layer{}
+	for _, child := range []kit.Widget{s.scroll, s.jump, s.todo, s.dock, s.composer, s.footer, s.sidebar, s.tabs} {
+		r := kit.WidgetBounds(child)
+		if r.Empty() {
+			continue
 		}
-		if content == "" {
-			for i := 0; i < rows; i++ {
-				lines = append(lines, "")
-			}
-			return
-		}
-		lines = append(lines, strings.Split(content, "\n")...)
+		layers = append(layers, lipgloss.NewLayer(child.Render(r.W, r.H)).X(r.X).Y(r.Y))
 	}
-	add(s.scroll.Render(mainW, s.transcriptH), s.transcriptH)
-	add(s.jump.Render(mainW, s.jumpH), s.jumpH)
-	add(s.todo.Render(mainW, s.todoH), s.todoH)
-	add(s.dock.Render(mainW, s.dockH), s.dockH)
-	add(s.composer.Render(mainW, s.composerH), s.composerH)
-	add(s.footer.Render(mainW, s.footerH), s.footerH)
-	left := fitBlock(strings.Join(lines, "\n"), mainW, bodyH)
-	if s.sidebarW > 0 && s.sidebarW <= w {
-		side := s.sidebar.Render(s.sidebarW, bodyH)
-		left = joinColumns(left, side, mainW, s.sidebarW, bodyH)
-	}
-	if s.tabsH > 0 {
-		left = s.tabs.Render(w, s.tabsH) + "\n" + left
-	}
-	return fitBlock(left, w, h)
-}
-
-// joinColumns stitches two exact-height blocks side by side.
-func joinColumns(left, right string, lw, rw, h int) string {
-	ll := strings.Split(fitBlock(left, lw, h), "\n")
-	rl := strings.Split(fitBlock(right, rw, h), "\n")
-	for i := 0; i < h && i < len(ll) && i < len(rl); i++ {
-		ll[i] += rl[i]
-	}
-	return strings.Join(ll, "\n")
+	return fitBlock(lipgloss.NewCompositor(layers...).Render(), w, h)
 }
 
 // NeedsLayout reports staged scroll content, a composer/chrome height change,

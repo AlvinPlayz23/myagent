@@ -396,7 +396,7 @@ func (b *ScrollBox) paint(cv *lipgloss.Canvas, w, h int) {
 // scrollbar.thumb approval, so the thumb keeps borrowing Text.Strong; revisit
 // only if a dedicated scrollbar.thumb role is approved.
 func (b *ScrollBox) drawScrollbar(cv *lipgloss.Canvas, w, h int) {
-	if !b.ShowScrollbar || w <= 0 || h <= 0 {
+	if !b.ShowScrollbar || w <= 0 || h <= 0 || b.contentH <= b.viewportH {
 		return
 	}
 	theme := DefaultTheme()

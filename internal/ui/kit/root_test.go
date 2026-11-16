@@ -235,3 +235,23 @@ func TestRootHiddenWidgetLeavesFocus(t *testing.T) {
 		t.Fatal("hidden widget remained hittable")
 	}
 }
+
+func TestRootComposesToastInsideItsOwnBounds(t *testing.T) {
+	toast := NewToastHost(ToastOpts{ID: "toast", MaxWidth: 40})
+	toast.Show(Toast{Message: "Choose a model"})
+	root := NewRoot(nil, WithToasts(toast))
+	lines := strings.Split(ansi.Strip(root.Render(100, 30)), "\n")
+	bounds := toast.Bounds()
+	for y, line := range lines {
+		if y < bounds.Y || y >= bounds.Y+bounds.H {
+			if strings.TrimSpace(line) != "" {
+				t.Fatalf("toast painted outside its rows at %d", y)
+			}
+		} else if strings.TrimSpace(string([]rune(line)[:bounds.X])) != "" {
+			t.Fatalf("toast painted left of its bounds at %d", y)
+		}
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "Choose a model") {
+		t.Fatal("toast content missing")
+	}
+}

@@ -52,8 +52,8 @@ func TestShellS4Geometry(t *testing.T) {
 		if s.tabsH != 1 || s.sidebarW != 28 || s.mainW != 92 {
 			t.Fatalf("rails = tabs %d, sidebar %d, main %d; want 1/28/92", s.tabsH, s.sidebarW, s.mainW)
 		}
-		if s.contentW != 91 {
-			t.Fatalf("content width = %d, want 91 (scrollbar reserved)", s.contentW)
+		if s.contentW != 87 {
+			t.Fatalf("content width = %d, want 87 (scrollbar reserved)", s.contentW)
 		}
 		if s.todoH != 3 || s.footerH != 1 || s.jumpH != 0 || s.composerH != 2 {
 			t.Fatalf("heights = todo %d, footer %d, jump %d, composer %d; want 3/1/0/2",
@@ -62,16 +62,16 @@ func TestShellS4Geometry(t *testing.T) {
 		if s.transcriptH != 33 {
 			t.Fatalf("transcript height = %d, want 33", s.transcriptH)
 		}
-		if got, want := s.scroll.Bounds(), (kit.Rect{X: 0, Y: 1, W: 92, H: 33}); got != want {
+		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 88, H: 33}); got != want {
 			t.Fatalf("scroll rect = %+v, want %+v", got, want)
 		}
-		if got, want := s.todoR, (kit.Rect{X: 0, Y: 34, W: 92, H: 3}); got != want {
+		if got, want := s.todoR, (kit.Rect{X: 2, Y: 34, W: 88, H: 3}); got != want {
 			t.Fatalf("todo rect = %+v, want %+v", got, want)
 		}
-		if got, want := s.composerR, (kit.Rect{X: 0, Y: 37, W: 92, H: 2}); got != want {
+		if got, want := s.composerR, (kit.Rect{X: 2, Y: 37, W: 88, H: 2}); got != want {
 			t.Fatalf("composer rect = %+v, want %+v", got, want)
 		}
-		if got, want := s.footerR, (kit.Rect{X: 0, Y: 39, W: 92, H: 1}); got != want {
+		if got, want := s.footerR, (kit.Rect{X: 2, Y: 39, W: 88, H: 1}); got != want {
 			t.Fatalf("footer rect = %+v, want %+v", got, want)
 		}
 		if got, want := s.sideR, (kit.Rect{X: 92, Y: 1, W: 28, H: 39}); got != want {
@@ -84,21 +84,21 @@ func TestShellS4Geometry(t *testing.T) {
 		s.Resize(80, 24)
 		s.Render(80, 24)
 
-		if s.sidebarW != 0 || s.mainW != 80 || s.contentW != 79 {
-			t.Fatalf("widths = sidebar %d, main %d, content %d; want 0/80/79",
+		if s.sidebarW != 0 || s.mainW != 80 || s.contentW != 75 {
+			t.Fatalf("widths = sidebar %d, main %d, content %d; want 0/80/75",
 				s.sidebarW, s.mainW, s.contentW)
 		}
 		if s.tabsH != 1 || s.todoH != 3 || s.footerH != 1 || s.transcriptH != 17 {
 			t.Fatalf("heights = tabs %d, todo %d, footer %d, transcript %d; want 1/3/1/17",
 				s.tabsH, s.todoH, s.footerH, s.transcriptH)
 		}
-		if got, want := s.scroll.Bounds(), (kit.Rect{X: 0, Y: 1, W: 80, H: 17}); got != want {
+		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 76, H: 17}); got != want {
 			t.Fatalf("scroll rect = %+v, want %+v", got, want)
 		}
-		if got, want := s.todoR, (kit.Rect{X: 0, Y: 18, W: 80, H: 3}); got != want {
+		if got, want := s.todoR, (kit.Rect{X: 2, Y: 18, W: 76, H: 3}); got != want {
 			t.Fatalf("todo rect = %+v, want %+v", got, want)
 		}
-		if got, want := s.footerR, (kit.Rect{X: 0, Y: 23, W: 80, H: 1}); got != want {
+		if got, want := s.footerR, (kit.Rect{X: 2, Y: 23, W: 76, H: 1}); got != want {
 			t.Fatalf("footer rect = %+v, want %+v", got, want)
 		}
 	})
@@ -118,8 +118,8 @@ func TestShellS3ChromeStaysInert(t *testing.T) {
 		t.Fatalf("idle chrome = %d/%d/%d/%d/%d, want all zero",
 			s.tabsH, s.sidebarW, s.todoH, s.footerH, s.jumpH)
 	}
-	if s.contentW != 119 {
-		t.Fatalf("content width = %d, want 119", s.contentW)
+	if s.contentW != 115 {
+		t.Fatalf("content width = %d, want 115", s.contentW)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestShellJumpResumesFollow(t *testing.T) {
 	if s.transcriptH != 21 {
 		t.Fatalf("transcript height with jump = %d, want 21", s.transcriptH)
 	}
-	if got, want := s.jumpR, (kit.Rect{X: 0, Y: 21, W: 80, H: 1}); got != want {
+	if got, want := s.jumpR, (kit.Rect{X: 2, Y: 21, W: 76, H: 1}); got != want {
 		t.Fatalf("jump rect = %+v, want %+v", got, want)
 	}
 
@@ -370,6 +370,39 @@ func TestShellPickerRefreshAndReplace(t *testing.T) {
 	}
 	if got := s.host.(*fakeHost).cancels; got != 0 {
 		t.Fatalf("kind replacement cancelled the legacy picker %d times", got)
+	}
+}
+
+func TestShellCommandPickerUsesPaletteChrome(t *testing.T) {
+	host := pickerHost()
+	host.picker.Kind = "commands"
+	host.picker.Title = "Commands"
+	host.picker.Placeholder = "search commands"
+	host.picker.Items = []tui.KitPickerItem{{ID: "/help", Title: "Help", Footer: "F1"}}
+	s := newTestShell(host)
+	s.Sync()
+
+	frame := ansi.Strip(s.Render(80, 24))
+	for _, want := range []string{"Commands", "esc", "search commands", "Help", "F1"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("command palette missing %q:\n%s", want, frame)
+		}
+	}
+	for _, absent := range []string{"cancel", "confirm"} {
+		if strings.Contains(frame, absent) {
+			t.Errorf("command palette has redundant %q footer control:\n%s", absent, frame)
+		}
+	}
+	if !s.Key(tea.KeyPressMsg{Code: tea.KeyEnter}) || host.accepted != "/help" {
+		t.Fatalf("Enter without a footer accepted %q, want /help", host.accepted)
+	}
+
+	cancelHost := pickerHost()
+	cancelHost.picker.Kind = "commands"
+	cancelShell := newTestShell(cancelHost)
+	cancelShell.Sync()
+	if !cancelShell.Key(tea.KeyPressMsg{Code: tea.KeyEsc}) || cancelHost.cancels != 1 {
+		t.Fatalf("Esc without a footer canceled %d times, want 1", cancelHost.cancels)
 	}
 }
 

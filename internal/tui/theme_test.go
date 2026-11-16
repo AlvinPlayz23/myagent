@@ -74,32 +74,31 @@ func rgbaOf(c color.Color) [4]uint32 {
 	return [4]uint32{r, g, b, a}
 }
 
-// frozenLegacyPalette is the pre-token palette, copied verbatim. It is the
-// reference side of the parity gate: if a token mapping drifts, these literals
-// stay put and the rendered-string comparison fails.
+// frozenLegacyPalette pins the resolved OpenCode v2 colors and retained myagent
+// orb colors so token and compatibility-style drift fails rendered parity tests.
 func frozenLegacyPalette() palette {
 	return palette{
-		primary:     adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("#5FB4D9")},
-		secondary:   adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("#649FA9")},
-		textPrimary: adaptiveColor{Light: lipgloss.Color("#2A2A2A"), Dark: lipgloss.Color("#D0D0D0")},
-		textBright:  adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")},
-		textDim:     adaptiveColor{Light: lipgloss.Color("#757575"), Dark: lipgloss.Color("#8A8A8A")},
-		rule:        adaptiveColor{Light: lipgloss.Color("#BDBDBD"), Dark: lipgloss.Color("#585858")},
-		userBlockBg: adaptiveColor{Light: lipgloss.Color("#E4E4E4"), Dark: lipgloss.Color("#303030")},
-		rowHoverBg:  adaptiveColor{Light: lipgloss.Color("#D0D0D0"), Dark: lipgloss.Color("#444444")},
-		selectionBg: adaptiveColor{Light: lipgloss.Color("#B2D7EE"), Dark: lipgloss.Color("#005F87")},
-		pending:     adaptiveColor{Light: lipgloss.Color("#B26A00"), Dark: lipgloss.Color("#FFAF00")},
-		success:     adaptiveColor{Light: lipgloss.Color("#2E7D32"), Dark: lipgloss.Color("35")},
-		failure:     adaptiveColor{Light: lipgloss.Color("#C62828"), Dark: lipgloss.Color("203")},
-		diffHunk:    adaptiveColor{Light: lipgloss.Color("#1565C0"), Dark: lipgloss.Color("75")},
+		primary:     adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")},
+		secondary:   adaptiveColor{Light: lipgloss.Color("#8A8A8A"), Dark: lipgloss.Color("#808080")},
+		textPrimary: adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")},
+		textBright:  adaptiveColor{Light: lipgloss.Color("#000000"), Dark: lipgloss.Color("#FFFFFF")},
+		textDim:     adaptiveColor{Light: lipgloss.Color("#8A8A8A"), Dark: lipgloss.Color("#808080")},
+		rule:        adaptiveColor{Light: lipgloss.Color("#B8B8B8"), Dark: lipgloss.Color("#484848")},
+		userBlockBg: adaptiveColor{Light: lipgloss.Color("#FAFAFA"), Dark: lipgloss.Color("#141414")},
+		rowHoverBg:  adaptiveColor{Light: lipgloss.Color("#F5F5F5"), Dark: lipgloss.Color("#1E1E1E")},
+		selectionBg: adaptiveColor{Light: lipgloss.Color("#3B7DD8"), Dark: lipgloss.Color("#FAB283")},
+		pending:     adaptiveColor{Light: lipgloss.Color("#D68C27"), Dark: lipgloss.Color("#F5A742")},
+		success:     adaptiveColor{Light: lipgloss.Color("#3D9A57"), Dark: lipgloss.Color("#7FD88F")},
+		failure:     adaptiveColor{Light: lipgloss.Color("#D1383D"), Dark: lipgloss.Color("#E06C75")},
+		diffHunk:    adaptiveColor{Light: lipgloss.Color("#7086B5"), Dark: lipgloss.Color("#828BB8")},
 		orbDim:      adaptiveColor{Light: lipgloss.Color("#4A7A94"), Dark: lipgloss.Color("24")},
 		orbMedium:   adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("31")},
 		orbBright:   adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("39")},
 	}
 }
 
-// frozenLegacyTheme is the pre-token newTheme, copied verbatim. It is the
-// reference side of the parity gate and must not be "cleaned up" to use tokens.
+// frozenLegacyTheme builds the compatibility styles independently of tokens,
+// providing a fixed reference for the rendered parity checks.
 func frozenLegacyTheme() *theme {
 	p := frozenLegacyPalette()
 	return &theme{
@@ -107,7 +106,7 @@ func frozenLegacyTheme() *theme {
 			Background(p.userBlockBg).
 			Foreground(p.textPrimary).
 			Border(lipgloss.NormalBorder(), false, false, false, true).
-			BorderLeftForeground(p.secondary).
+			BorderLeftForeground(adaptiveColor{Light: lipgloss.Color("#8C6FC5"), Dark: lipgloss.Color("#4C86D6")}).
 			Padding(0, 1),
 		queuedLabel:   lipgloss.NewStyle().Foreground(p.secondary),
 		toolPending:   lipgloss.NewStyle().Foreground(p.pending),
@@ -278,7 +277,7 @@ func TestLegacyPaletteToTokenMapping(t *testing.T) {
 		{"success", p.success, toks.Text.Feedback.Success.Base, StateBase},
 		{"failure", p.failure, toks.Text.Feedback.Error.Base, StateBase},
 		{"diffHunk", p.diffHunk, toks.Diff.Text.HunkHeader, StateBase},
-		{"markdownLink", p.diffHunk, toks.Markdown.Link, StateBase},
+		{"markdownLink", adaptiveColor{Light: lipgloss.Color("#3B7DD8"), Dark: lipgloss.Color("#FAB283")}, toks.Markdown.Link, StateBase},
 		{"orbDim", p.orbDim, toks.Decor.Orb.Dim, StateBase},
 		{"orbMedium", p.orbMedium, toks.Decor.Orb.Medium, StateBase},
 		{"orbBright", p.orbBright, toks.Decor.Orb.Bright, StateBase},
@@ -440,5 +439,19 @@ func TestAgentCategorical(t *testing.T) {
 	fallback := Tokens{Border: BorderTokens{Base: newToken(fallbackColor, fallbackColor)}}
 	if got, want := rgbaOf(fallback.Agent(0).Color()), rgbaOf(fallbackColor); got != want {
 		t.Errorf("empty categorical fallback = %v, want border.base %v", got, want)
+	}
+}
+
+func TestFocusedActionTextContrastsWithSelectionSurface(t *testing.T) {
+	defer setDarkBackground(true)
+	for _, dark := range []bool{true, false} {
+		setDarkBackground(dark)
+		th := DefaultTokens()
+		bg := rgbaOf(th.Background.Action.Primary.Focused())
+		for _, fg := range []color.Color{th.Text.Action.Primary.Focused(), th.Text.Action.Secondary.Focused()} {
+			if rgbaOf(fg) == bg {
+				t.Fatalf("selected text is invisible (dark=%v)", dark)
+			}
+		}
 	}
 }

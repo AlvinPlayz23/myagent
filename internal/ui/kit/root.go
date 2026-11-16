@@ -371,7 +371,7 @@ func (r *Root) compose(w, h int) string {
 				applyScrim(cv, full, tok, alpha)
 			}
 		}
-		drawWidget(cv, l.w, full, full)
+		drawWidget(cv, l.w, WidgetBounds(l.w), full)
 	}
 	return padCanvas(cv, w, h)
 }

@@ -1035,7 +1035,7 @@ func (s *DialogSelect) Layout(r Rect) {
 	s.list.Layout(Rect{X: r.X, Y: r.Y + 2, W: r.W, H: avail})
 }
 
-// Render paints the ⌕ search row and the list.
+// Render paints the search field and the list.
 func (s *DialogSelect) Render(w, h int) string {
 	if !s.Visible || w <= 0 || h <= 0 {
 		return ""
@@ -1044,14 +1044,14 @@ func (s *DialogSelect) Render(w, h int) string {
 		th := DefaultTheme()
 		cv := lipgloss.NewCanvas(w, h)
 		if string(s.query) == "" {
-			label := "⌕ " + s.Placeholder
-			if s.Placeholder == "" {
-				label = "⌕ type to filter"
+			label := s.Placeholder
+			if label == "" {
+				label = "Search"
 			}
 			drawStyled(cv, 0, 0, w, label,
 				lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 		} else {
-			drawStyled(cv, 0, 0, w, "⌕ "+string(s.query),
+			drawStyled(cv, 0, 0, w, string(s.query),
 				lipgloss.NewStyle().Foreground(th.Text.Base.Color()))
 		}
 		drawWidget(cv, s.list, s.list.Bounds(), s.Bounds())

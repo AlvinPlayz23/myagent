@@ -1,24 +1,24 @@
-user › hello                                                                   █
-show me the kit shell                                                          █
-                                                                               █
-assistant › ready                                                              █
-scroll · select · compose                                                      █
-                                                                               █
-tool › read GOTUI.md                                                           █
-section 3.0.D — dialog bands                                                   █
-                                                                               █
-assistant › done                                                               █
-legacy stays byte-identical                                                    █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-                                                                               █
-> draft prompt
-  enter to send
+  user › hello
+  show me the kit shell
+
+  assistant › ready
+  scroll · select · compose
+
+  tool › read GOTUI.md
+  section 3.0.D — dialog bands
+
+  assistant › done
+  legacy stays byte-identical
+
+
+
+
+
+
+
+
+
+
+
+  > draft prompt
+    enter to send

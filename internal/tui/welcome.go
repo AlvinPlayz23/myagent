@@ -2,16 +2,13 @@ package tui
 
 // Welcome screen v2 (Go-native).
 //
-// Layout (top to bottom):
-//   - Top bar (1 row): {branch} {cwd}, truncated to width
-//   - Vertically centered content: logo, title, menu, tip
-//   - Version badge (1 row, right-aligned): myagent <version>
+// Layout (top to bottom): a centered logo and menu, a responsive tip, and the
+// working directory at the bottom edge.
 //
 // Two surfaces share this file:
 //   - welcomeDefault: stacked text layout (title + menu + version badge).
 //     No braille art, so it works on every terminal.
-//   - welcomeMyagent: braille logo tiers + wide hero-box layout (side-by-side
-//     logo and menu inside a bordered box when width >= 90).
+//   - welcomeMyagent: the same centered hierarchy with a tiered myagent mark.
 // The animated orb/banner/wave/rain/fill styles keep their old renderer.
 
 import (
@@ -37,9 +34,6 @@ const myagentSmallMinHeight = 22
 
 // Height at or above which the full logo is shown.
 const myagentFullMinHeight = 26
-
-// Minimum terminal width for the side-by-side hero box layout.
-const heroBoxMinWidth = 90
 
 // myagentLogoTier picks the diamond-mark art by terminal height, stepping down
 // while the stacked column would overflow.
@@ -129,11 +123,11 @@ func (m *model) shimmerLogoLines(art string) []string {
 			}
 			switch {
 			case d < 2:
-				sb.WriteString(m.th.orbBright.Render(string(r)))
+				sb.WriteString(m.th.cmdPickerSel.Render(string(r)))
 			case d < 5:
-				sb.WriteString(m.th.orbMedium.Render(string(r)))
+				sb.WriteString(m.th.textPrimary.Render(string(r)))
 			default:
-				sb.WriteString(m.th.orbDim.Render(string(r)))
+				sb.WriteString(m.th.muted.Render(string(r)))
 			}
 			x++
 		}
@@ -142,7 +136,7 @@ func (m *model) shimmerLogoLines(art string) []string {
 	return rows
 }
 
-// renderMyagentLogo draws the braille art centered with the shimmer band.
+// renderMyagentLogo draws the myagent mark centered with a neutral shimmer.
 // Every row is padded to the full art width before centering so the block
 // stays aligned: centering each ragged line individually would shift narrow
 // rows right and leave the widest row's edge sticking out (the stray pixel).
@@ -421,11 +415,6 @@ func (m *model) renderMyagentWelcome() string {
 	}
 	vh := m.welcomeViewportHeight()
 	compact := vh < 14
-	if m.width >= heroBoxMinWidth && !compact {
-		if hero, ok := m.renderHeroBox(vh); ok {
-			return hero
-		}
-	}
 	return m.renderMyagentStacked(vh, compact)
 }
 
@@ -438,6 +427,9 @@ func (m *model) renderMyagentStacked(vh int, compact bool) string {
 	location := m.renderWelcomeLocation()
 
 	tier := myagentTierForHeight(vh)
+	if m.width < 44 && tier == logoFull {
+		tier = logoCompact
+	}
 	if compact {
 		tier = logoHidden
 	}
@@ -484,99 +476,48 @@ func (m *model) renderMyagentStacked(vh int, compact bool) string {
 	return strings.Join(l.lines, "\n")
 }
 
-// renderHeroBox is the wide layout: logo and right column side by side
-// with no border. Reports false when it cannot fit, so the caller falls
-// back to stacked.
-func (m *model) renderHeroBox(vh int) (string, bool) {
-	art := myagentLogoFull
-	logoLines := m.shimmerLogoLines(art)
-	logoW := logoArtWidth(art)
-
-	locationLine := m.locationText()
-	subtitle := m.th.muted.Render("Your terminal coding agent")
-	// Right column reuses the menu rows left-aligned at a fixed block width.
-	contentMin := lipgloss.Width(locationLine)
-	if w := lipgloss.Width(subtitle); w > contentMin {
-		contentMin = w
+// renderHomeWordmark shares the prompt's centered column without session chrome.
+func (m *model) renderHomeWordmark(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
 	}
-	menuW := 0
-	for _, item := range welcomeMenuItems {
-		if n := len([]rune(item[0])) + len([]rune(item[1])) + 4; n > menuW {
-			menuW = n
+	glyphs := [7][5]string{
+		{"█   █", "██ ██", "█ █ █", "█   █", "█   █"},
+		{"█   █", " █ █ ", "  █  ", "  █  ", "  █  "},
+		{" ███ ", "█   █", "█████", "█   █", "█   █"},
+		{" ████", "█    ", "█ ███", "█   █", " ███ "},
+		{"█████", "█    ", "████ ", "█    ", "█████"},
+		{"█   █", "██  █", "█ █ █", "█  ██", "█   █"},
+		{"█████", "  █  ", "  █  ", "  █  ", "  █  "},
+	}
+	rows := []string{}
+	if width >= 41 && height >= 6 {
+		for row := 0; row < 5; row++ {
+			var line strings.Builder
+			for letter := range glyphs {
+				if letter > 0 {
+					line.WriteByte(' ')
+				}
+				style := m.th.textPrimary
+				if letter < 2 {
+					style = m.th.muted
+				}
+				line.WriteString(style.Render(glyphs[letter][row]))
+			}
+			rows = append(rows, centerLine(line.String(), width))
 		}
+	} else {
+		rows = append(rows, centerLine(m.th.textPrimary.Bold(true).Render("myagent"), width))
 	}
-	rightW := max(contentMin, menuW)
-	var right []string
-	right = append(right, locationLine, subtitle, "")
-	for k, item := range welcomeMenuItems {
-		gap := rightW - len([]rune(item[0])) - len([]rune(item[1]))
-		if gap < 2 {
-			gap = 2
-		}
-		plain := item[0] + strings.Repeat(" ", gap) + item[1]
-		if m.hoverKind == hoverWelcome && m.hoverIdx == k {
-			right = append(right, m.th.rowHover.Render(plain))
-			continue
-		}
-		right = append(right, m.th.textPrimary.Render(item[0])+
-			strings.Repeat(" ", gap)+m.th.muted.Render(item[1]))
+	if len(m.disabledTools) > 0 && len(rows) < height {
+		rows = append(rows, "", centerLine(ansi.Truncate(m.welcomeHintPlain(), width, "…"), width))
 	}
-	rightH := len(right)
-	innerH := max(len(logoLines), rightH)
-	sideW := logoW + 3 + rightW + 2 // gap + padding (no border)
-	if sideW > m.width-2 {
-		return "", false
+	top := max(0, (height-len(rows))/2)
+	for i := 0; i < top; i++ {
+		rows = append([]string{""}, rows...)
 	}
-	// Pad every logo row to the full art width (ANSI-aware) and the
-	// shorter column so rows align.
-	for i, l := range logoLines {
-		if w := lipgloss.Width(l); w < logoW {
-			logoLines[i] = l + strings.Repeat(" ", logoW-w)
-		}
+	for len(rows) < height {
+		rows = append(rows, "")
 	}
-	for len(logoLines) < innerH {
-		logoLines = append(logoLines, strings.Repeat(" ", logoW))
-	}
-	for len(right) < innerH {
-		right = append(right, "")
-	}
-	var inner []string
-	for i := range logoLines {
-		inner = append(inner, logoLines[i]+"   "+right[i])
-	}
-	sideH := innerH + 2 // vertical padding
-	// Budget: margin + block + gap + hint + location.
-	if 1+sideH+1+1+1 > vh {
-		return "", false
-	}
-	// Borderless side-by-side: logo left, info column right, centered.
-	side := lipgloss.NewStyle().
-		Padding(1, 1).
-		Render(strings.Join(inner, "\n"))
-	centered := lipgloss.Place(m.width, lipgloss.Height(side), lipgloss.Center, lipgloss.Top, side)
-
-	hint := m.welcomeHint()
-	location := m.renderWelcomeLocation()
-	used := 1 + lipgloss.Height(side) + 1 + 1 + 1
-	padTop := (vh - used) / 3
-	if padTop < 0 {
-		padTop = 0
-	}
-	// Menu rows inside the box: margin(1) + pad + border(1) + vpad(1), then
-	// the right column's location, subtitle, blank → menu. Clicks match rows
-	// only (the box is centered, so columns vary with width).
-	menuStart := 1 + padTop + 2 + 3
-	m.welcomeMenu[0], m.welcomeMenu[1] = menuStart, menuStart+len(welcomeMenuItems)
-	var sb strings.Builder
-	sb.WriteString("\n") // top margin row (the location line moved to the bottom)
-	sb.WriteString(strings.Repeat("\n", padTop))
-	sb.WriteString(centered + "\n\n")
-	sb.WriteString(hint + "\n")
-	used += padTop
-	for used < vh {
-		sb.WriteString("\n")
-		used++
-	}
-	sb.WriteString(location)
-	return sb.String(), true
+	return strings.Join(rows[:min(height, len(rows))], "\n")
 }

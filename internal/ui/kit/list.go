@@ -286,11 +286,11 @@ func (l *List) renderRow(idx, w int) string {
 	if selected {
 		fillCells(cv, 0, 0, w, th.Background.Action.Primary.Focused())
 	}
-	textFg := th.Text.Base
-	descFg := th.Text.Muted
+	textFg := th.Text.Base.Color()
+	descFg := th.Text.Muted.Color()
 	if selected {
-		textFg = th.Text.Selection
-		descFg = th.Text.Selection
+		textFg = th.Text.Action.Primary.Focused()
+		descFg = th.Text.Action.Secondary.Focused()
 		putGlyph(cv, 0, 0, l.marker(), th.Text.Inverse.Color())
 	}
 
@@ -303,9 +303,9 @@ func (l *List) renderRow(idx, w int) string {
 		avail = 1
 	}
 	titleW := ansi.StringWidth(row.Title)
-	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg.Color())
+	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg)
 	if row.Desc != "" && titleW+2 < avail {
-		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg.Color())
+		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg)
 	}
 	if footerW > 0 && footerW < w-2 {
 		fg := th.Text.Muted

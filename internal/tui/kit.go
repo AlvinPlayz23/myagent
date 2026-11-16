@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -246,10 +247,21 @@ func (m *model) KitTranscriptRev() int { return m.transcript.rev }
 // KitShowWelcome reports the transient empty-session state.
 func (m *model) KitShowWelcome() bool { return m.showWelcome() }
 
+// KitWelcomeHeight preserves full-height alternate startup styles.
+func (m *model) KitWelcomeHeight(available int) int {
+	if m.welcomeStyle == welcomeDefault {
+		return min(8, max(0, available))
+	}
+	return max(0, available)
+}
+
 // KitWelcome renders the welcome surface at the transcript content width and
 // height. The existing welcome layout reads model.width; the temporary swap
 // keeps one implementation for both shells.
 func (m *model) KitWelcome(width, height int) string {
+	if m.welcomeStyle == welcomeDefault {
+		return m.renderHomeWordmark(width, height)
+	}
 	oldWidth := m.width
 	oldViewport := m.kitViewportH
 	if width > 0 {
@@ -324,6 +336,21 @@ func (r *kitFoldRun) KitKind() string { return "tool" }
 // KitComposer renders the existing textarea chrome at the shell width.
 func (m *model) KitComposer(width int) string { return m.renderComposerAt(width) }
 
+// KitSetComposerWidth runs before measuring height so wrapped input fits this frame.
+func (m *model) KitSetComposerWidth(width int) {
+	padding := 2
+	if width < 44 {
+		padding = 1
+	}
+	inner := width
+	if m.promptStyle != promptRuled {
+		inner -= 1 + 2*padding
+	}
+	if m.input.Width() != max(1, inner) {
+		m.input.SetWidth(max(1, inner))
+	}
+}
+
 // KitComposerHeight is the current composer block height.
 func (m *model) KitComposerHeight() int { return m.composerHeight() }
 
@@ -363,6 +390,9 @@ func (m *model) KitSelectTab(string) tea.Cmd { return nil }
 
 // KitSidebar projects the footer's usage data into the right-hand rail.
 func (m *model) KitSidebar() (string, []KitStat) {
+	if m.KitShowWelcome() {
+		return "", nil
+	}
 	rows := []KitStat{
 		{Label: "model", Value: m.modelID},
 		{Label: "effort", Value: m.effortLabel()},
@@ -388,7 +418,10 @@ func (m *model) KitTodos() []KitTodo { return nil }
 // KitFooter reports the composer status row: busy state, cwd, and the active
 // file-context chip (the mention being picked, else the first mention).
 func (m *model) KitFooter() KitFooter {
-	f := KitFooter{Busy: m.working, Cwd: m.cwd}
+	f := KitFooter{Busy: m.working, Cwd: m.cwd, Hint: "myagent"}
+	if m.KitShowWelcome() {
+		f.Cwd = ""
+	}
 	if m.files.active {
 		if path, ok := m.files.selected(); ok {
 			f.File, f.FilePending = path, true
@@ -536,13 +569,47 @@ func (m *model) KitOverlay(content string, startRow int) string {
 // renderComposerAt is the width-aware composer render shared by the legacy
 // viewport path and the kit shell.
 func (m *model) renderComposerAt(width int) string {
-	if m.promptStyle != promptRuled {
-		box := m.th.composerBox
-		if m.input.Focused() {
-			box = m.th.composerFocused
-		}
-		return box.Width(max(1, width)).Render(m.input.View())
+	if width <= 0 {
+		return ""
 	}
+	if m.promptStyle != promptRuled {
+		t := m.th.tokens
+		padding := 2
+		if width < 44 {
+			padding = 1
+		}
+		surface := lipgloss.NewStyle().Background(t.Background.Raised.Base.Color()).Foreground(t.Text.Base.Color())
+		accent := lipgloss.NewStyle().Foreground(t.Agent(0).Color())
+		muted := lipgloss.NewStyle().Foreground(t.Text.Muted.Color())
+		contentW := max(0, width-1)
+		innerW := max(0, contentW-2*padding)
+		row := func(text string) string {
+			return accent.Render("┃") + surface.Width(contentW).Render(strings.Repeat(" ", min(padding, contentW))+ansi.Truncate(text, innerW, ""))
+		}
+		lines := []string{row("")}
+		for _, line := range strings.Split(m.input.View(), "\n") {
+			lines = append(lines, row(line))
+		}
+		label := accent.Background(t.Background.Raised.Base.Color()).Render("Build") + surface.Render("  "+m.modelID)
+		if effort := m.effortLabel(); effort != "" && effort != "default" {
+			label += surface.Render("  ") + muted.Background(t.Background.Raised.Base.Color()).Render(effort)
+		}
+		lines = append(lines, row(""), row(label))
+		cap := accent.Render("╹") + lipgloss.NewStyle().Foreground(t.Background.Raised.Base.Color()).Render(strings.Repeat("▀", contentW))
+		shortcuts := "enter send  shift+enter newline  / commands"
+		if width < 56 {
+			shortcuts = "enter send  / commands"
+		}
+		hint := strings.Repeat(" ", 1+padding) + shortcuts
+		if m.KitShowWelcome() && width >= 56 {
+			shortcuts = "/ commands"
+			cwd := ansi.Truncate(m.cwd, max(0, width-len(shortcuts)-3), "…")
+			hint = cwd + strings.Repeat(" ", max(1, width-ansi.StringWidth(cwd)-len(shortcuts))) + shortcuts
+		}
+		lines = append(lines, cap, muted.Width(width).Render(ansi.Truncate(hint, width, "")))
+		return strings.Join(lines, "\n")
+	}
+
 	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, width)))
 	return rule + "\n" + m.input.View() + "\n" + rule
 }

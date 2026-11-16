@@ -249,8 +249,8 @@ func TestScrollBoxScrollbarColumn(t *testing.T) {
 		if got := ansi.StringWidth(line); got != 20 {
 			t.Fatalf("line %d width = %d, want 20", i, got)
 		}
-		if !strings.HasSuffix(line, "█") {
-			t.Fatalf("line %d missing full-height thumb: %q", i, line)
+		if !strings.HasSuffix(line, " ") {
+			t.Fatalf("line %d should reserve a blank column when content fits: %q", i, line)
 		}
 	}
 

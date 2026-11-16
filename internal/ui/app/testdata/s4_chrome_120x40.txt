@@ -1,40 +1,40 @@
  myagent │ ⠋ fix-tabs ●
-block line b                                                                               ││ Usage
-                                                                                           ││ model                muse
-block line a                                                                               ││ tokens        ↑1.2k ↓3.4k
-block line b                                                                               ││ context               82%
-                                                                                           ││
-block line a                                                                               ││
-block line b                                                                               ││
-                                                                                           ││
-block line a                                                                               ││
-block line b                                                                               █│
-                                                                                           █│
-block line a                                                                               █│
-block line b                                                                               █│
-                                                                                           █│
-block line a                                                                               █│
-block line b                                                                               █│
-                                                                                           █│
-block line a                                                                               █│
-block line b                                                                               █│
-                                                                                           █│
-block line a                                                                               ││
-block line b                                                                               ││
-                                                                                           ││
-block line a                                                                               ││
-block line b                                                                               ││
-                                                                                           ││
-block line a                                                                               ││
-block line b                                                                               ││
-                                                                                           ││
-block line a                                                                               ││
-block line b                                                                               ││
-                                                                                           ││
-                                                                          Jump to latest ↓  │
-[✓] wire chrome                                                                             │
-[•] write tests                                                                             │
-[ ] ship S4                                                                                 │
-> draft prompt                                                                              │
-  enter to send                                                                             │
-~/src/myagent                                                                      shell.go │
+  block line b                                                                           │  │ Usage
+                                                                                         │  │ model                muse
+  block line a                                                                           │  │ tokens        ↑1.2k ↓3.4k
+  block line b                                                                           │  │ context               82%
+                                                                                         │  │
+  block line a                                                                           │  │
+  block line b                                                                           │  │
+                                                                                         │  │
+  block line a                                                                           │  │
+  block line b                                                                           █  │
+                                                                                         █  │
+  block line a                                                                           █  │
+  block line b                                                                           █  │
+                                                                                         █  │
+  block line a                                                                           █  │
+  block line b                                                                           █  │
+                                                                                         █  │
+  block line a                                                                           █  │
+  block line b                                                                           █  │
+                                                                                         █  │
+  block line a                                                                           │  │
+  block line b                                                                           │  │
+                                                                                         │  │
+  block line a                                                                           │  │
+  block line b                                                                           │  │
+                                                                                         │  │
+  block line a                                                                           │  │
+  block line b                                                                           │  │
+                                                                                         │  │
+  block line a                                                                           │  │
+  block line b                                                                           │  │
+                                                                                         │  │
+                                                                        Jump to latest ↓    │
+  [✓] wire chrome                                                                           │
+  [•] write tests                                                                           │
+  [ ] ship S4                                                                               │
+  > draft prompt                                                                            │
+    enter to send                                                                           │
+  ~/src/myagent                                                                  shell.go   │

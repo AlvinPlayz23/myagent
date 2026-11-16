@@ -358,7 +358,7 @@ func TestShellDockRowsAboveComposer(t *testing.T) {
 	if s.dockH != 2 {
 		t.Fatalf("dock height = %d, want 2", s.dockH)
 	}
-	if got, want := s.dockR, (kit.Rect{X: 0, Y: 20, W: 80, H: 2}); got != want {
+	if got, want := s.dockR, (kit.Rect{X: 2, Y: 20, W: 76, H: 2}); got != want {
 		t.Fatalf("dock rect = %+v, want %+v", got, want)
 	}
 	frame := ansi.Strip(s.Render(80, 24))
