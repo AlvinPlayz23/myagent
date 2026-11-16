@@ -1,0 +1,5 @@
+subscribers=0 active=false next-tick=nil tick=0 delivered=0
+subscribers=1 active=true next-tick=set tick=0 delivered=0
+subscribers=1 active=true next-tick=set tick=1 delivered=1
+subscribers=0 active=false next-tick=nil tick=1 delivered=1
+

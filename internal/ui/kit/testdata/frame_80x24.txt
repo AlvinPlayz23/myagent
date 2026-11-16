@@ -1,0 +1,24 @@
+
+ myagent — retained kit
+
+ ┃  Assistant · muse · 1.2s · 34.5 tok/s
+ ┃
+ ┃  The pack contains many widgets with borders and padded surfaces. This
+ ┃  paragraph is deliberately long so the golden frame proves that width-
+ ┃  aware wrapping and the rev-keyed render cache agree at both terminal
+ ┃  sizes.
+ ┃
+ ┃
+ ┃
+ ┃
+ ┃
+ ┃
+
+        left rail         ╭─────────────────────────────────────────── Status ╮
+                          │Ready                                              │
+                          │                                                   │
+                          │                                                   │
+                          ╰───────────────────────────────────────────────────╯
+
+ tab focus · wheel scroll · click to open
+

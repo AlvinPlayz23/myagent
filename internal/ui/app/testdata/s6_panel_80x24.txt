@@ -1,0 +1,24 @@
+block line a                                                                   █
+block line b                                                                   █
+                                                                               █
+block line a                                                                   █
+block line b                                                                   █
+                                                                               █
+block line                                                                     █
+block line   Reasoning effort                                   esc            █
+                                                                               █
+block line   ↑/↓ select, enter saves as myagent default, esc cancel            █
+block line     Low  fast, lightweight reasoning                                █
+             ● Medium  balanced reasoning  (current)                           █
+               High  deeper reasoning                                          █
+               Max  maximum reasoning                                          █
+                                                                               █
+              cancel esc                                save enter             █
+                                                                               █
+                                                                               █
+                                                                               █
+                                                                               █
+                                                                               █
+                                                                               █
+> draft prompt
+  enter to send

@@ -220,7 +220,7 @@ func refreshGitBranch(cwd string) {
 func (m *model) locationText() string {
 	var sb strings.Builder
 	if branch := welcomeGitBranch(m.cwd); branch != "" {
-		sb.WriteString(m.th.accentUser.Render("⎇ "+branch))
+		sb.WriteString(m.th.accentUser.Render("⎇ " + branch))
 		sb.WriteString(" ")
 	}
 	sb.WriteString(m.th.muted.Render(collapseHome(m.cwd)))
@@ -363,8 +363,13 @@ func (l *welcomeLayout) record(m *model) {
 	}
 }
 
-// welcomeViewportHeight is the content budget for the welcome layout.
+// welcomeViewportHeight is the content budget for the welcome layout. The kit
+// shell publishes its own viewport height through kitViewportH so the welcome
+// shares one layout implementation without borrowing the legacy viewport.
 func (m *model) welcomeViewportHeight() int {
+	if m.kitViewportH > 0 {
+		return m.kitViewportH
+	}
 	if h := m.viewport.Height(); h > 0 {
 		return h
 	}

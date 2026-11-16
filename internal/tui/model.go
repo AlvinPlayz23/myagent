@@ -22,8 +22,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/llm"
 	modelcatalog "github.com/AlvinPlayz23/myagent/internal/models"
 	"github.com/AlvinPlayz23/myagent/internal/plugin"
-	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/session"
+	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
@@ -431,6 +431,15 @@ type model struct {
 	width, height int
 	ready         bool
 
+	// kit is non-nil unless MYAGENT_UI=legacy (the one-release escape hatch)
+	// or the app shell factory is not registered. The legacy frame path stays
+	// untouched when it is nil.
+	kit            KitUI
+	kitWidth       int
+	kitHeight      int
+	kitViewportH   int
+	kitComposerRev int
+
 	working         bool // an agent Run is in progress
 	abortRequested  bool // cancellation requested; runner is still unwinding
 	queuedSteering  []types.Message
@@ -479,7 +488,7 @@ type model struct {
 	saveWelcomeStyle   func(welcomeStyle) error
 	savePromptStyle    func(promptStyle) error
 	saveDefaultEffort  func(llm.Effort) error
-	defaultEffort     llm.Effort
+	defaultEffort      llm.Effort
 	// disabledTools is the /tools deny list, applied on top of whatever
 	// base or profile registry is active (a profile cannot re-enable a tool).
 	disabledTools     []string
@@ -494,7 +503,7 @@ type model struct {
 	// saveSessionTools persists a session-scoped deny list. Optional: when nil
 	// the session scope is unavailable and the panel says so.
 	saveSessionTools func([]string) error
-	exportSession      func(export.Format, string, bool) (string, error)
+	exportSession    func(export.Format, string, bool) (string, error)
 
 	// Plugin system (PLUGINS.md): bundle loaded at startup, active profile,
 	// pinned default profile, and the unfiltered base config for reset.
@@ -558,7 +567,7 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 	if len(newSession) > 0 {
 		createSession = newSession[0]
 	}
-	return &model{
+	m := &model{
 		ctx:            ctx,
 		runner:         r,
 		queue:          q,
@@ -580,6 +589,8 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		mouseCapture:   true,
 		hoverIdx:       -1,
 	}
+	m.initKit()
+	return m
 }
 
 func (m *model) updateTerminalTitle() {
@@ -623,7 +634,24 @@ func clearStatusCmd(status string) tea.Cmd {
 }
 
 // Update handles messages: key input, window resize, agent events, and ticks.
+// In kit mode it also syncs the retained shell once per message batch so a
+// streaming burst composes at most once.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	previous := m.input.Value()
+	model, cmd := m.update(msg)
+	if m.kit != nil {
+		if m.input.Value() != previous {
+			m.kitComposerRev++
+		}
+		m.kit.Sync()
+		if extra := m.kit.TakeCmd(); extra != nil {
+			cmd = tea.Batch(cmd, extra)
+		}
+	}
+	return model, cmd
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
 		// The terminal's reply to tea.RequestBackgroundColor (sent from Init).
@@ -644,6 +672,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onResize(msg.Width, msg.Height)
 
 	case tea.KeyPressMsg:
+		if m.kit != nil && m.kit.Key(msg) {
+			return m, nil
+		}
 		return m.onKey(msg)
 
 	case tea.PasteMsg:
@@ -690,15 +721,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
+		if m.kit != nil {
+			m.kit.Mouse(msg)
+			return m, nil
+		}
 		return m.onMouseWheel(msg)
 
 	case tea.MouseClickMsg:
+		if m.kit != nil {
+			m.kit.Mouse(msg)
+			return m, nil
+		}
 		return m.onMouseClick(msg)
 
 	case tea.MouseMotionMsg:
+		if m.kit != nil {
+			m.kit.Mouse(msg)
+			return m, nil
+		}
 		return m.onMouseMotion(msg)
 
 	case tea.MouseReleaseMsg:
+		if m.kit != nil {
+			m.kit.Mouse(msg)
+			return m, nil
+		}
 		return m.onMouseRelease(msg)
 
 	case modelsDiscoveredMsg:
@@ -850,6 +897,11 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 		m.viewport.SetHeight(vpHeight)
 	}
 	m.transcript.invalidate()
+	if m.kit != nil {
+		m.kit.Resize(w, h)
+		m.kit.Sync()
+		return m, nil
+	}
 	m.refreshViewport()
 	return m, nil
 }
@@ -2415,6 +2467,10 @@ func (m *model) refreshViewport() {
 	if !m.ready {
 		return
 	}
+	if m.kit != nil {
+		m.kit.Sync()
+		return
+	}
 	atBottom := m.viewport.AtBottom()
 	content := m.transcript.render(m.width)
 	if m.showWelcome() {
@@ -2457,7 +2513,7 @@ func (m *model) renderWelcome() string {
 
 	subtitle := centerLine(m.th.muted.Render("Your terminal coding agent"), m.width)
 	hint := m.welcomeHint()
-	compact := m.viewport.Height() < 14
+	compact := m.welcomeViewportHeight() < 14
 
 	switch m.welcomeStyle {
 	case welcomeOrb:
@@ -2776,7 +2832,6 @@ func (m *model) rainMenuRow(i int) string {
 			m.th.muted.Render(item[1]), m.width)
 }
 
-
 // rainHash is a small deterministic integer hash used to scatter rain columns.
 func rainHash(n int) int {
 	n = (n ^ 61) ^ (n >> 16)
@@ -2925,6 +2980,18 @@ func (m *model) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
 	}
+	if m.kit != nil {
+		v := tea.NewView(m.kit.Render(m.width, m.height))
+		v.AltScreen = true
+		if m.mouseCapture {
+			v.MouseMode = tea.MouseModeAllMotion
+		} else {
+			v.MouseMode = tea.MouseModeNone
+		}
+		v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
+		v.KeyboardEnhancements.ReportAssociatedText = true
+		return v
+	}
 	var sb strings.Builder
 	sb.WriteString(m.viewport.View())
 	sb.WriteByte('\n')
@@ -2970,15 +3037,7 @@ func (m *model) View() tea.View {
 // a rounded box for the default style, framing rules for the ruled style. The
 // box border lights up with the accent color while the composer is focused.
 func (m *model) renderComposer() string {
-	if m.promptStyle != promptRuled {
-		box := m.th.composerBox
-		if m.input.Focused() {
-			box = m.th.composerFocused
-		}
-		return box.Width(max(1, m.width)).Render(m.input.View())
-	}
-	rule := m.th.composerRule.Render(strings.Repeat("─", max(1, m.width)))
-	return rule + "\n" + m.input.View() + "\n" + rule
+	return m.renderComposerAt(m.width)
 }
 
 func (m *model) renderQueuedFollowUps() string {

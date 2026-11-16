@@ -1,0 +1,12 @@
+seed  t=0s       glyph=▪ level=0.30
+seed  t=1.2s     glyph=▪ level=1.00
+seed  t=1.6s     glyph=▪ level=0.66
+seed  t=2.4s     glyph=▪ level=0.34
+seed  t=3.2s     glyph=▪ level=0.30
+seed  t=5s       glyph=▪ level=0.93
+seed  t=31s      glyph=▪ level=0.76
+sweep t=0s       glyph=🯦
+sweep t=300ms    glyph=𜴔
+sweep t=600ms    glyph=🯧
+sweep t=900ms    glyph=𜴳
+

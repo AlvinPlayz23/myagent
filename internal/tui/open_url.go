@@ -84,7 +84,13 @@ func (t *transcript) blockLineAt(row, width int) (*block, string, bool) {
 // default browser. Assistant-only by design — user, tool, and notice blocks
 // never open. It reports whether the click was consumed.
 func (m *model) ctrlClickURL(point textPoint) bool {
-	b, line, ok := m.transcript.blockLineAt(point.row, m.width)
+	return m.ctrlClickURLAt(point, m.width)
+}
+
+// ctrlClickURLAt is the width-aware form used by the kit shell, whose
+// transcript content width excludes the scrollbar column.
+func (m *model) ctrlClickURLAt(point textPoint, width int) bool {
+	b, line, ok := m.transcript.blockLineAt(point.row, width)
 	if !ok || b.kind != blockAssistant {
 		return false
 	}

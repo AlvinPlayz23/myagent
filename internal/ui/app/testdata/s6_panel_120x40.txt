@@ -1,0 +1,40 @@
+block line a                                                                                                           █
+block line b                                                                                                           █
+                                                                                                                       █
+block line a                                                                                                           █
+block line b                                                                                                           █
+                                                                                                                       █
+block line a                                                                                                           █
+block line b                                                                                                           █
+                                                                                                                       █
+block line a                                                                                                           █
+block line b                                                                                                           █
+                   Reasoning effort                                                               esc                  █
+                                                                                                                       █
+                   ↑/↓ select, enter saves as myagent default, esc cancel                                              █
+                     Low  fast, lightweight reasoning                                                                  █
+                   ● Medium  balanced reasoning  (current)                                                             █
+                     High  deeper reasoning                                                                            █
+                     Max  maximum reasoning                                                                            █
+                                                                                                                       █
+                    cancel esc                                                            save enter                   █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+                                                                                                                       █
+> draft prompt
+  enter to send

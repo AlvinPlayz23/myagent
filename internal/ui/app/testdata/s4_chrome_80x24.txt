@@ -1,0 +1,24 @@
+ myagent │ ⠋ fix-tabs ●
+block line a                                                                   │
+block line b                                                                   │
+                                                                               │
+block line a                                                                   │
+block line b                                                                   │
+                                                                               │
+block line a                                                                   │
+block line b                                                                   │
+                                                                               │
+block line a                                                                   │
+block line b                                                                   █
+                                                                               █
+block line a                                                                   │
+block line b                                                                   │
+                                                                               │
+block line a                                                                   │
+                                                              Jump to latest ↓
+[✓] wire chrome
+[•] write tests
+[ ] ship S4
+> draft prompt
+  enter to send
+~/src/myagent                                                          shell.go

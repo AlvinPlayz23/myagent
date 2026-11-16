@@ -87,7 +87,15 @@ type transcript struct {
 	// streamingIdx points at the assistant block currently being streamed, or
 	// -1 when none.
 	streamingIdx int
+
+	// rev increments on every content/visibility mutation. The kit shell uses
+	// it to mark dirty once per event batch without touching the per-block
+	// width/expand cache contract below.
+	rev int
 }
+
+// touch records a mutation for the retained shell's dirty tracking.
+func (t *transcript) touch() { t.rev++ }
 
 func newTranscript(th *theme, md *mdRenderer) *transcript {
 	return &transcript{th: th, md: md, streamingIdx: -1, showThinking: true}
@@ -95,6 +103,7 @@ func newTranscript(th *theme, md *mdRenderer) *transcript {
 
 // invalidate clears cached renders (e.g. on width change or expand toggle).
 func (t *transcript) invalidate() {
+	t.touch()
 	for _, b := range t.blocks {
 		b.cacheValid = false
 	}
@@ -102,6 +111,7 @@ func (t *transcript) invalidate() {
 
 // clear removes displayed blocks without changing the underlying conversation.
 func (t *transcript) clear() {
+	t.touch()
 	t.blocks = nil
 	t.streamingIdx = -1
 }
@@ -113,6 +123,7 @@ func (t *transcript) setShowThinking(show bool) {
 		return
 	}
 	t.showThinking = show
+	t.touch()
 	for _, b := range t.blocks {
 		b.cacheValid = false
 	}
@@ -122,6 +133,7 @@ func (t *transcript) setShowThinking(show bool) {
 // thinking, and expandable-notice caches.
 func (t *transcript) toggleExpand() {
 	t.expanded = !t.expanded
+	t.touch()
 	for _, b := range t.blocks {
 		if b.kind == blockTool || b.kind == blockThinking || (b.kind == blockNotice && b.noticeDetail != "") {
 			b.cacheValid = false
@@ -131,11 +143,13 @@ func (t *transcript) toggleExpand() {
 
 // addUser appends a user block.
 func (t *transcript) addUser(text string) {
+	t.touch()
 	t.blocks = append(t.blocks, &block{kind: blockUser, text: text})
 }
 
 // beginAssistant starts a new (empty) streaming assistant block.
 func (t *transcript) beginAssistant() {
+	t.touch()
 	t.blocks = append(t.blocks, &block{kind: blockAssistant})
 	t.streamingIdx = len(t.blocks) - 1
 }
@@ -153,12 +167,14 @@ func (t *transcript) appendAssistantDelta(delta string) {
 	b := t.blocks[t.streamingIdx]
 	b.text += delta
 	b.cacheValid = false
+	t.touch()
 }
 
 // beginThinking starts a new (empty) streaming thinking block. An empty
 // assistant block opened by message_start is removed first so it doesn't
 // linger above the thinking block when reasoning precedes the reply text.
 func (t *transcript) beginThinking() {
+	t.touch()
 	if t.streamingIdx >= 0 && t.streamingIdx == len(t.blocks)-1 {
 		if b := t.blocks[t.streamingIdx]; b.kind == blockAssistant && strings.TrimSpace(b.text) == "" {
 			t.blocks = t.blocks[:t.streamingIdx]
@@ -178,12 +194,14 @@ func (t *transcript) appendThinkingDelta(delta string) {
 	b := t.blocks[t.streamingIdx]
 	b.text += delta
 	b.cacheValid = false
+	t.touch()
 }
 
 // endThinking finalizes the current thinking block, removing it if it never
 // received text (mirrors endAssistant). A completed block collapses to its
 // "✻ Thought" header until expanded.
 func (t *transcript) endThinking() {
+	t.touch()
 	if t.streamingIdx >= 0 && t.streamingIdx < len(t.blocks) {
 		b := t.blocks[t.streamingIdx]
 		if b.kind == blockThinking {
@@ -206,6 +224,7 @@ func (t *transcript) endThinking() {
 // provider error) without a thinking_end event or any text delta, and leaving
 // the block unfinished would render "✻ Thinking…" forever.
 func (t *transcript) endAssistant() {
+	t.touch()
 	if t.streamingIdx >= 0 && t.streamingIdx < len(t.blocks) {
 		b := t.blocks[t.streamingIdx]
 		if b.kind == blockThinking {
@@ -221,17 +240,20 @@ func (t *transcript) endAssistant() {
 
 // addErrorText appends a standalone error line (e.g. aborted / stop reason).
 func (t *transcript) addErrorText(text string) {
+	t.touch()
 	t.blocks = append(t.blocks, &block{kind: blockError, text: text})
 }
 
 // addNotice appends a muted system-notice block (e.g. compaction summary).
 func (t *transcript) addNotice(text string) {
+	t.touch()
 	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text})
 }
 
 // addCompletionNotice appends an expandable notice for a system-generated
 // subagent completion. It is never rendered as human input.
 func (t *transcript) addCompletionNotice(text string) {
+	t.touch()
 	headline := "◆ Subagent finished"
 	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(line, "Subagent task ") {
@@ -245,11 +267,13 @@ func (t *transcript) addCompletionNotice(text string) {
 // addRetryNotice appends a retry notice whose underlying provider error is
 // revealed with the global ctrl+o expand toggle.
 func (t *transcript) addRetryNotice(text, detail string) {
+	t.touch()
 	t.blocks = append(t.blocks, &block{kind: blockNotice, text: text, noticeDetail: strings.TrimSpace(detail)})
 }
 
 // startTool appends a tool block in the pending state.
 func (t *transcript) startTool(callID, name string, args map[string]any) {
+	t.touch()
 	t.blocks = append(t.blocks, &block{
 		kind:       blockTool,
 		toolCallID: callID,
@@ -300,6 +324,7 @@ func (t *transcript) endTool(callID string, result *types.ToolResult, isError bo
 	if b == nil {
 		return
 	}
+	t.touch()
 	b.toolDone = true
 	b.toolErr = isError
 	b.toolOutput = resultText(result)

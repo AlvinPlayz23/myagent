@@ -1,0 +1,5 @@
+info     border=#649FA9 body=#444444 rows=5
+success  border=#00AF5F body=#444444 rows=5
+warning  border=#FFAF00 body=#444444 rows=5
+error    border=#FF5F5F body=#444444 rows=5
+

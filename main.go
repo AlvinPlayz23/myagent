@@ -42,6 +42,7 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/tools"
 	"github.com/AlvinPlayz23/myagent/internal/tui"
 	"github.com/AlvinPlayz23/myagent/internal/types"
+	_ "github.com/AlvinPlayz23/myagent/internal/ui/app" // registers the default kit shell (MYAGENT_UI=legacy opts out)
 )
 
 func main() {

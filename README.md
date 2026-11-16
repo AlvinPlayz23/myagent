@@ -278,11 +278,26 @@ binding that reliably reaches the app.
 If neither binding works, run the `/paste` slash command — it reads the
 clipboard through the same code path and is the dependable fallback.
 
-Attached images stay in memory and appear above the prompt as
-`[image] N attached`. On an empty prompt, **Backspace** removes the most
-recent one. Limits: 6 images per message, 8 MiB each, 20 MiB total. You can
-also attach an image file by mentioning it with `@path` (PNG, JPEG, GIF, or
-WebP).
+Attached images stay in memory. The legacy renderer shows them above the prompt as
+`[image] N attached`; the default renderer does not draw an attachment row yet
+(see TUI renderer). On an empty prompt, **Backspace** removes the most recent one.
+Limits: 6 images per message, 8 MiB each, 20 MiB total. You can also attach an image
+file by mentioning it with `@path` (PNG, JPEG, GIF, or WebP).
+
+### TUI renderer
+
+The retained widget renderer is the default. The pre-cutover frame remains
+available for one release as an escape hatch:
+
+```bash
+MYAGENT_UI=legacy go run .
+```
+
+Only the exact value `legacy` opts out; unset and any other value use the
+default renderer. Panels that have not been migrated yet (sessions, effort,
+providers, customize, tools, export, image attachments, and queued follow-ups)
+still render only in the legacy frame, so use the escape hatch for those
+workflows until they land.
 
 ### TUI slash commands
 
