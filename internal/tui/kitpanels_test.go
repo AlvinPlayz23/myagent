@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -251,6 +252,83 @@ func TestKitPickerAcceptSelectsThenActivates(t *testing.T) {
 			t.Fatalf("activate = active %v input %q, want false/@a.go", m.files.active, m.input.Value())
 		}
 	})
+}
+
+func TestKitPickerCustomizeIDsNavigateSaveAndBack(t *testing.T) {
+	m := openCustomize(t, welcomeDefault, promptDefault)
+
+	groups, ok := m.KitPicker()
+	if !ok || groups.Kind != "customize" || len(groups.Items) != len(customizeGroups) {
+		t.Fatalf("group picker = %+v, ok %v", groups, ok)
+	}
+	groupID := groups.Items[1].ID
+	if groupID != "group:1" {
+		t.Fatalf("second group ID = %q, want group:1", groupID)
+	}
+	m.KitPickerAccept(groupID)
+	if got, _ := m.KitPicker(); got.SelectedID != groupID || m.customize.level != 0 {
+		t.Fatalf("first group accept = state %+v, customize %+v; want select only", got, m.customize)
+	}
+	m.KitPickerAccept(groupID)
+	choices, ok := m.KitPicker()
+	if !ok || choices.Title != "Customize › "+customizeGroups[1].label || m.customize.group != 1 {
+		t.Fatalf("second group accept = state %+v, customize %+v", choices, m.customize)
+	}
+
+	// Back from the choice list should restore the group cursor, even though
+	// the cursor in the nested list is a different legacy selection index.
+	m.KitPickerCancel()
+	groups, ok = m.KitPicker()
+	if !ok || groups.SelectedID != groupID || m.customize.level != 0 {
+		t.Fatalf("cancel from choices = state %+v, customize %+v", groups, m.customize)
+	}
+	m.KitPickerAccept(groupID)
+
+	choices, ok = m.KitPicker()
+	if !ok || len(choices.Items) == 0 {
+		t.Fatalf("choice picker = %+v, ok %v", choices, ok)
+	}
+	target := -1
+	for i, row := range m.customize.choices() {
+		if row.prompt != m.promptStyle {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatal("no alternate composer style to select")
+	}
+	item := choices.Items[target]
+	if item.ID != "choice:"+strconv.Itoa(target) {
+		t.Fatalf("choice ID = %q, want choice:%d", item.ID, target)
+	}
+	row := m.customize.choices()[target]
+	var persisted promptStyle
+	persistCalls := 0
+	m.savePromptStyle = func(style promptStyle) error {
+		persisted = style
+		persistCalls++
+		return nil
+	}
+	m.KitPickerAccept(item.ID)
+	if m.customize.sel != target || m.promptStyle == row.prompt || persistCalls != 0 {
+		t.Fatalf("first choice accept = sel %d, style %q, save calls %d; want select only", m.customize.sel, m.promptStyle, persistCalls)
+	}
+	m.KitPickerAccept(item.ID)
+	if m.customize.active || m.promptStyle != row.prompt || persisted != row.prompt || persistCalls != 1 {
+		t.Fatalf("confirmed style = active %v, style %q, persisted %q, save calls %d; want %q saved once",
+			m.customize.active, m.promptStyle, persisted, persistCalls, row.prompt)
+	}
+}
+
+func TestKitPickerCustomizeRejectsInvalidIndexes(t *testing.T) {
+	m := openCustomize(t, welcomeDefault, promptDefault)
+	for _, id := range []string{"group:-1", "group:2", "choice:0", "other:0", "group:nope"} {
+		m.KitPickerAccept(id)
+		if m.customize.level != 0 || m.customize.sel != 0 {
+			t.Fatalf("accepting %q changed customize selection: %+v", id, m.customize)
+		}
+	}
 }
 
 func TestKitPickerCancelProviderKeyReturnsToProviders(t *testing.T) {

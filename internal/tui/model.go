@@ -2205,6 +2205,9 @@ func (m *model) openModelPicker(query string) (tea.Model, tea.Cmd) {
 	cmd := m.discoverActiveProviderModels()
 	m.models.open(items, query)
 	m.statusMsg = "Search models, use up/down, enter selects, esc cancels."
+	if m.kit != nil {
+		m.statusMsg = ""
+	}
 	m.updateLayout()
 	return m, cmd
 }

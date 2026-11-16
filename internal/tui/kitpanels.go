@@ -84,54 +84,57 @@ func (m *model) KitPicker() (KitPickerState, bool) {
 }
 
 func (m *model) kitModelPicker() KitPickerState {
-	state := KitPickerState{
-		Kind:        "models",
-		Mode:        KitPickerSelect,
-		Title:       "Select a model",
-		Placeholder: "search models",
-		Query:       m.models.query,
-	}
+	state := KitPickerState{Kind: "models", Mode: KitPickerSelect, Title: "Select a model", Placeholder: "Search models…", Query: m.models.query}
 	if item, ok := m.models.selected(); ok {
 		state.SelectedID = item.Ref()
 	}
 	for _, item := range m.models.items {
 		title := strings.TrimSpace(item.Name)
 		if title == "" {
-			title = item.Ref()
+			title = item.ID
 		}
-		footer := ""
+		desc := ""
+		if title != item.ID {
+			desc = item.ID
+		}
+		group := item.ProviderName
+		if group == "" {
+			group = item.Provider
+		}
+		metadata := []string{}
+		if item.Ref() == m.modelID {
+			if m.models.query == "" {
+				state.SelectedID = item.Ref()
+			}
+			metadata = append(metadata, "✓ current")
+		}
 		if item.ContextWindow > 0 {
-			footer = fmt.Sprintf("%dk", item.ContextWindow/1000)
+			metadata = append(metadata, fmt.Sprintf("%dk", item.ContextWindow/1000))
 		}
-		state.Items = append(state.Items, KitPickerItem{
-			ID:     item.Ref(),
-			Title:  title,
-			Desc:   item.Ref(),
-			Group:  item.ProviderName,
-			Footer: footer,
-		})
+		state.Items = append(state.Items, KitPickerItem{ID: item.Ref(), Title: title, Desc: desc, Group: group, Footer: strings.Join(metadata, " · ")})
 	}
 	return state
 }
 
 func (m *model) kitCommandPicker() KitPickerState {
-	state := KitPickerState{
-		Kind:        "commands",
-		Mode:        KitPickerSelect,
-		Title:       "Commands",
-		Placeholder: "search commands",
-		Query:       m.picker.prefix,
-	}
+	state := KitPickerState{Kind: "commands", Mode: KitPickerSelect, Title: "Commands", Placeholder: "Search commands…", Query: m.picker.prefix}
 	if item, ok := m.picker.selected(); ok {
 		state.SelectedID = item.name
 	}
-	for _, item := range m.picker.items {
-		state.Items = append(state.Items, KitPickerItem{
-			ID:    item.name,
-			Title: item.name,
-			Desc:  item.description,
-			Group: "Suggested",
-		})
+	for _, group := range []string{"Suggested", "Session", "Tools & interface"} {
+		for _, item := range m.picker.items {
+			category := "Suggested"
+			switch item.kind {
+			case commandCompact, commandClear, commandNew, commandResume, commandRename, commandExport, commandInit:
+				category = "Session"
+			case commandThinking, commandTools, commandMouse, commandPaste:
+				category = "Tools & interface"
+			}
+			if category != group {
+				continue
+			}
+			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: item.name, Desc: item.description, Group: category})
+		}
 	}
 	return state
 }
@@ -445,14 +448,15 @@ func (m *model) KitPickerAccept(id string) tea.Cmd {
 			if item.name != id {
 				continue
 			}
+			needsInput := item.requiresArg && item.kind != commandModel && item.kind != commandEffort
 			value := item.name
-			if item.requiresArg {
+			if needsInput {
 				value += " "
 			}
 			m.input.SetValue(value)
 			m.picker.dismiss(value)
 			m.updateLayout()
-			if !item.requiresArg {
+			if !needsInput {
 				_, cmd := m.submit(submitFollowUp)
 				return cmd
 			}
@@ -499,13 +503,14 @@ func (m *model) KitPickerAccept(id string) tea.Cmd {
 		if !ok || level != m.customize.level {
 			return nil
 		}
+		if index < 0 || index >= m.customize.height() {
+			return nil
+		}
 		if m.customize.sel == index {
 			_, cmd := m.confirmCustomize()
 			return cmd
 		}
-		if index < m.customize.height() {
-			m.customize.sel = index
-		}
+		m.customize.sel = index
 	case "scope":
 		index, ok := kitScopeIndex(id)
 		if !ok {
@@ -675,7 +680,7 @@ func kitCustomizeIndex(id string) (level, index int, ok bool) {
 		return 0, 0, false
 	}
 	index, err := strconv.Atoi(raw)
-	if err != nil {
+	if err != nil || index < 0 {
 		return 0, 0, false
 	}
 	switch kind {

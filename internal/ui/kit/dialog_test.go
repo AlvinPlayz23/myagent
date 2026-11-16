@@ -692,3 +692,66 @@ func TestGoldenDialogFrames(t *testing.T) {
 		})
 	}
 }
+
+func TestPaletteSearchEmptyAndClear(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{ID: "palette", Items: sampleItems(), Placeholder: "Search models…", Palette: true})
+	sel.Layout(Rect{W: 70, H: 12})
+	sel.SetQuery("not-a-model")
+	empty := ansi.Strip(sel.Render(70, 12))
+	for _, want := range []string{"No matches found", "0 results", "↑↓ navigate"} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("empty search missing %q:\n%s", want, empty)
+		}
+	}
+	sel.Key(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if sel.Query() != "" {
+		t.Fatalf("ctrl+u left query %q", sel.Query())
+	}
+	if !strings.Contains(ansi.Strip(sel.Render(70, 12)), "Search models…") {
+		t.Fatal("clear should restore search placeholder")
+	}
+}
+
+func TestPaletteClickChoosesUnselectedRow(t *testing.T) {
+	selected := ""
+	sel := NewDialogSelect(DialogSelectOpts{ID: "palette", Palette: true, Items: []SelectItem{{ID: "one", Title: "One"}, {ID: "two", Title: "Two"}}, OnSelect: func(item SelectItem) bool { selected = item.ID; return true }})
+	root := NewRoot(nil, WithDialogs(NewDialogStack()))
+	root.Dialogs.(*DialogStack).Push(testDialog("Models", sel))
+	root.Render(80, 24)
+	r := sel.list.Bounds()
+	root.Mouse(tea.MouseClickMsg{X: r.X + 3, Y: r.Y + 1, Button: tea.MouseLeft}, root.Bounds())
+	if selected != "two" {
+		t.Fatalf("single-click accepted %q, want two", selected)
+	}
+}
+
+func TestPaletteSearchMatchesProviderAndModelIdentity(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{Palette: true, Items: []SelectItem{{ID: "local/sonnet", Title: "Sonnet", Group: "Local models"}, {ID: "cloud/gemini", Title: "Gemini", Group: "Cloud models"}}})
+	for query, want := range map[string]string{"local/sonnet": "local/sonnet", "cloud": "cloud/gemini", "gemini": "cloud/gemini"} {
+		sel.SetQuery(query)
+		if got := sel.SelectedID(); got != want {
+			t.Fatalf("query %q selected %q, want %q", query, got, want)
+		}
+	}
+}
+
+func TestPaletteFilterResizesDialog(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{ID: "palette", Items: manyItems(30), Palette: true})
+	dialog := testDialog("Models", sel)
+	stack := NewDialogStack()
+	stack.Push(dialog)
+	root := NewRoot(nil, WithDialogs(stack))
+	root.Render(120, 40)
+	before := dialog.Bounds().H
+	sel.SetQuery("no-such-model")
+	root.Render(120, 40)
+	after := dialog.Bounds().H
+	if after >= before {
+		t.Fatalf("filtered dialog height %d should shrink from %d", after, before)
+	}
+	sel.SetQuery("")
+	root.Render(120, 40)
+	if dialog.Bounds().H != before {
+		t.Fatalf("clearing search did not restore height %d", before)
+	}
+}

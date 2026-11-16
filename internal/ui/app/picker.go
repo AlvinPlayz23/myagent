@@ -65,8 +65,13 @@ func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 		ID:          "kit.picker",
 		Items:       pickerItems(state.Items),
 		Placeholder: state.Placeholder,
+		Palette:     state.Kind == "models" || state.Kind == "commands",
 	})
-	sel.SetQuery(state.Query)
+	query := state.Query
+	if state.Kind == "commands" {
+		query = strings.TrimPrefix(query, "/")
+	}
+	sel.SetQuery(query)
 	if state.SelectedID != "" {
 		sel.SelectID(state.SelectedID)
 	}
@@ -75,7 +80,7 @@ func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 		return true
 	}
 	var footer *kit.DialogFooter
-	if state.Kind != "commands" {
+	if state.Kind != "commands" && state.Kind != "models" {
 		footer = kit.NewDialogFooter(
 			kit.DialogButton{Label: "cancel", Key: "esc", Action: func() bool {
 				s.cancelPicker()
