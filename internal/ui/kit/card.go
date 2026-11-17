@@ -37,12 +37,9 @@ type Card struct {
 // raised background, and the OpenCode horizontal padding of 2.
 // OpenTUI: <box border={["left"]} backgroundColor={...}>.
 func NewCard(content Widget) *Card {
-	theme := DefaultTheme()
 	return &Card{
 		WidgetBase: NewWidgetBase(""),
 		Content:    content,
-		Border:     theme.Agent(0),
-		Fill:       theme.Background.Raised.Base,
 		Padding:    InsetsXY(2, 0),
 	}
 }

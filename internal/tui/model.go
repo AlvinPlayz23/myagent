@@ -153,7 +153,7 @@ type promptChoice struct {
 }
 
 var promptChoices = []promptChoice{
-	{style: promptDefault, label: "Default", description: "(default) rounded box that grows with input"},
+	{style: promptDefault, label: "Default", description: "(default) raised panel that grows with input"},
 	{style: promptRuled, label: "Ruled", description: "one line framed by a rule above and below"},
 }
 
@@ -196,6 +196,7 @@ type customizeSection int
 const (
 	sectionStartup customizeSection = iota
 	sectionComposer
+	sectionTheme
 )
 
 // customizeGroup is one top-level entry of the /customize panel. Selecting it
@@ -209,6 +210,7 @@ type customizeGroup struct {
 var customizeGroups = []customizeGroup{
 	{section: sectionStartup, label: "Startup Style", description: "empty-session welcome"},
 	{section: sectionComposer, label: "Composer (Prompt Box)", description: "where you type"},
+	{section: sectionTheme, label: "Theme", description: "colors for the entire interface"},
 }
 
 // customizeRow is one selectable choice within a group.
@@ -218,10 +220,18 @@ type customizeRow struct {
 	description string
 	welcome     welcomeStyle
 	prompt      promptStyle
+	themeName   string
 }
 
 // customizeChoices returns the selectable choices belonging to a group.
 func customizeChoices(section customizeSection) []customizeRow {
+	if section == sectionTheme {
+		rows := make([]customizeRow, 0, len(themeChoices))
+		for _, choice := range themeChoices {
+			rows = append(rows, customizeRow{section: sectionTheme, label: choice.label, description: choice.description, themeName: choice.id})
+		}
+		return rows
+	}
 	if section == sectionComposer {
 		rows := make([]customizeRow, 0, len(promptChoices))
 		for _, choice := range promptChoices {
@@ -487,6 +497,8 @@ type model struct {
 	configureProvider  func(modelcatalog.Provider, string) error
 	saveWelcomeStyle   func(welcomeStyle) error
 	savePromptStyle    func(promptStyle) error
+	saveTheme          func(string) error
+	themeName          string
 	saveDefaultEffort  func(llm.Effort) error
 	defaultEffort      llm.Effort
 	// disabledTools is the /tools deny list, applied on top of whatever
@@ -552,7 +564,7 @@ type model struct {
 // newModel constructs the root model.
 func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRenderer, modelID, cwd string, newSession ...func() error) *model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything… (enter send · / commands)"
+	ta.Placeholder = "Ask anything…"
 	ta.ShowLineNumbers = false
 	ta.SetHeight(defaultComposerHeight)
 	ta.Focus()
@@ -912,14 +924,12 @@ func (m *model) onResize(w, h int) (tea.Model, tea.Cmd) {
 // separators cost no extra rows.
 const chromeHeight = 3
 
-// composerHeight reports the rows the composer occupies, including the chrome
-// around the textarea: the rules in the ruled style, the rounded border in
-// the boxed default.
+// composerHeight includes the editable rows and the active prompt chrome.
 func (m *model) composerHeight() int {
 	if m.promptStyle == promptRuled {
 		return m.input.Height() + composerChromeRows
 	}
-	return m.input.Height() + m.th.composerBox.GetVerticalFrameSize()
+	return m.input.Height() + 5
 }
 
 // fixedHeight is the part of the layout the transcript can never use. The
@@ -2044,10 +2054,39 @@ func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
 	if m.customize.level != 1 || (m.customize.sel < 0 || m.customize.sel >= len(m.customize.choices())) {
 		return m, nil // no valid row under the cursor: save nothing
 	}
+	if row.section == sectionTheme {
+		return m.applyTheme(row)
+	}
 	if row.section == sectionComposer {
 		return m.applyPromptStyle(row)
 	}
 	return m.applyWelcomeStyle(row)
+}
+
+func (m *model) applyTheme(row customizeRow) (tea.Model, tea.Cmd) {
+	name := normalizeThemeName(row.themeName)
+	if m.saveTheme != nil {
+		if err := m.saveTheme(name); err != nil {
+			m.statusMsg = "Could not save customization: " + err.Error()
+			return m, nil
+		}
+	}
+	m.setTheme(name)
+	m.customize.close()
+	m.statusMsg = "Theme set to " + row.label + "."
+	m.updateLayout()
+	return m, nil
+}
+
+// Keep the shared style pointers intact: transcript and model own the same theme.
+func (m *model) setTheme(name string) {
+	SetThemeName(name)
+	m.themeName = CurrentThemeName()
+	*m.th = *newTheme()
+	m.md.reset()
+	m.transcript.invalidate()
+	m.kitComposerRev++
+	m.syncComposerStyle()
 }
 
 func (m *model) applyWelcomeStyle(row customizeRow) (tea.Model, tea.Cmd) {
@@ -2080,24 +2119,29 @@ func (m *model) applyPromptStyle(row customizeRow) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// syncComposerStyle reconfigures the textarea for the active prompt style.
-// Both styles grow with their content between one row and the terminal's
-// budget; MaxContentHeight is what keeps MaxHeight a display cap rather than
-// an input limit. SetWidth must run last: it re-measures the gutter and, in
-// doing so, refits the height to the new bounds. The boxed default renders
-// inside the theme's rounded box, so its textarea is narrowed by the box's
-// own border and padding.
+// syncComposerStyle fits the editable area inside the prompt surface.
 func (m *model) syncComposerStyle() {
-	m.input.Prompt = ruledPrompt
+	m.input.Prompt = ""
+	if m.promptStyle == promptRuled {
+		m.input.Prompt = ruledPrompt
+	}
 	m.input.DynamicHeight = true
 	m.input.MinHeight = composerMinRows
 	m.input.MaxHeight = m.composerGrowthLimit()
 	m.input.MaxContentHeight = composerContentRows
-	width := max(1, m.width)
+	styles := m.input.Styles()
+	bg := m.th.tokens.Background.Raised.Base.Color()
+	base := lipgloss.NewStyle().Foreground(m.th.tokens.Text.Base.Color())
 	if m.promptStyle != promptRuled {
-		width = max(1, m.width-m.th.composerBox.GetHorizontalFrameSize())
+		base = base.Background(bg)
 	}
-	m.input.SetWidth(width)
+	styles.Focused.Base, styles.Blurred.Base = base, base
+	styles.Focused.Text, styles.Blurred.Text = base, base
+	styles.Focused.CursorLine, styles.Blurred.CursorLine = base, base
+	styles.Focused.Placeholder = base.Foreground(m.th.tokens.Text.Muted.Color())
+	styles.Blurred.Placeholder = styles.Focused.Placeholder
+	m.input.SetStyles(styles)
+	m.KitSetComposerWidth(max(1, m.width))
 }
 
 // composerGrowthLimit is the tallest the textarea may render on this
@@ -2107,7 +2151,11 @@ func (m *model) composerGrowthLimit() int {
 	if m.height <= 0 {
 		return composerMaxRows
 	}
-	budget := m.height - chromeHeight - composerChromeRows - composerReserve
+	chrome := composerChromeRows
+	if m.promptStyle != promptRuled {
+		chrome = 5
+	}
+	budget := m.height - chromeHeight - chrome - composerReserve
 	return max(composerMinRows, min(composerMaxRows, budget))
 }
 
@@ -2198,6 +2246,9 @@ func (m *model) openModelPicker(query string) (tea.Model, tea.Cmd) {
 	cmd := m.discoverActiveProviderModels()
 	m.models.open(items, query)
 	m.statusMsg = "Search models, use up/down, enter selects, esc cancels."
+	if m.kit != nil {
+		m.statusMsg = ""
+	}
 	m.updateLayout()
 	return m, cmd
 }
@@ -3275,6 +3326,9 @@ func (m *model) renderCustomizeChoices(height int) string {
 
 // rowIsCurrent reports whether a row holds the value its group is set to.
 func (m *model) rowIsCurrent(row customizeRow) bool {
+	if row.section == sectionTheme {
+		return normalizeThemeName(m.themeName) == row.themeName
+	}
 	if row.section == sectionComposer {
 		return row.prompt == m.promptStyle
 	}

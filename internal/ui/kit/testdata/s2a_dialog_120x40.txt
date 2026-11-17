@@ -11,7 +11,7 @@
  ┃
  ┃                 Select a model                                                                 esc
  ┃
- ┃                 ⌕ search models
+ ┃                 search models
  ┃
  ┃                 Anthropic
  ┃                 ● Claude Opus  most capable                                                 ctrl+1

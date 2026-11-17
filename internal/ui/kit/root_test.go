@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/AlvinPlayz23/myagent/internal/tui"
 )
 
 func testTree() (*Root, *probeWidget, *probeWidget, *Box) {
@@ -67,6 +69,108 @@ func TestRootDirtyCounterIdle(t *testing.T) {
 	root.Render(41, 10)
 	if root.ComposeCount() != 3 {
 		t.Fatalf("idle after resize composed again: count = %d", root.ComposeCount())
+	}
+}
+
+func TestRootRefreshesCachedTheme(t *testing.T) {
+	tui.SetThemeName("tokyonight")
+	t.Cleanup(func() { tui.SetThemeName("default") })
+
+	scroll := NewScrollBox(fixedItems(12)...)
+	focusable := newProbe("focused")
+	root := NewRoot(VBox(
+		Child{W: scroll, Grow: 1},
+		Child{W: focusable, Fixed: 1},
+	))
+	first := root.Render(20, 6)
+	if !root.Focus.Focus("focused") {
+		t.Fatal("could not focus test widget")
+	}
+	scroll.ScrollTo(20)
+	root.Render(20, 6)
+	composed := root.ComposeCount()
+	scrollTop := scroll.ScrollTop()
+	scrollFrame := scroll.Render(scroll.Bounds().W, scroll.Bounds().H)
+	if scrollTop == 0 {
+		t.Fatal("test scroll position was not established")
+	}
+
+	previousRevision := tui.ThemeRevision()
+	tui.SetThemeName("catppuccin")
+	if tui.ThemeRevision() == previousRevision {
+		t.Fatal("theme revision did not change")
+	}
+	second := root.Render(20, 6)
+	if second == first {
+		t.Fatal("theme change reused the previous ANSI frame")
+	}
+	if got := scroll.Render(scroll.Bounds().W, scroll.Bounds().H); got == scrollFrame {
+		t.Fatal("nested scrollbox cache retained the previous theme")
+	}
+	if root.Fill != tui.CurrentThemeTokens().Background.Base {
+		t.Fatal("default root fill did not follow the selected theme")
+	}
+	if root.ComposeCount() != composed+1 {
+		t.Fatalf("theme change compose count = %d, want %d", root.ComposeCount(), composed+1)
+	}
+	if got := root.Focus.FocusedID(); got != "focused" {
+		t.Fatalf("focused widget changed to %q", got)
+	}
+	if got := scroll.ScrollTop(); got != scrollTop {
+		t.Fatalf("scroll position changed from %d to %d", scrollTop, got)
+	}
+	if idle := root.Render(20, 6); idle != second || root.ComposeCount() != composed+1 {
+		t.Fatal("idle render after theme refresh did not reuse the refreshed frame")
+	}
+}
+
+func TestRootThemeRefreshPreservesCustomFill(t *testing.T) {
+	tui.SetThemeName("tokyonight")
+	t.Cleanup(func() { tui.SetThemeName("default") })
+
+	custom := tui.CurrentThemeTokens().Background.Raised.Base
+	root := NewRoot(nil, WithRootFill(custom))
+	root.Render(8, 2)
+	tui.SetThemeName("catppuccin")
+	root.Render(8, 2)
+	if root.Fill != custom {
+		t.Fatal("theme refresh replaced an explicit root fill")
+	}
+}
+
+func TestRootThemeRefreshUpdatesDefaultDialogScrim(t *testing.T) {
+	tui.SetThemeName("tokyonight")
+	t.Cleanup(func() { tui.SetThemeName("default") })
+
+	defaultScrim := tui.CurrentThemeTokens().Background.Base
+	stack := NewDialogStack()
+	if stack.ScrimFill != defaultScrim {
+		t.Fatal("dialog stack did not start with the default theme scrim")
+	}
+	root := NewRoot(nil, WithDialogs(stack))
+	root.Render(8, 2)
+
+	tui.SetThemeName("catppuccin")
+	root.Render(8, 2)
+	if got, want := stack.ScrimFill, tui.CurrentThemeTokens().Background.Base; got != want {
+		t.Fatal("dialog stack scrim did not follow the selected theme")
+	}
+}
+
+func TestRootThemeRefreshPreservesCustomDialogScrim(t *testing.T) {
+	tui.SetThemeName("tokyonight")
+	t.Cleanup(func() { tui.SetThemeName("default") })
+
+	custom := tui.CurrentThemeTokens().Background.Raised.Base
+	stack := NewDialogStack()
+	stack.ScrimFill = custom
+	root := NewRoot(nil, WithDialogs(stack))
+	root.Render(8, 2)
+
+	tui.SetThemeName("catppuccin")
+	root.Render(8, 2)
+	if stack.ScrimFill != custom {
+		t.Fatal("theme refresh replaced an explicit dialog scrim")
 	}
 }
 
@@ -233,5 +337,25 @@ func TestRootHiddenWidgetLeavesFocus(t *testing.T) {
 	}
 	if _, ok := root.HitRegistry().Rect("head"); ok {
 		t.Fatal("hidden widget remained hittable")
+	}
+}
+
+func TestRootComposesToastInsideItsOwnBounds(t *testing.T) {
+	toast := NewToastHost(ToastOpts{ID: "toast", MaxWidth: 40})
+	toast.Show(Toast{Message: "Choose a model"})
+	root := NewRoot(nil, WithToasts(toast))
+	lines := strings.Split(ansi.Strip(root.Render(100, 30)), "\n")
+	bounds := toast.Bounds()
+	for y, line := range lines {
+		if y < bounds.Y || y >= bounds.Y+bounds.H {
+			if strings.TrimSpace(line) != "" {
+				t.Fatalf("toast painted outside its rows at %d", y)
+			}
+		} else if strings.TrimSpace(string([]rune(line)[:bounds.X])) != "" {
+			t.Fatalf("toast painted left of its bounds at %d", y)
+		}
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "Choose a model") {
+		t.Fatal("toast content missing")
 	}
 }

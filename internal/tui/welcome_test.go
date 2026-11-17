@@ -40,7 +40,8 @@ func TestRainDensityStaysThin(t *testing.T) {
 // persisted /tools deny list is non-empty it replaces the prompt hint, listing
 // the disabled tools sorted; with an empty list the normal hint returns.
 func TestWelcomeHintReportsDisabledTools(t *testing.T) {
-	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+	dir := t.TempDir()
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", dir)
 	m.onResize(120, 40)
 
 	if got := ansi.Strip(m.welcomeHintPlain()); !strings.Contains(got, "Type a prompt") {
@@ -190,17 +191,22 @@ func TestMyagentWelcomeStacked(t *testing.T) {
 	}
 }
 
-func TestMyagentWelcomeHeroWide(t *testing.T) {
-	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+func TestMyagentWelcomeWideCentered(t *testing.T) {
+	dir := t.TempDir()
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", dir)
 	m.onResize(120, 40)
 	m.welcomeStyle = welcomeMyagent
 	view := m.renderWelcome()
-	// Borderless hero: logo and menu side by side, no box drawing.
-	if strings.Contains(view, "╭") || strings.Contains(view, "╰") || strings.Contains(view, "│") {
-		t.Fatalf("wide myagent welcome still draws a hero box:\n%s", view)
+	logoAt, brandAt, menuAt := strings.Index(view, "█"), strings.Index(view, "myagent"), strings.Index(view, "/resume")
+	if logoAt < 0 || brandAt <= logoAt || menuAt <= brandAt {
+		t.Fatalf("wide welcome should stack the myagent mark above its menu:\n%s", view)
 	}
-	if !strings.Contains(view, "█") || !strings.Contains(view, "/resume") {
-		t.Fatalf("wide myagent welcome missing logo or menu:\n%s", view)
+	if strings.Contains(view, "╭") || strings.Contains(view, "│") {
+		t.Fatalf("wide myagent welcome should remain borderless:\n%s", view)
+	}
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[len(lines)-1], collapseHome(dir)) {
+		t.Fatalf("location should remain on the bottom row:\n%s", view)
 	}
 }
 
@@ -214,5 +220,54 @@ func TestMyagentChoiceRegistered(t *testing.T) {
 	}
 	if got := normalizeWelcomeStyle("bogus"); got != welcomeDefault {
 		t.Fatalf("normalize bogus = %q, want default", got)
+	}
+}
+
+func TestKitHomeWordmarkFitsPromptRegion(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", t.TempDir())
+	for _, width := range []int{20, 40, 75} {
+		view := ansi.Strip(m.KitWelcome(width, 8))
+		lines := strings.Split(view, "\n")
+		if len(lines) != 8 {
+			t.Fatalf("home wordmark height = %d", len(lines))
+		}
+		for _, line := range lines {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("wordmark overflow at %d: %q", width, line)
+			}
+		}
+		if strings.Contains(view, "Start typing") || strings.Contains(view, "/resume") {
+			t.Fatal("home logo region includes obsolete menu")
+		}
+	}
+	m.disabledTools = []string{"bash"}
+	if view := ansi.Strip(m.KitWelcome(75, 8)); !strings.Contains(view, "Disabled tools: bash") {
+		t.Fatal("home must keep disabled-tools notice")
+	}
+}
+
+func TestHomeWordmarkUsesCompactPixels(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	rows := m.pixelWordmark()
+	if len(rows) != 4 {
+		t.Fatalf("pixel wordmark height = %d", len(rows))
+	}
+	text := ansi.Strip(strings.Join(rows, "\n"))
+	if !strings.Contains(text, "▀") || !strings.Contains(text, "▄") || !strings.Contains(text, "█") {
+		t.Fatal("wordmark should use packed pixel blocks")
+	}
+	for _, row := range rows {
+		if ansi.StringWidth(row) != 41 {
+			t.Fatalf("wordmark row width = %d", ansi.StringWidth(row))
+		}
+	}
+	for _, choice := range welcomeChoices {
+		m.welcomeStyle = choice.style
+		before := m.KitWelcomeRev()
+		m.onResize(80, 30)
+		m.update(tickMsg{})
+		if choice.style.animated() && m.KitWelcomeRev() == before {
+			t.Fatalf("%s did not advance", choice.style)
+		}
 	}
 }

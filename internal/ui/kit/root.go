@@ -31,6 +31,10 @@ type Root struct {
 	Fill   tui.Token
 	Filled bool
 
+	themeRevision uint64
+	themeFill     tui.Token
+	followTheme   bool
+
 	hits     *HitRegistry
 	cache    RenderCache
 	composed int
@@ -90,7 +94,12 @@ func WithToasts(w Widget) RootOption {
 func WithDialogs(w Widget) RootOption { return RegisterBandHost(BandDialogs, w) }
 
 // WithRootFill overrides the full-screen base-layer token.
-func WithRootFill(t tui.Token) RootOption { return func(r *Root) { r.Fill = t } }
+func WithRootFill(t tui.Token) RootOption {
+	return func(r *Root) {
+		r.Fill = t
+		r.followTheme = false
+	}
+}
 
 // WithInitialFocus queues a focus target to be applied after the first layout
 // pass. The id may be supplied before the target exists — Root holds it until
@@ -130,13 +139,16 @@ func (r *Root) PendingFocus() string { return r.pendingFocus }
 func NewRoot(base Widget, opts ...RootOption) *Root {
 	theme := DefaultTheme()
 	r := &Root{
-		WidgetBase: NewWidgetBase("root"),
-		Base:       base,
-		Focus:      NewFocusRing(),
-		Fill:       theme.Background.Base,
-		Filled:     true,
-		hits:       NewHitRegistry(),
-		hosts:      make(map[int]bandHost),
+		WidgetBase:    NewWidgetBase("root"),
+		Base:          base,
+		Focus:         NewFocusRing(),
+		Fill:          theme.Background.Base,
+		Filled:        true,
+		hits:          NewHitRegistry(),
+		hosts:         make(map[int]bandHost),
+		themeRevision: tui.ThemeRevision(),
+		themeFill:     theme.Background.Base,
+		followTheme:   true,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -334,6 +346,7 @@ func (r *Root) Render(w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
+	r.refreshTheme()
 	if !r.Visible {
 		return fitBlock("", w, h)
 	}
@@ -348,6 +361,43 @@ func (r *Root) Render(w, h int) string {
 	r.cache.Store(w, h, r.Rev(), out)
 	clearDirtyTree(r)
 	return out
+}
+
+// refreshTheme invalidates retained paint without disturbing widget state or
+// geometry. Every descendant cache gets a revision bump before Root looks up
+// its full-frame cache.
+func (r *Root) refreshTheme() {
+	revision := tui.ThemeRevision()
+	if revision == r.themeRevision {
+		return
+	}
+	theme := tui.CurrentThemeTokens()
+	for _, layer := range r.layers() {
+		stack, ok := layer.w.(*DialogStack)
+		if ok && stack.ScrimFill == r.themeFill {
+			stack.ScrimFill = theme.Background.Base
+		}
+	}
+	if r.followTheme && r.Fill == r.themeFill {
+		r.Fill = theme.Background.Base
+	} else {
+		r.followTheme = false
+	}
+	r.themeRevision = revision
+	r.themeFill = theme.Background.Base
+	markDirtyTree(r)
+}
+
+func markDirtyTree(w Widget) {
+	if w == nil {
+		return
+	}
+	if b := baseOf(w); b != nil {
+		b.MarkDirty()
+	}
+	for _, child := range childWidgets(w) {
+		markDirtyTree(child)
+	}
 }
 
 // compose paints the full-screen base then bands 20/10/0 in ascending order.
@@ -371,7 +421,7 @@ func (r *Root) compose(w, h int) string {
 				applyScrim(cv, full, tok, alpha)
 			}
 		}
-		drawWidget(cv, l.w, full, full)
+		drawWidget(cv, l.w, WidgetBounds(l.w), full)
 	}
 	return padCanvas(cv, w, h)
 }

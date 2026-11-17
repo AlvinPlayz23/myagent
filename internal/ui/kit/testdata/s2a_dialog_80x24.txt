@@ -7,7 +7,7 @@
  ┃  paragr                                                            th-
  ┃  aware    Select a model                                     esc   al
  ┃  sizes.
- ┃           ⌕ search models
+ ┃           search models
  ┃
  ┃           Anthropic
  ┃           ● Claude Opus  most capable                     ctrl+1

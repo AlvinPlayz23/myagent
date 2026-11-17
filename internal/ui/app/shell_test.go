@@ -384,22 +384,22 @@ func TestShellMouseRouting(t *testing.T) {
 	}
 	got := host.clicks[0]
 	// First visible item starts at start; y=2 is inside the first visible block.
-	if got.col != 3 || got.row != start+2 {
-		t.Fatalf("in-block click = %+v, want row %d col 3", got, start+2)
+	if got.col != 1 || got.row != start+2 {
+		t.Fatalf("in-block click = %+v, want row %d col 1", got, start+2)
 	}
 
 	// Motion and release inside the block continue the same selection path.
 	if !s.Mouse(tea.MouseMotionMsg{X: 5, Y: 3, Button: tea.MouseLeft}) {
 		t.Fatal("drag motion not consumed")
 	}
-	if len(host.motions) != 1 || host.motions[0] != (fakePoint{row: start + 3, col: 5}) {
-		t.Fatalf("motion = %+v, want row %d col 5", host.motions, start+3)
+	if len(host.motions) != 1 || host.motions[0] != (fakePoint{row: start + 3, col: 3}) {
+		t.Fatalf("motion = %+v, want row %d col 3", host.motions, start+3)
 	}
 	if !s.Mouse(tea.MouseReleaseMsg{X: 5, Y: 3, Button: tea.MouseLeft}) {
 		t.Fatal("release not consumed")
 	}
-	if len(host.releases) != 1 || host.releases[0] != (fakePoint{row: start + 3, col: 5}) {
-		t.Fatalf("release = %+v, want row %d col 5", host.releases, start+3)
+	if len(host.releases) != 1 || host.releases[0] != (fakePoint{row: start + 3, col: 3}) {
+		t.Fatalf("release = %+v, want row %d col 3", host.releases, start+3)
 	}
 
 	// A click on the separator row outside block widgets falls through to the
@@ -408,8 +408,8 @@ func TestShellMouseRouting(t *testing.T) {
 	if !s.Mouse(tea.MouseClickMsg{X: 4, Y: 2, Button: tea.MouseLeft}) {
 		t.Fatal("gap click not consumed")
 	}
-	if len(host.clicks) != 1 || host.clicks[0].col != 4 {
-		t.Fatalf("gap click = %+v, want col 4", host.clicks)
+	if len(host.clicks) != 1 || host.clicks[0].col != 2 {
+		t.Fatalf("gap click = %+v, want col 2", host.clicks)
 	}
 
 	// Clicking the composer focuses it and does not start a transcript drag.
@@ -511,8 +511,8 @@ func TestShellResizeUpdatesTranscriptWidth(t *testing.T) {
 	}
 	s := newTestShell(host)
 	s.Render(80, 24)
-	if got := host.blocks[0].lastWidth; got != 79 {
-		t.Fatalf("block width at 80 = %d, want 79 (scrollbar reserved)", got)
+	if got := host.blocks[0].lastWidth; got != 75 {
+		t.Fatalf("block width at 80 = %d, want 75 (scrollbar reserved)", got)
 	}
 
 	rev := host.transcript
@@ -521,12 +521,12 @@ func TestShellResizeUpdatesTranscriptWidth(t *testing.T) {
 		t.Fatal("resize with a width change should invalidate the transcript")
 	}
 	last := host.sizes[len(host.sizes)-1]
-	if last != [2]int{59, 13} {
-		t.Fatalf("published size = %v, want [59 13]", last)
+	if last != [2]int{55, 13} {
+		t.Fatalf("published size = %v, want [55 13]", last)
 	}
 	s.Render(60, 15)
-	if got := host.blocks[0].lastWidth; got != 59 {
-		t.Fatalf("block width at 60 = %d, want 59", got)
+	if got := host.blocks[0].lastWidth; got != 55 {
+		t.Fatalf("block width at 60 = %d, want 55", got)
 	}
 
 	// Welcome mode uses the full width: no scrollbar column is reserved.
@@ -535,8 +535,8 @@ func TestShellResizeUpdatesTranscriptWidth(t *testing.T) {
 	host.transcript++
 	s.Sync()
 	s.Render(60, 15)
-	if got := host.sizes[len(host.sizes)-1]; got != [2]int{60, 13} {
-		t.Fatalf("welcome published size = %v, want [60 13]", got)
+	if got := host.sizes[len(host.sizes)-1]; got != [2]int{56, 8} {
+		t.Fatalf("welcome published size = %v, want [56 8]", got)
 	}
 }
 
@@ -558,5 +558,89 @@ func trimLines(s string) string {
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " ")
 	}
-	return strings.Join(lines, "\n")
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+func TestHomeCentersPromptWithoutUsageRail(t *testing.T) {
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {40, 18}, {20, 10}} {
+		host := s4Host()
+		host.welcome = true
+		host.welcomeText = "myagent"
+		s := newShell(host)
+		s.Resize(size[0], size[1])
+		frame := s.Render(size[0], size[1])
+		assertFrame(t, frame, size[0], size[1])
+		if s.sidebarW != 0 {
+			t.Fatal("home must not show the session usage rail")
+		}
+		if s.composerR.W > 75 {
+			t.Fatalf("home prompt width = %d, want <=75", s.composerR.W)
+		}
+		if delta := size[0] - s.composerR.W - 2*s.composerR.X; delta < 0 || delta > 1 {
+			t.Fatalf("home prompt is not centered: %+v in %d columns", s.composerR, size[0])
+		}
+		if s.scroll.Bounds().X != s.composerR.X || s.scroll.Bounds().W != s.composerR.W {
+			t.Fatal("home logo and composer must share horizontal bounds")
+		}
+	}
+}
+
+type wrappingHost struct {
+	fakeHost
+	promptWidth int
+}
+
+func (h *wrappingHost) KitSetComposerWidth(w int) {
+	h.promptWidth = w
+	h.composerH = 2
+	if w < 76 {
+		h.composerH = 4
+	}
+}
+
+func TestComposerWidthIsAppliedBeforeHeightMeasurement(t *testing.T) {
+	host := &wrappingHost{fakeHost: fakeHost{composerH: 2}}
+	s := newShell(host)
+	s.Resize(80, 24)
+	s.Sync()
+	s.Render(80, 24)
+	if host.promptWidth != 76 || s.composerH != 2 {
+		t.Fatalf("wide prompt: width %d height %d", host.promptWidth, s.composerH)
+	}
+	s.Resize(60, 24)
+	s.Sync()
+	s.Render(60, 24)
+	if host.promptWidth != 56 || s.composerH != 4 {
+		t.Fatalf("wrapped prompt: width %d height %d", host.promptWidth, s.composerH)
+	}
+	if s.scroll.Bounds().Y+s.scroll.Bounds().H != s.composerR.Y {
+		t.Fatal("wrapped composer overlaps transcript")
+	}
+}
+
+type animatedWelcomeHost struct {
+	fakeHost
+	frame int
+}
+
+func (h *animatedWelcomeHost) KitWelcomeRev() int         { return h.frame }
+func (h *animatedWelcomeHost) KitWelcome(int, int) string { return strings.Repeat("█", h.frame+1) }
+
+func TestWelcomeAnimationRepaintsWithoutNewSession(t *testing.T) {
+	host := &animatedWelcomeHost{fakeHost: fakeHost{welcome: true, composerH: 2}}
+	s := newShell(host)
+	s.Resize(80, 24)
+	before := s.Render(80, 24)
+	host.frame++
+	s.Sync()
+	after := s.Render(80, 24)
+	if before == after {
+		t.Fatal("welcome reused cached animation frame")
+	}
+	composed := s.root.ComposeCount()
+	s.Sync()
+	s.Render(80, 24)
+	if s.root.ComposeCount() != composed {
+		t.Fatal("unchanged welcome frame recomposed")
+	}
 }

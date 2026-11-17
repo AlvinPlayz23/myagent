@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -289,7 +290,15 @@ func (s *DialogStack) Modal() bool { return len(s.stack) > 0 }
 
 // NeedsLayout reports that the stack composition changed, so Root re-runs the
 // geometry pass before the next composite (a dialog has never been laid out).
-func (s *DialogStack) NeedsLayout() bool { return s.layoutRev != s.laidRev }
+func (s *DialogStack) NeedsLayout() bool {
+	if s.layoutRev != s.laidRev {
+		return true
+	}
+	if top, ok := s.Top().(interface{ NeedsLayout() bool }); ok {
+		return top.NeedsLayout()
+	}
+	return false
+}
 
 // Scrim reports the backdrop blend for Root's compositor.
 func (s *DialogStack) Scrim() (tui.Token, float64, bool) {
@@ -536,6 +545,14 @@ func NewDialogLayout(opts DialogLayoutOpts) *DialogLayout {
 	}
 	l.target = &FocusTarget{ID: id, Widget: l, OnFocus: l.MarkDirty, OnBlur: l.MarkDirty}
 	return l
+}
+
+// NeedsLayout propagates a filtered body's preferred-height change.
+func (l *DialogLayout) NeedsLayout() bool {
+	if body, ok := l.Body.(interface{ NeedsLayout() bool }); ok {
+		return body.NeedsLayout()
+	}
+	return false
 }
 
 // SetTitle mutates the header label idempotently.
@@ -889,6 +906,7 @@ type DialogSelectOpts struct {
 	Items       []SelectItem
 	Placeholder string
 	NoMotion    bool
+	Palette     bool
 	OnSelect    func(SelectItem) bool
 }
 
@@ -901,13 +919,15 @@ type DialogSelect struct {
 
 	Items       []SelectItem
 	Placeholder string
+	Palette     bool
 	OnSelect    func(SelectItem) bool
 
-	list    *List
-	query   []rune
-	parentH int
-	target  *FocusTarget
-	cache   RenderCache
+	list        *List
+	query       []rune
+	parentH     int
+	layoutDirty bool
+	target      *FocusTarget
+	cache       RenderCache
 }
 
 // NewDialogSelect builds the picker body with the first row selected.
@@ -920,8 +940,9 @@ func NewDialogSelect(opts DialogSelectOpts) *DialogSelect {
 		WidgetBase:  NewWidgetBase(id),
 		Items:       opts.Items,
 		Placeholder: opts.Placeholder,
+		Palette:     opts.Palette,
 		OnSelect:    opts.OnSelect,
-		list:        NewList(ListOpts{ID: id + ".rows", NoMotion: opts.NoMotion}),
+		list:        NewList(ListOpts{ID: id + ".rows", NoMotion: opts.NoMotion, Palette: opts.Palette}),
 	}
 	s.list.OnChoose = s.choose
 	s.target = &FocusTarget{ID: id, Widget: s, OnFocus: s.MarkDirty, OnBlur: s.MarkDirty}
@@ -993,6 +1014,9 @@ func (s *DialogSelect) PreferredHeight(_, maxH int) int {
 	if capRows == 0 {
 		capRows = max(1, maxH/2-6)
 	}
+	if s.Palette {
+		return 4 + min(max(1, len(s.list.displayLines())), capRows)
+	}
 	return 2 + min(len(s.filteredRows()), capRows)
 }
 
@@ -1003,6 +1027,9 @@ func (s *DialogSelect) filteredRows() []ListRow { return s.list.Rows }
 func (s *DialogSelect) refilter() {
 	rows := SelectRows(s.Items, string(s.query))
 	s.list.SetRows(rows)
+	if s.Palette {
+		s.layoutDirty = true
+	}
 	s.MarkDirty()
 }
 
@@ -1019,15 +1046,21 @@ func (s *DialogSelect) choose(row ListRow) bool {
 	return false
 }
 
-// Layout puts the search row at the top and the list below, capped.
-// OpenTUI: column child layout; OpenCode: search + list body.
+// NeedsLayout reports a search-driven height change.
+func (s *DialogSelect) NeedsLayout() bool { return s.layoutDirty }
+
+// Layout puts the search row at the top and the capped list below.
 func (s *DialogSelect) Layout(r Rect) {
+	s.layoutDirty = false
 	s.SetBounds(r)
 	if !s.Visible || r.Empty() {
 		return
 	}
 	capRows := s.capRows()
 	avail := max(0, r.H-2)
+	if s.Palette {
+		avail = max(0, avail-2)
+	}
 	if capRows > 0 && avail > capRows {
 		avail = capRows
 	}
@@ -1035,7 +1068,7 @@ func (s *DialogSelect) Layout(r Rect) {
 	s.list.Layout(Rect{X: r.X, Y: r.Y + 2, W: r.W, H: avail})
 }
 
-// Render paints the ⌕ search row and the list.
+// Render paints the search field and the list.
 func (s *DialogSelect) Render(w, h int) string {
 	if !s.Visible || w <= 0 || h <= 0 {
 		return ""
@@ -1044,17 +1077,46 @@ func (s *DialogSelect) Render(w, h int) string {
 		th := DefaultTheme()
 		cv := lipgloss.NewCanvas(w, h)
 		if string(s.query) == "" {
-			label := "⌕ " + s.Placeholder
-			if s.Placeholder == "" {
-				label = "⌕ type to filter"
+			label := s.Placeholder
+			if label == "" {
+				label = "Search"
 			}
 			drawStyled(cv, 0, 0, w, label,
 				lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 		} else {
-			drawStyled(cv, 0, 0, w, "⌕ "+string(s.query),
+			drawStyled(cv, 0, 0, w, string(s.query),
 				lipgloss.NewStyle().Foreground(th.Text.Base.Color()))
 		}
 		drawWidget(cv, s.list, s.list.Bounds(), s.Bounds())
+		if s.Palette {
+			count := 0
+			for _, row := range s.list.Rows {
+				if !row.Header {
+					count++
+				}
+			}
+			if count == 0 && h > 2 {
+				message := "No items available"
+				if s.Query() != "" {
+					message = "No matches found"
+				}
+				drawText(cv, 0, 2, w, message, th.Text.Muted.Color())
+			}
+			if h >= 4 {
+				hint := "↑↓ navigate  enter select"
+				if w < 48 {
+					hint = "↑↓ move  ↵ select"
+				}
+				drawText(cv, 0, h-1, w, hint, th.Text.Muted.Color())
+				countText := strconv.Itoa(count) + " results"
+				if count == 1 {
+					countText = "1 result"
+				}
+				if w > len(hint)+len(countText)+2 {
+					drawText(cv, w-len(countText), h-1, len(countText), countText, th.Text.Muted.Color())
+				}
+			}
+		}
 		return padCanvas(cv, w, h)
 	})
 }
@@ -1074,6 +1136,18 @@ func (s *DialogSelect) Key(ev tea.KeyPressMsg) bool {
 		}
 		s.query = nil
 		s.refilter()
+		return true
+	case "ctrl+u":
+		s.SetQuery("")
+		return true
+	case "pgup", "pgdown":
+		delta := max(1, s.list.Bounds().H-2)
+		if ev.String() == "pgup" {
+			delta = -delta
+		}
+		if s.list.Move(delta) {
+			s.MarkDirty()
+		}
 		return true
 	case "up", "ctrl+p":
 		if s.list.Move(-1) {
@@ -1155,10 +1229,11 @@ func scoreItem(query string, it SelectItem) (int, bool) {
 	}
 	titleScore, titleOK := fuzzyScore(query, it.Title)
 	descScore, descOK := fuzzyScore(query, it.Desc)
-	if !titleOK && !descOK {
+	identityScore, identityOK := fuzzyScore(query, it.ID+" "+it.Group)
+	if !titleOK && !descOK && !identityOK {
 		return 0, false
 	}
-	return 2*titleScore + descScore, true
+	return 2*titleScore + max(descScore, identityScore), true
 }
 
 // fuzzyScore is a minimal fuzzysort-style subsequence score: +1 per match, +2

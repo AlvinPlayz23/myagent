@@ -964,21 +964,21 @@ func TestBoxedComposerStartsOneLineTall(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(60, 20)
 
-	if got := m.composerHeight(); got != 3 {
-		t.Fatalf("composerHeight = %d, want 3 (one text row plus box border)", got)
+	if got := m.composerHeight(); got != 6 {
+		t.Fatalf("composerHeight = %d, want 6 (one text row plus prompt chrome)", got)
 	}
 	out := m.renderComposer()
 	plain := ansi.Strip(out)
 	lines := strings.Split(plain, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("boxed composer rows = %d, want 3:\n%s", len(lines), plain)
+	if len(lines) != 6 {
+		t.Fatalf("boxed composer rows = %d, want 6:\n%s", len(lines), plain)
 	}
 	for _, line := range lines {
 		if got := len([]rune(line)); got != 60 {
 			t.Errorf("composer row width = %d, want 60: %q", got, line)
 		}
 	}
-	for _, want := range []string{"╭", "╮", "╰", "╯", "› ", "Ask anything…"} {
+	for _, want := range []string{"┃", "╹", "Build", "model", "Ask anything…", "/ commands"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("boxed composer missing %q:\n%s", want, plain)
 		}
@@ -990,13 +990,13 @@ func TestBoxedComposerGrowsWithInput(t *testing.T) {
 	m.onResize(60, 20)
 	m.input.SetValue("line1\nline2\nline3")
 
-	if got := m.composerHeight(); got != 5 {
-		t.Fatalf("composerHeight = %d, want 5 (three text rows plus box border)", got)
+	if got := m.composerHeight(); got != 8 {
+		t.Fatalf("composerHeight = %d, want 8 (three text rows plus prompt chrome)", got)
 	}
 	plain := ansi.Strip(m.renderComposer())
 	lines := strings.Split(plain, "\n")
-	if len(lines) != 5 {
-		t.Fatalf("boxed composer rows = %d, want 5:\n%s", len(lines), plain)
+	if len(lines) != 8 {
+		t.Fatalf("boxed composer rows = %d, want 8:\n%s", len(lines), plain)
 	}
 	for _, line := range lines {
 		if got := len([]rune(line)); got != 60 {
@@ -1008,11 +1008,11 @@ func TestBoxedComposerGrowsWithInput(t *testing.T) {
 func TestBoxedComposerCapsGrowthOnShortTerminals(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(60, 20)
-	if m.input.MaxHeight != composerMaxRows {
-		t.Fatalf("input MaxHeight = %d, want %d", m.input.MaxHeight, composerMaxRows)
+	if m.input.MaxHeight != 8 {
+		t.Fatalf("input MaxHeight = %d, want %d", m.input.MaxHeight, 8)
 	}
 	m.onResize(60, 10)
-	// 10 rows minus chrome, box border, and transcript reserve leaves one row.
+	// 10 rows minus prompt chrome, and transcript reserve leaves one row.
 	if m.input.MaxHeight != composerMinRows {
 		t.Fatalf("input MaxHeight = %d, want %d on a short terminal", m.input.MaxHeight, composerMinRows)
 	}
@@ -1050,5 +1050,22 @@ func TestRuledComposerKeepsRules(t *testing.T) {
 	}
 	if got, want := m.composerHeight(), m.input.Height()+composerChromeRows; got != want {
 		t.Fatalf("composerHeight = %d, want input height plus rules (%d)", got, want)
+	}
+}
+
+func TestRaisedComposerFitsNarrowAndWideWidths(t *testing.T) {
+	for _, width := range []int{1, 2, 20, 40, 75, 120} {
+		m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "local/a-long-model-name", "")
+		m.onResize(width, 24)
+		m.KitSetComposerWidth(width)
+		plain := ansi.Strip(m.renderComposerAt(width))
+		for _, line := range strings.Split(plain, "\n") {
+			if got := ansi.StringWidth(line); got != width {
+				t.Fatalf("at %d columns got %d: %q", width, got, line)
+			}
+		}
+		if got := len(strings.Split(plain, "\n")); got != m.KitComposerHeight() {
+			t.Fatalf("paint height %d differs from measured %d", got, m.KitComposerHeight())
+		}
 	}
 }

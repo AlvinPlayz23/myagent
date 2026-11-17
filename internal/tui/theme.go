@@ -38,110 +38,10 @@ func init() { darkBackground.Store(true) }
 // setDarkBackground records the terminal background reported by the program.
 func setDarkBackground(dark bool) { darkBackground.Store(dark) }
 
-// Theme token migration (S-theme, parity release)
-//
-// GOTUI.md §3.0.C makes tokens the single color source and requires components
-// to pick by semantic role, never by hue. This file now builds the token set in
-// newTokens (token.go) and derives every legacy lipgloss.Style field from it.
-// The field names below are unchanged, so model.go, transcript.go, welcome.go,
-// markdown.go and the pickers compile and render exactly as before.
-//
-// Legacy palette -> token. Every row is 1:1 in both light and dark modes; the
-// parity test in theme_test.go pins the rendered strings.
-//
-//	primary      -> text.action.primary.base
-//	secondary    -> text.action.secondary.base
-//	textPrimary  -> text.base
-//	textBright   -> text.strong                         (adopted)
-//	textDim      -> text.muted
-//	rule         -> border.base
-//	userBlockBg  -> background.raised.base
-//	rowHoverBg   -> background.raised.high
-//	selectionText-> text.selection.base                 (adopted, was text.base.selected)
-//	selectionBg  -> background.selection.base           (adopted, was action.primary.selected)
-//	chip text    -> text.inverse                        (adopted)
-//	pending      -> text.feedback.warning.base
-//	success      -> text.feedback.success.base
-//	failure      -> text.feedback.error.base
-//	diffHunk     -> diff.text.hunkHeader                (adopted)
-//	markdownLink -> markdown.link                       (adopted, was diff.text.hunkHeader)
-//	orbDim       -> decor.orb.dim                       (extension, decor group)
-//	orbMedium    -> decor.orb.medium                    (extension, decor group)
-//	orbBright    -> decor.orb.bright                    (extension, decor group)
-//
-// Legacy style -> token aliases (the fields themselves stay for zero churn):
-//
-//	userBlock       background.raised.base + text.base + categorical[0]
-//	queuedLabel     text.action.secondary.base
-//	toolPending     text.feedback.warning.base
-//	toolSuccess     text.feedback.success.base
-//	toolError       text.feedback.error.base
-//	diffMeta        diff.text.context
-//	diffHunk        diff.text.hunkHeader
-//	diffAdd         diff.text.added
-//	diffRemove      diff.text.removed
-//	muted/footer*   text.muted
-//	accent/spinner  text.action.primary.base
-//	errorText       text.feedback.error.base (+ bold)
-//	selection       text.selection.base + background.selection.base
-//	cmdPickerSel    text.action.primary.base (+ bold)
-//	cmdPickerItem   text.base
-//	pickerGroup     text.strong (+ bold)
-//	composerRule    border.base
-//	composerBox     border.base
-//	composerFocused border.base.focused
-//	orb*            decor.orb.{dim,medium,bright}
-//	textPrimary     text.base
-//	accentUser      text.action.primary.base
-//	chip            background.action.secondary.base + text.inverse
-//	ctxOK           text.feedback.info.base  (superseded by S4 context widget)
-//	ctxWarn         text.feedback.warning.base
-//	ctxCritical     text.feedback.error.base
-//	rowHover        text.strong + background.raised.high
-//
-// A/B diff table — semantic residuals, colors unchanged. These are the roles
-// that do not have a clean OpenCode token yet; later phases should add the
-// proposed token rather than keep borrowing.
-//
-//	role                        current token                       proposed token
-//	user card border            categorical[0] (default agent)      categorical[i] once agent metadata exists
-//	context gauge OK            text.feedback.info.base             REJECTED: text.status.info; borrow is
-//	                                                                superseded by the S4 context widget
-//
-// Adopted in the S1 sweep (the A/B borrows above are now formal roles):
-// text.selection.base, background.selection.base, text.inverse,
-// markdown.link, text.strong, diff.text.hunkHeader, and decor.orb.*.
-//
-// markdown.go still consumes newPalette() because this release may not edit
-// call sites. That compatibility view borrows tokens as follows; it is the
-// largest residual surface and should be replaced by markdown.* / syntax.*
-// tokens in the chrome phase:
-//
-//	markdown/syntax role                     borrowed token
-//	document text, code block text           text.base
-//	comments, punctuation, blockquote,       text.muted
-//	list markers, H4-H6, image text
-//	H1/H2, keywords                          text.action.primary
-//	inline code, type/tag/attribute          text.action.secondary
-//	builtins/functions/inserted              text.feedback.success
-//	H3, class names                          text.strong
-//	preprocessor, strings, numbers           text.feedback.warning
-//	deleted                                  text.feedback.error
-//	links, link text, images                 markdown.link
-//	horizontal rule, code block background   border.base
-//
-// Provisional tokens with no current consumer, tagged // provisional: at their
-// declaration. Their values are placeholders or derived shades, not final
-// design decisions:
-//
-//	text.faint, text.feedback.*.muted, text.action.destructive,
-//	text.formfield, background.raised.max, background.action.*,
-//	background.formfield, background.feedback.*, scrollbar.base.
-//
-// background.base is #FFFFFF/#000000 until tea.BackgroundColorMsg's actual
-// color is threaded through the model; it is used only as the Decrease target
-// and the Root base fill today, so no rendered output depends on the
-// placeholder hue.
+// Semantic tokens are the single color source; legacy lipgloss styles and the
+// Markdown compatibility palette derive from them. Built-in colors follow
+// OpenCode's v2 default palette, with myagent's teal orb colors retained for
+// its animated styles.
 
 // palette is the set of adaptive colors the legacy markdown compatibility view
 // is built from. New code should use Tokens; every field here is derived from
@@ -171,7 +71,7 @@ type palette struct {
 // code should use Tokens instead; this function exists only because this parity
 // release may not edit call sites.
 func newPalette() palette {
-	return paletteFromTokens(newTokens())
+	return paletteFromTokens(CurrentThemeTokens())
 }
 
 // paletteFromTokens maps the token set back to the flat palette markdown.go
@@ -199,35 +99,30 @@ func paletteFromTokens(t Tokens) palette {
 	}
 }
 
-// newTokens builds the built-in semantic token set. This is the single place
-// where hue literals live. Every token dims toward background.base so hover and
-// disabled shades stay consistent across roles.
+// newTokens builds the OpenCode v2-inspired semantic palette. Every token dims
+// toward background.base so hover and disabled shades stay consistent.
 func newTokens() Tokens {
-	bgBase := adaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("#000000")}
-
-	primary := adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("#5FB4D9")}
-	secondary := adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("#649FA9")}
-	textPrimary := adaptiveColor{Light: lipgloss.Color("#2A2A2A"), Dark: lipgloss.Color("#D0D0D0")}
-	textBright := adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")}
-	textDim := adaptiveColor{Light: lipgloss.Color("#757575"), Dark: lipgloss.Color("#8A8A8A")}
-	rule := adaptiveColor{Light: lipgloss.Color("#BDBDBD"), Dark: lipgloss.Color("#585858")}
-	userBlockBg := adaptiveColor{Light: lipgloss.Color("#E4E4E4"), Dark: lipgloss.Color("#303030")}
-	rowHoverBg := adaptiveColor{Light: lipgloss.Color("#D0D0D0"), Dark: lipgloss.Color("#444444")}
-	selectionBg := adaptiveColor{Light: lipgloss.Color("#B2D7EE"), Dark: lipgloss.Color("#005F87")}
-	pending := adaptiveColor{Light: lipgloss.Color("#B26A00"), Dark: lipgloss.Color("#FFAF00")}
-	// Success/failure keep the exact ANSI-256 greens/reds the diff tests
-	// assert on in dark mode; the light variants deepen them for contrast.
-	success := adaptiveColor{Light: lipgloss.Color("#2E7D32"), Dark: lipgloss.Color("35")}
-	failure := adaptiveColor{Light: lipgloss.Color("#C62828"), Dark: lipgloss.Color("203")}
-	// Hunk headers keep the ANSI-256 blue in dark mode for consistency with
-	// the diffAdd/diffRemove encoding.
-	diffHunk := adaptiveColor{Light: lipgloss.Color("#1565C0"), Dark: lipgloss.Color("75")}
+	bgBase := adaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("#0A0A0A")}
+	textPrimary := adaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#EEEEEE")}
+	textBright := adaptiveColor{Light: lipgloss.Color("#000000"), Dark: lipgloss.Color("#FFFFFF")}
+	textDim := adaptiveColor{Light: lipgloss.Color("#8A8A8A"), Dark: lipgloss.Color("#808080")}
+	primary := textPrimary
+	secondary := textDim
+	rule := adaptiveColor{Light: lipgloss.Color("#B8B8B8"), Dark: lipgloss.Color("#484848")}
+	userBlockBg := adaptiveColor{Light: lipgloss.Color("#FAFAFA"), Dark: lipgloss.Color("#141414")}
+	rowHoverBg := adaptiveColor{Light: lipgloss.Color("#F5F5F5"), Dark: lipgloss.Color("#1E1E1E")}
+	selectionBg := adaptiveColor{Light: lipgloss.Color("#3B7DD8"), Dark: lipgloss.Color("#FAB283")}
+	pending := adaptiveColor{Light: lipgloss.Color("#D68C27"), Dark: lipgloss.Color("#F5A742")}
+	success := adaptiveColor{Light: lipgloss.Color("#3D9A57"), Dark: lipgloss.Color("#7FD88F")}
+	failure := adaptiveColor{Light: lipgloss.Color("#D1383D"), Dark: lipgloss.Color("#E06C75")}
+	diffHunk := adaptiveColor{Light: lipgloss.Color("#7086B5"), Dark: lipgloss.Color("#828BB8")}
+	categorical := adaptiveColor{Light: lipgloss.Color("#8C6FC5"), Dark: lipgloss.Color("#4C86D6")}
 	orbDim := adaptiveColor{Light: lipgloss.Color("#4A7A94"), Dark: lipgloss.Color("24")}
 	orbMedium := adaptiveColor{Light: lipgloss.Color("#287A8A"), Dark: lipgloss.Color("31")}
 	orbBright := adaptiveColor{Light: lipgloss.Color("#005F87"), Dark: lipgloss.Color("39")}
 	chipText := adaptiveColor{Light: lipgloss.Color("#FFFFFF"), Dark: lipgloss.Color("16")}
 	selectionText := textBright
-	markdownLink := diffHunk
+	markdownLink := selectionBg
 
 	tok := func(c adaptiveColor) Token { return newToken(c, bgBase) }
 	feedback := func(base adaptiveColor) FeedbackText {
@@ -255,8 +150,8 @@ func newTokens() Tokens {
 				Info:    feedback(secondary),
 			},
 			Action: ActionTokens{
-				Primary:     tok(primary),
-				Secondary:   tok(secondary).withState(StateSelected, chipText),
+				Primary:     tok(primary).withState(StateFocused, chipText),
+				Secondary:   tok(secondary).withState(StateFocused, chipText).withState(StateSelected, chipText),
 				Destructive: tok(failure),
 			},
 			Formfield: tok(textPrimary).
@@ -293,11 +188,8 @@ func newTokens() Tokens {
 				withState(StateFocused, primary).
 				withState(StateSelected, primary),
 		},
-		Scrollbar: ScrollbarTokens{Base: tok(rule)},
-		// No per-agent palette exists yet. The default categorical entry is
-		// the legacy secondary accent, so the user card keeps its teal ┃
-		// border until agent metadata lands.
-		Categorical: []Token{tok(secondary)},
+		Scrollbar:   ScrollbarTokens{Base: tok(rule)},
+		Categorical: []Token{tok(categorical)},
 		Diff: DiffTokens{
 			Text: DiffTextTokens{
 				Added:      tok(success),
@@ -320,7 +212,7 @@ func newTokens() Tokens {
 // DefaultTokens returns the built-in semantic token set. It is the entry point
 // for the S1 kit and S4 chrome phases, which should never reference the legacy
 // palette or raw lipgloss colors directly.
-func DefaultTokens() Tokens { return newTokens() }
+func DefaultTokens() Tokens { return CurrentThemeTokens() }
 
 // theme holds the lipgloss styles for the UI, derived from one semantic token
 // set so light and dark terminals share a single definition site.
@@ -372,7 +264,7 @@ func (t *theme) TokenSet() Tokens { return t.tokens }
 // the pre-token API; each assignment below is a thin alias, not a second
 // palette definition.
 func newTheme() *theme {
-	t := newTokens()
+	t := CurrentThemeTokens()
 	return &theme{
 		tokens: t,
 		userBlock: lipgloss.NewStyle().

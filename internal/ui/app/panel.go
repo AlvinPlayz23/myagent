@@ -18,9 +18,10 @@ import (
 type panelListBody struct {
 	kit.WidgetBase
 
-	shell *Shell
-	list  *kit.List
-	hint  string
+	shell       *Shell
+	list        *kit.List
+	hint        string
+	layoutDirty bool
 }
 
 func newPanelListBody(s *Shell, state tui.KitPickerState) *panelListBody {
@@ -41,6 +42,9 @@ func newPanelListBody(s *Shell, state tui.KitPickerState) *panelListBody {
 // apply re-feeds host rows and selection without disturbing an in-flight
 // legacy key sequence.
 func (b *panelListBody) apply(state tui.KitPickerState) {
+	if len(b.list.Rows) != len(state.Items) || b.hint != state.Hint {
+		b.layoutDirty = true
+	}
 	b.list.SetRows(panelRows(state.Items))
 	b.hint = state.Hint
 	b.selectID(state.SelectedID)
@@ -93,7 +97,10 @@ func (b *panelListBody) PreferredHeight(_, maxH int) int {
 	return max(1, h)
 }
 
+func (b *panelListBody) NeedsLayout() bool { return b.layoutDirty }
+
 func (b *panelListBody) Layout(r kit.Rect) {
+	b.layoutDirty = false
 	b.SetBounds(r)
 	b.list.Layout(b.listRect(r))
 }

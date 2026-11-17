@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/AlvinPlayz23/myagent/internal/subagent"
 	"github.com/AlvinPlayz23/myagent/internal/types"
 	"github.com/muesli/reflow/wordwrap"
@@ -386,19 +387,23 @@ func (t *transcript) renderBlock(b *block, width int) string {
 	case blockUser:
 		// User messages are plain text, not markdown. Glamour emits ANSI style
 		// resets which can override the userBlock background behind the text.
-		// Give the block an explicit width too, so its neutral background fills
-		// every cell of the transcript row, including wrapped-line padding.
-		body := strings.TrimRight(wordwrap.String(b.text, max(1, width-2)), "\n")
-		out = t.th.userBlock.Width(max(1, width)).Render(body)
+		// Keep the inner text cell stable for mouse selection while adding the
+		// raised, left-rail card treatment.
+		body := strings.TrimRight(wrapPlain(b.text, max(1, width-3)), "\n")
+		card := t.th.userBlock.
+			Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
+			Padding(0, 1).
+			Width(max(1, width))
+		out = card.Render(body)
 	case blockAssistant:
 		// Assistant-only clickable URLs: bare links get OSC 8 escapes here so
 		// user, tool, and notice blocks never become clickable.
-		out = makeURLsClickable(strings.TrimRight(t.md.render(b.text, width), "\n"))
+		out = makeURLsClickable(indentLines(strings.TrimRight(t.md.render(b.text, max(1, width-3)), "\n"), 3))
 	case blockError:
 		// Provider errors often arrive as one giant line; wrap them to the
 		// viewport like every other plain-text block so they never run
 		// off-screen.
-		out = t.th.errorText.Render(wrapPlain(b.text, width))
+		out = indentLines(t.th.errorText.Render(wrapPlain(b.text, max(1, width-3))), 3)
 	case blockNotice:
 		out = t.renderNotice(b, width)
 	case blockTool:
@@ -418,51 +423,54 @@ func (t *transcript) renderBlock(b *block, width int) string {
 // Both the headline and the detail are wrapped so long single-line
 // provider errors never run off-screen.
 func (t *transcript) renderNotice(b *block, width int) string {
-	headline := wrapPlain(b.text, width)
+	headline := indentLines(wrapPlain(b.text, max(1, width-3)), 3)
 	if b.noticeDetail == "" {
 		return t.th.muted.Render(headline)
 	}
 	if !t.expanded {
 		return t.th.muted.Render(headline) + "\n" +
-			t.th.muted.Render("… (ctrl+o to expand)")
+			t.th.muted.Render(indentLines(wrapPlain("… (ctrl+o to expand)", max(1, width-3)), 3))
 	}
-	detail := strings.TrimRight(wordwrap.String(b.noticeDetail, max(1, width-2)), "\n")
+	detail := indentLines(wrapPlain(b.noticeDetail, max(1, width-3)), 3)
 	return t.th.muted.Render(headline) + "\n" +
 		t.th.muted.Render(detail) + "\n" +
-		t.th.muted.Render("(ctrl+o to collapse)")
+		t.th.muted.Render(indentLines(wrapPlain("(ctrl+o to collapse)", max(1, width-3)), 3))
 }
 
-// renderTool renders a collapsible tool block kj-style: a one-line status
-// header ("● name target" with a status-colored marker), a dim metadata line
-// (elapsed time, result size) once the call completes, and an optional
-// preview (collapsed) or full output (expanded).
+// renderTool renders a status row, dim completion metadata, and an optional
+// preview or full output under the two-cell icon column.
 func (t *transcript) renderTool(b *block, width int) string {
 	statusStyle := t.th.toolPending
+	status := "│"
 	switch {
 	case !b.toolDone:
 		statusStyle = t.th.toolPending
 	case b.toolErr:
 		statusStyle = t.th.toolError
+		status = "✗"
 	default:
 		statusStyle = t.th.toolSuccess
+		status = "✓"
 	}
 
 	var sb strings.Builder
-	sb.WriteString(statusStyle.Render("● "))
+	const toolContentIndent = 5 // three-cell message indent plus the two-cell icon column
+	sb.WriteString("   ")
+	sb.WriteString(statusStyle.Render(status + " "))
 	name, target := t.toolHeaderParts(b)
 	sb.WriteString(t.th.textPrimary.Bold(true).Render(name))
 	if target != "" {
 		sb.WriteByte(' ')
 		// Wrap long targets to the viewport; continuation lines are indented
 		// under the target like the metadata and output bodies.
-		avail := max(1, width-2-len([]rune(name))-1)
+		avail := max(1, width-toolContentIndent-len([]rune(name))-1)
 		if len([]rune(target)) > avail {
 			wrapped := wrapPlain(target, avail)
 			lines := strings.Split(wrapped, "\n")
 			for i := range lines {
 				lines[i] = t.th.muted.Render(lines[i])
 				if i > 0 {
-					lines[i] = strings.Repeat(" ", 2+len([]rune(name))+1) + lines[i]
+					lines[i] = strings.Repeat(" ", toolContentIndent+len([]rune(name))+1) + lines[i]
 				}
 			}
 			sb.WriteString(strings.Join(lines, "\n"))
@@ -472,7 +480,7 @@ func (t *transcript) renderTool(b *block, width int) string {
 	}
 	if meta := t.toolMetaLine(b); meta != "" {
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render("  └ ") + meta)
+		sb.WriteString(t.th.muted.Render(indentLines("└ "+wrapPlain(meta, max(1, width-toolContentIndent-2)), toolContentIndent)))
 	}
 
 	// Edit and write calls show their requested change as a Git-style proposal
@@ -480,7 +488,7 @@ func (t *transcript) renderTool(b *block, width int) string {
 	// so the transcript never presents an unapplied change as if it landed.
 	if len(b.toolDiff) > 0 && b.toolDone && !b.toolErr {
 		sb.WriteByte('\n')
-		sb.WriteString(t.renderDiff(b.toolDiff, width))
+		sb.WriteString(indentLines(t.renderDiff(b.toolDiff, width-toolContentIndent), toolContentIndent))
 		return sb.String()
 	}
 
@@ -490,24 +498,47 @@ func (t *transcript) renderTool(b *block, width int) string {
 	}
 	// Tool results are plain text (minified JSON, blobs, long URLs), so wrap
 	// to the viewport before indenting — nothing may run off-screen.
-	body = wrapPlain(body, max(1, width-2))
+	body = wrapPlain(body, max(1, width-toolContentIndent))
 	lines := strings.Split(body, "\n")
 	const previewLines = 8
 	if !t.expanded && len(lines) > previewLines {
 		shown := lines[:previewLines]
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(indentBody(strings.Join(shown, "\n"))))
+		sb.WriteString(t.th.muted.Render(indentLines(strings.Join(shown, "\n"), toolContentIndent)))
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines)))
+		hint := fmt.Sprintf("… (%d more lines, ctrl+o to expand)", len(lines)-previewLines)
+		sb.WriteString(t.th.muted.Render(indentLines(wrapPlain(hint, max(1, width-toolContentIndent)), toolContentIndent)))
 	} else {
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(indentBody(body)))
+		sb.WriteString(t.th.muted.Render(indentLines(body, toolContentIndent)))
 		if t.expanded && len(lines) > previewLines {
 			sb.WriteByte('\n')
-			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+			sb.WriteString(t.th.muted.Render(strings.Repeat(" ", toolContentIndent) + "(ctrl+o to collapse)"))
 		}
 	}
 	return sb.String()
+}
+
+// indentLines places every nonempty rendered line inside the message column.
+// It leaves blank lines empty so Markdown spacing does not gain trailing cells.
+func indentLines(text string, width int) string {
+	if text == "" || width <= 0 {
+		return text
+	}
+	return prefixLines(text, strings.Repeat(" ", width))
+}
+
+func prefixLines(text, prefix string) string {
+	if text == "" || prefix == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = prefix + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // wrapPlain reflows plain (non-markdown) text to the viewport width so long
@@ -545,19 +576,6 @@ func splitRunes(line string, width int) string {
 	}
 	sb.WriteString(string(runes))
 	return sb.String()
-}
-
-// indentBody indents a multi-line tool output by two spaces so its text starts
-// under the metadata line ("  └ …"), matching kj's wrapAndIndent. Empty lines
-// stay empty so no trailing whitespace is emitted.
-func indentBody(body string) string {
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = "  " + line
-		}
-	}
-	return strings.Join(lines, "\n")
 }
 
 // toolMetaLine builds the dim "└ …" metadata shown under a completed tool
@@ -633,14 +651,11 @@ func thinkTokens(text string) int {
 	return (n + 3) / 4
 }
 
-// renderThinking renders a collapsible thinking block: an accent header that
-// reads "Thinking… (N tokens)" while streaming and "Thought [for Ns]"
-// once complete, plus a muted body preview governed by the global ctrl+o
-// expand toggle. The token count is streaming-only and never shown after
-// completion.
+// renderThinking renders a thinking header and muted, left-railed reasoning
+// body. Long completed bodies use a tail preview controlled by ctrl+o.
 func (t *transcript) renderThinking(b *block, width int) string {
 	header := "✻ Thought"
-	headerStyle := t.th.toolSuccess
+	headerStyle := t.th.toolPending
 	if !b.done {
 		header = "✻ Thinking…"
 		headerStyle = t.th.accent
@@ -652,37 +667,46 @@ func (t *transcript) renderThinking(b *block, width int) string {
 			header = fmt.Sprintf("%s (%d %s)", header, n, unit)
 		}
 	} else if b.thinkTimed {
-		header = "✻ Thought for " + formatThinkDur(b.thinkDur)
+		header += " · " + formatThinkDur(b.thinkDur)
 	}
 
 	body := strings.TrimRight(b.text, "\n")
-	if body == "" {
-		return headerStyle.Render(header)
+	var lines []string
+	if body != "" {
+		// Keep the reasoning rail and its text inside the same three-cell
+		// message column used by OpenCode's reasoning component.
+		lines = strings.Split(wrapPlain(body, max(1, width-5)), "\n")
 	}
-
-	// Thinking streams are raw reasoning text with no markdown reflow, so
-	// wrap them to the viewport — a long unbroken token run must break
-	// across lines instead of running off-screen.
-	body = wrapPlain(body, max(1, width-2))
-	lines := strings.Split(body, "\n")
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render(header))
+	if b.done && len(lines) > 6 {
+		if t.expanded {
+			header = "− " + header
+		} else {
+			header = "+ " + header
+		}
+	}
+	sb.WriteString(headerStyle.Render("   " + header))
+	if body == "" {
+		return sb.String()
+	}
 	const previewLines = 6
 	if !t.expanded && len(lines) > previewLines {
 		shown := lines[len(lines)-previewLines:]
 		hidden := len(lines) - previewLines
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… %d earlier lines", hidden)))
+		sb.WriteString(t.th.muted.Render(prefixLines(fmt.Sprintf("… %d earlier lines", hidden), "   │ ")))
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(strings.Join(shown, "\n")))
+		sb.WriteString(t.th.muted.Render(prefixLines(strings.Join(shown, "\n"), "   │ ")))
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(fmt.Sprintf("… (%d more lines, ctrl+o to expand)", hidden)))
+		hint := fmt.Sprintf("… (%d more lines, ctrl+o to expand)", hidden)
+		sb.WriteString(t.th.muted.Render(prefixLines(wrapPlain(hint, max(1, width-5)), "   │ ")))
 	} else {
 		sb.WriteByte('\n')
-		sb.WriteString(t.th.muted.Render(body))
+		sb.WriteString(t.th.muted.Render(prefixLines(strings.Join(lines, "\n"), "   │ ")))
 		if t.expanded && len(lines) > previewLines {
 			sb.WriteByte('\n')
-			sb.WriteString(t.th.muted.Render("(ctrl+o to collapse)"))
+			hint := wrapPlain("(ctrl+o to collapse)", max(1, width-5))
+			sb.WriteString(t.th.muted.Render(prefixLines(hint, "   │ ")))
 		}
 	}
 	return sb.String()
@@ -884,7 +908,7 @@ func (t *transcript) toolHeaderParts(b *block) (name, target string) {
 }
 
 // readFold groups a run of consecutive completed read calls on distinct paths
-// so they render as one "● read N files" line (kj's FormatFoldedReads).
+// so they render as one checked "read N files" line.
 type readFold struct {
 	count int
 	end   int // index of the last block in the run
@@ -929,11 +953,12 @@ func (t *transcript) readPath(b *block) string {
 
 // renderFoldedReads renders a folded run of completed reads:
 //
-//	● read 3 files
+//	✓ read 3 files
 //	  └ a.go · b.go · c.go · 1.2s
 func (t *transcript) renderFoldedReads(fold *readFold) string {
 	var sb strings.Builder
-	sb.WriteString(t.th.toolSuccess.Render("● "))
+	sb.WriteString("   ")
+	sb.WriteString(t.th.toolSuccess.Render("✓ "))
 	sb.WriteString(t.th.textPrimary.Bold(true).Render("read"))
 	sb.WriteByte(' ')
 	sb.WriteString(t.th.muted.Render(fmt.Sprintf("%d files", fold.count)))
@@ -957,7 +982,7 @@ func (t *transcript) renderFoldedReads(fold *readFold) string {
 	}
 	meta = append(meta, paths...)
 	sb.WriteByte('\n')
-	sb.WriteString(t.th.muted.Render("  └ " + strings.Join(meta, " · ")))
+	sb.WriteString(t.th.muted.Render("     └ " + strings.Join(meta, " · ")))
 	return sb.String()
 }
 

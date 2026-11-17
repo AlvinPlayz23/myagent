@@ -40,6 +40,8 @@ type ListOpts struct {
 	MaxRows int
 	// NoMotion swaps the ● marker for the ▪ fallback.
 	NoMotion bool
+	// Palette uses compact command-palette selection chrome.
+	Palette bool
 }
 
 // List is the shared scrollable-rows widget used by DialogSelect. It owns
@@ -55,6 +57,7 @@ type List struct {
 	Rows     []ListRow
 	MaxRows  int
 	NoMotion bool
+	Palette  bool
 	Selected int
 	OnChoose func(ListRow) bool
 	Offset   int
@@ -67,6 +70,7 @@ func NewList(opts ListOpts) *List {
 		WidgetBase: NewWidgetBase(opts.ID),
 		MaxRows:    opts.MaxRows,
 		NoMotion:   opts.NoMotion,
+		Palette:    opts.Palette,
 		Selected:   -1,
 	}
 	l.BindRows(opts.Rows)
@@ -284,14 +288,23 @@ func (l *List) renderRow(idx, w int) string {
 
 	selected := idx == l.Selected
 	if selected {
-		fillCells(cv, 0, 0, w, th.Background.Action.Primary.Focused())
+		bg := th.Background.Action.Primary.Focused()
+		if l.Palette {
+			bg = th.Background.Selection.Color()
+		}
+		fillCells(cv, 0, 0, w, bg)
 	}
-	textFg := th.Text.Base
-	descFg := th.Text.Muted
+	textFg := th.Text.Base.Color()
+	descFg := th.Text.Muted.Color()
 	if selected {
-		textFg = th.Text.Selection
-		descFg = th.Text.Selection
-		putGlyph(cv, 0, 0, l.marker(), th.Text.Inverse.Color())
+		textFg = th.Text.Action.Primary.Focused()
+		descFg = th.Text.Action.Secondary.Focused()
+		marker := l.marker()
+		if l.Palette {
+			marker = "›"
+			descFg = textFg
+		}
+		drawText(cv, 0, 0, 1, marker, textFg)
 	}
 
 	footerW := ansi.StringWidth(row.Footer)
@@ -303,19 +316,19 @@ func (l *List) renderRow(idx, w int) string {
 		avail = 1
 	}
 	titleW := ansi.StringWidth(row.Title)
-	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg.Color())
+	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg)
 	if row.Desc != "" && titleW+2 < avail {
-		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg.Color())
+		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg)
 	}
 	if footerW > 0 && footerW < w-2 {
-		fg := th.Text.Muted
+		fg := th.Text.Muted.Color()
 		if row.Error {
-			fg = th.Text.Feedback.Error.Base
+			fg = th.Text.Feedback.Error.Base.Color()
 		}
 		if selected {
-			fg = th.Text.Selection
+			fg = textFg
 		}
-		drawText(cv, w-footerW, 0, footerW, row.Footer, fg.Color())
+		drawText(cv, w-footerW, 0, footerW, row.Footer, fg)
 	}
 	return padCanvas(cv, w, 1)
 }
@@ -387,6 +400,9 @@ func (l *List) Mouse(ev tea.MouseMsg, r Rect) bool {
 	}
 	l.Selected = line.row
 	l.MarkDirty()
+	if l.Palette && l.OnChoose != nil {
+		l.OnChoose(l.Rows[line.row])
+	}
 	return true
 }
 

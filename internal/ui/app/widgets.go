@@ -153,8 +153,8 @@ func (b *blockWidget) Mouse(ev tea.MouseMsg, r kit.Rect) bool {
 
 func (b *blockWidget) FocusTarget() *kit.FocusTarget { return nil }
 
-// welcomeWidget is the static S3 welcome surface. Animation is deliberately out
-// of scope; it repaints only when the shell recomputes the content.
+// welcomeWidget caches the current startup frame; the shell refreshes it when
+// the host advances its welcome revision.
 type welcomeWidget struct {
 	kit.WidgetBase
 

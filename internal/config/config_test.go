@@ -243,3 +243,26 @@ func TestResolveUsesSelectedProvidersPreferredModel(t *testing.T) {
 		t.Fatalf("model = %q, want local-model", model.ID)
 	}
 }
+
+func TestThemeRoundTripAndBackwardCompatibility(t *testing.T) {
+	useTempDir(t)
+	writeFile(t, configPath(t), `{"default_model":"local/old","providers":{}}`)
+	old, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Theme != "" {
+		t.Fatalf("old config theme = %q", old.Theme)
+	}
+	old.Theme = "tokyo-mocha"
+	if err := Save(old); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "tokyo-mocha" || got.DefaultModel != "local/old" {
+		t.Fatalf("theme roundtrip = %+v", got)
+	}
+}

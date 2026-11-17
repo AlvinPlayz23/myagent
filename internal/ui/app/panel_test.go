@@ -358,7 +358,7 @@ func TestShellDockRowsAboveComposer(t *testing.T) {
 	if s.dockH != 2 {
 		t.Fatalf("dock height = %d, want 2", s.dockH)
 	}
-	if got, want := s.dockR, (kit.Rect{X: 0, Y: 20, W: 80, H: 2}); got != want {
+	if got, want := s.dockR, (kit.Rect{X: 2, Y: 20, W: 76, H: 2}); got != want {
 		t.Fatalf("dock rect = %+v, want %+v", got, want)
 	}
 	frame := ansi.Strip(s.Render(80, 24))
@@ -409,5 +409,28 @@ func TestShellS6PanelGoldens(t *testing.T) {
 				t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", path, plain, wantStr)
 			}
 		})
+	}
+}
+
+func TestCustomizeThemeChoicesResizePanel(t *testing.T) {
+	host := &fakeHost{composerH: 2, pickerActive: true, picker: tui.KitPickerState{Kind: "customize", Mode: tui.KitPickerList, Title: "Customize", Hint: "select", Items: []tui.KitPickerItem{{ID: "group:0", Title: "Startup"}, {ID: "group:1", Title: "Composer"}, {ID: "group:2", Title: "Theme"}}}}
+	s := newShell(host)
+	s.Resize(120, 40)
+	s.Render(120, 40)
+	before := s.panelLayout.Bounds().H
+	host.picker.Title = "Customize › Theme"
+	host.picker.Items = nil
+	for _, name := range []string{"Default", "Tokyo Night", "Catppuccin Mocha", "Kanagawa", "Vesper", "Osaka Jade", "Rosé Pine", "Vercel", "Tokyo Mocha"} {
+		host.picker.Items = append(host.picker.Items, tui.KitPickerItem{ID: name, Title: name})
+	}
+	s.Sync()
+	frame := ansi.Strip(s.Render(120, 40))
+	if s.panelLayout.Bounds().H <= before {
+		t.Fatal("theme choices did not grow customize panel")
+	}
+	for _, want := range []string{"Tokyo Night", "Catppuccin Mocha", "Tokyo Mocha"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("theme %q not visible", want)
+		}
 	}
 }
