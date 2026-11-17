@@ -39,6 +39,7 @@ type slashCommand struct {
 
 type commandItem struct {
 	name        string
+	label       string
 	usage       string
 	description string
 	kind        commandKind
@@ -49,22 +50,22 @@ type commandItem struct {
 }
 
 var commandItems = []commandItem{
-	{name: "/help", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
-	{name: "/models", usage: "/models [provider/model-id]", description: "Choose a model and provider; live-discovered models included", kind: commandModel, requiresArg: true},
-	{name: "/effort", usage: "/effort [level]", description: "Choose reasoning effort (saved as myagent default)", kind: commandEffort, requiresArg: true},
-	{name: "/providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
-	{name: "/customize", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
-	{name: "/compact", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
-	{name: "/clear", usage: "/clear", description: "Clear the visible transcript", kind: commandClear},
-	{name: "/new", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},
-	{name: "/resume", usage: "/resume", description: "Resume a different persisted session", kind: commandResume},
-	{name: "/rename", usage: "/rename <title>", description: "Rename the current session", kind: commandRename, requiresArg: true},
-	{name: "/export", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
-	{name: "/init", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
-	{name: "/thinking", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
-	{name: "/tools", usage: "/tools", description: "Enable or disable tools for the model", kind: commandTools},
-	{name: "/mouse", usage: "/mouse [on|off]", description: "Toggle mouse clicks and hover (off restores native selection)", kind: commandMouse},
-	{name: "/paste", usage: "/paste", description: "Attach the clipboard image (works when ctrl+v is intercepted)", kind: commandPaste},
+	{name: "/help", label: "Help & shortcuts", usage: "/help", description: "Show available commands and keybindings", kind: commandHelp},
+	{name: "/models", label: "Choose model", usage: "/models [provider/model-id]", description: "Choose a model and provider; live-discovered models included", kind: commandModel, requiresArg: true},
+	{name: "/effort", label: "Reasoning effort", usage: "/effort [level]", description: "Choose reasoning effort (saved as myagent default)", kind: commandEffort, requiresArg: true},
+	{name: "/providers", label: "Manage providers", usage: "/providers", description: "Add compatible provider API keys", kind: commandProviders},
+	{name: "/customize", label: "Customize myagent", usage: "/customize", description: "Customize the startup style and composer", kind: commandCustomize},
+	{name: "/compact", label: "Compact conversation", usage: "/compact", description: "Summarize older conversation context now", kind: commandCompact},
+	{name: "/clear", label: "Clear transcript", usage: "/clear", description: "Clear the visible transcript", kind: commandClear},
+	{name: "/new", label: "New conversation", usage: "/new", description: "Start a new persisted conversation", kind: commandNew},
+	{name: "/resume", label: "Resume conversation", usage: "/resume", description: "Resume a different persisted session", kind: commandResume},
+	{name: "/rename", label: "Rename conversation", usage: "/rename <title>", description: "Rename the current session", kind: commandRename, requiresArg: true},
+	{name: "/export", label: "Export conversation", usage: "/export", description: "Export this session as Markdown or HTML", kind: commandExport},
+	{name: "/init", label: "Initialize workspace", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
+	{name: "/thinking", label: "Toggle reasoning", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
+	{name: "/tools", label: "Manage tools", usage: "/tools", description: "Enable or disable tools for the model", kind: commandTools},
+	{name: "/mouse", label: "Toggle mouse capture", usage: "/mouse [on|off]", description: "Toggle mouse clicks and hover (off restores native selection)", kind: commandMouse},
+	{name: "/paste", label: "Paste attachment", usage: "/paste", description: "Attach the clipboard image (works when ctrl+v is intercepted)", kind: commandPaste},
 }
 
 const commandPickerMaxVisible = 5
