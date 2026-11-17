@@ -58,14 +58,16 @@ func (s *Shell) syncSelectPicker(state tui.KitPickerState) {
 }
 
 // openPicker builds the dialog surface for the active legacy picker. Enter in
-// the body accepts; non-command pickers also expose a confirm footer action.
+// the body accepts; list panels can also expose a confirm footer action.
 // Esc and backdrop dismissal share KitPickerCancel through Dismissed.
 func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 	sel := kit.NewDialogSelect(kit.DialogSelectOpts{
-		ID:          "kit.picker",
-		Items:       pickerItems(state.Items),
-		Placeholder: state.Placeholder,
-		Palette:     state.Kind == "models" || state.Kind == "commands",
+		ID:              "kit.picker",
+		Items:           pickerItems(state.Items),
+		Placeholder:     state.Placeholder,
+		Palette:         true,
+		Details:         state.Kind != "files",
+		SectionDividers: state.Kind == "commands",
 	})
 	query := state.Query
 	if state.Kind == "commands" {

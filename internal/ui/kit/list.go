@@ -41,7 +41,9 @@ type ListOpts struct {
 	// NoMotion swaps the ● marker for the ▪ fallback.
 	NoMotion bool
 	// Palette uses compact command-palette selection chrome.
-	Palette bool
+	Compact         bool
+	SectionDividers bool
+	Palette         bool
 }
 
 // List is the shared scrollable-rows widget used by DialogSelect. It owns
@@ -54,24 +56,28 @@ type ListOpts struct {
 type List struct {
 	WidgetBase
 
-	Rows     []ListRow
-	MaxRows  int
-	NoMotion bool
-	Palette  bool
-	Selected int
-	OnChoose func(ListRow) bool
-	Offset   int
-	cache    RenderCache
+	Rows            []ListRow
+	MaxRows         int
+	NoMotion        bool
+	Palette         bool
+	Compact         bool
+	SectionDividers bool
+	Selected        int
+	OnChoose        func(ListRow) bool
+	Offset          int
+	cache           RenderCache
 }
 
 // NewList builds a list with the OpenCode marker gutter.
 func NewList(opts ListOpts) *List {
 	l := &List{
-		WidgetBase: NewWidgetBase(opts.ID),
-		MaxRows:    opts.MaxRows,
-		NoMotion:   opts.NoMotion,
-		Palette:    opts.Palette,
-		Selected:   -1,
+		WidgetBase:      NewWidgetBase(opts.ID),
+		MaxRows:         opts.MaxRows,
+		NoMotion:        opts.NoMotion,
+		Palette:         opts.Palette,
+		Compact:         opts.Compact,
+		SectionDividers: opts.SectionDividers,
+		Selected:        -1,
 	}
 	l.BindRows(opts.Rows)
 	return l
@@ -170,7 +176,7 @@ type listLine struct {
 func (l *List) displayLines() []listLine {
 	out := make([]listLine, 0, len(l.Rows)+4)
 	for i, row := range l.Rows {
-		if row.Header && len(out) > 0 {
+		if row.Header && len(out) > 0 && !l.SectionDividers {
 			out = append(out, listLine{row: -1, blank: true})
 		}
 		out = append(out, listLine{row: i})
@@ -280,6 +286,13 @@ func (l *List) renderRow(idx, w int) string {
 	th := DefaultTheme()
 	cv := lipgloss.NewCanvas(w, 1)
 
+	if row.Header && l.SectionDividers {
+		label := "  " + row.Title + "  "
+		label = ansi.Truncate(label, w, "")
+		rule := strings.Repeat("─", max(0, w-ansi.StringWidth(label)))
+		drawStyled(cv, 0, 0, w, label+rule, lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
+		return padCanvas(cv, w, 1)
+	}
 	if row.Header {
 		drawStyled(cv, 0, 0, w, row.Title,
 			lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
@@ -317,7 +330,7 @@ func (l *List) renderRow(idx, w int) string {
 	}
 	titleW := ansi.StringWidth(row.Title)
 	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg)
-	if row.Desc != "" && titleW+2 < avail {
+	if !l.Compact && row.Desc != "" && titleW+2 < avail {
 		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg)
 	}
 	if footerW > 0 && footerW < w-2 {

@@ -58,9 +58,9 @@ func manyItems(n int) []SelectItem {
 
 // --- dialog stack ----------------------------------------------------------
 
-// TestDialogWidthTiers pins the 60/88/116 tiers and the width-2 clamp.
-func TestDialogWidthTiers(t *testing.T) {
-	cases := []struct{ w, want int }{{40, 38}, {66, 60}, {80, 60}, {120, 88}, {128, 116}, {200, 116}}
+// Compact dialogs keep a 60-cell ceiling and preserve the width-2 clamp.
+func TestDialogCompactWidth(t *testing.T) {
+	cases := []struct{ w, want int }{{40, 38}, {66, 60}, {80, 60}, {120, 60}, {128, 60}, {200, 60}}
 	for _, tc := range cases {
 		if got := dialogWidth(tc.w); got != tc.want {
 			t.Errorf("dialogWidth(%d) = %d, want %d", tc.w, got, tc.want)
@@ -753,5 +753,53 @@ func TestPaletteFilterResizesDialog(t *testing.T) {
 	root.Render(120, 40)
 	if dialog.Bounds().H != before {
 		t.Fatalf("clearing search did not restore height %d", before)
+	}
+}
+
+func TestCompactMenuDetailsFollowHighlight(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{Palette: true, Details: true, Items: []SelectItem{
+		{ID: "/customize", Title: "Customize myagent (/customize)", Desc: "Change themes and startup styles."},
+		{ID: "/models", Title: "Choose model (/models)", Desc: "Choose the model for this conversation."},
+	}})
+	stack := NewDialogStack()
+	dialog := testDialog("Commands", sel)
+	stack.Push(dialog)
+	root := NewRoot(nil, WithDialogs(stack))
+	frame := ansi.Strip(root.Render(120, 40))
+	if dialog.Bounds().W != 60 {
+		t.Fatalf("modal width = %d", dialog.Bounds().W)
+	}
+	if !strings.Contains(frame, "Change themes and startup styles.") || strings.Contains(frame, "Choose the model for this conversation.") {
+		t.Fatal("only highlighted description should be expanded")
+	}
+	root.Key(keyDown())
+	frame = ansi.Strip(root.Render(120, 40))
+	if strings.Contains(frame, "Change themes and startup styles.") || !strings.Contains(frame, "Choose the model for this conversation.") {
+		t.Fatal("details did not follow selection")
+	}
+}
+
+func TestCommandSectionDividersStayCompactAndSkipSelection(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{Palette: true, Details: true, SectionDividers: true, Items: []SelectItem{
+		{ID: "a", Title: "First (/first)", Desc: "First description", Group: "Suggested"},
+		{ID: "b", Title: "Second (/second)", Desc: "Second description", Group: "Session"},
+	}})
+	stack := NewDialogStack()
+	dialog := testDialog("Commands", sel)
+	stack.Push(dialog)
+	root := NewRoot(nil, WithDialogs(stack))
+	frame := ansi.Strip(root.Render(120, 40))
+	if !strings.Contains(frame, "Suggested  ─") || !strings.Contains(frame, "Session  ─") {
+		t.Fatal("quiet divider labels missing")
+	}
+	if len(sel.list.displayLines()) != 4 {
+		t.Fatal("sections should not introduce empty rows")
+	}
+	root.Key(keyDown())
+	if sel.SelectedID() != "b" {
+		t.Fatal("navigation must skip section headings")
+	}
+	if frame = ansi.Strip(root.Render(120, 40)); !strings.Contains(frame, "Second description") || strings.Contains(frame, "First description") {
+		t.Fatal("description did not follow selection")
 	}
 }
