@@ -41,6 +41,7 @@ type ListOpts struct {
 	// NoMotion swaps the ● marker for the ▪ fallback.
 	NoMotion bool
 	// Palette uses compact command-palette selection chrome.
+	Compact bool
 	Palette bool
 }
 
@@ -58,6 +59,7 @@ type List struct {
 	MaxRows  int
 	NoMotion bool
 	Palette  bool
+	Compact  bool
 	Selected int
 	OnChoose func(ListRow) bool
 	Offset   int
@@ -71,6 +73,7 @@ func NewList(opts ListOpts) *List {
 		MaxRows:    opts.MaxRows,
 		NoMotion:   opts.NoMotion,
 		Palette:    opts.Palette,
+		Compact:    opts.Compact,
 		Selected:   -1,
 	}
 	l.BindRows(opts.Rows)
@@ -317,7 +320,7 @@ func (l *List) renderRow(idx, w int) string {
 	}
 	titleW := ansi.StringWidth(row.Title)
 	drawText(cv, 2, 0, avail, ansi.Truncate(row.Title, avail, "…"), textFg)
-	if row.Desc != "" && titleW+2 < avail {
+	if !l.Compact && row.Desc != "" && titleW+2 < avail {
 		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg)
 	}
 	if footerW > 0 && footerW < w-2 {
