@@ -53,18 +53,8 @@ const (
 	minDialogHeight = 6
 )
 
-// dialogWidth picks the widest tier that fits inside the side insets, clamped
-// to w-2 so a dialog never touches the terminal edges.
-// OpenCode: the dialog width switch (60 / 88 / 116).
-func dialogWidth(w int) int {
-	avail := w - 2*dialogSideInset
-	for _, tier := range []int{DialogWidthLarge, DialogWidthMedium, DialogWidthSmall} {
-		if tier <= avail {
-			return tier
-		}
-	}
-	return max(1, min(DialogWidthSmall, w-2))
-}
+// dialogWidth keeps menus compact while preserving a terminal-edge inset.
+func dialogWidth(w int) int { return max(1, min(DialogWidthSmall, w-2)) }
 
 // applyScrim blends every painted cell in area toward tk by alpha. Both the
 // background and foreground dim, which is what makes the content band read as
@@ -902,12 +892,14 @@ type SelectItem struct {
 
 // DialogSelectOpts configures a DialogSelect.
 type DialogSelectOpts struct {
-	ID          string
-	Items       []SelectItem
-	Placeholder string
-	NoMotion    bool
-	Palette     bool
-	OnSelect    func(SelectItem) bool
+	ID              string
+	Items           []SelectItem
+	Placeholder     string
+	NoMotion        bool
+	Palette         bool
+	Details         bool
+	SectionDividers bool
+	OnSelect        func(SelectItem) bool
 }
 
 // DialogSelect is the fuzzy-filtered picker body: a search row, a 1-cell marker
@@ -920,6 +912,7 @@ type DialogSelect struct {
 	Items       []SelectItem
 	Placeholder string
 	Palette     bool
+	Details     bool
 	OnSelect    func(SelectItem) bool
 
 	list        *List
@@ -941,8 +934,9 @@ func NewDialogSelect(opts DialogSelectOpts) *DialogSelect {
 		Items:       opts.Items,
 		Placeholder: opts.Placeholder,
 		Palette:     opts.Palette,
+		Details:     opts.Details,
 		OnSelect:    opts.OnSelect,
-		list:        NewList(ListOpts{ID: id + ".rows", NoMotion: opts.NoMotion, Palette: opts.Palette}),
+		list:        NewList(ListOpts{ID: id + ".rows", NoMotion: opts.NoMotion, Palette: opts.Palette, Compact: true, SectionDividers: opts.SectionDividers}),
 	}
 	s.list.OnChoose = s.choose
 	s.target = &FocusTarget{ID: id, Widget: s, OnFocus: s.MarkDirty, OnBlur: s.MarkDirty}
@@ -1015,9 +1009,9 @@ func (s *DialogSelect) PreferredHeight(_, maxH int) int {
 		capRows = max(1, maxH/2-6)
 	}
 	if s.Palette {
-		return 4 + min(max(1, len(s.list.displayLines())), capRows)
+		return 4 + s.detailHeight() + min(max(1, len(s.list.displayLines())), capRows)
 	}
-	return 2 + min(len(s.filteredRows()), capRows)
+	return 2 + s.detailHeight() + min(len(s.filteredRows()), capRows)
 }
 
 // filteredRows returns the currently rendered rows (headers included).
@@ -1049,6 +1043,13 @@ func (s *DialogSelect) choose(row ListRow) bool {
 // NeedsLayout reports a search-driven height change.
 func (s *DialogSelect) NeedsLayout() bool { return s.layoutDirty }
 
+func (s *DialogSelect) detailHeight() int {
+	if s.Details {
+		return MenuDetailsHeight
+	}
+	return 0
+}
+
 // Layout puts the search row at the top and the capped list below.
 func (s *DialogSelect) Layout(r Rect) {
 	s.layoutDirty = false
@@ -1061,6 +1062,7 @@ func (s *DialogSelect) Layout(r Rect) {
 	if s.Palette {
 		avail = max(0, avail-2)
 	}
+	avail = max(0, avail-s.detailHeight())
 	if capRows > 0 && avail > capRows {
 		avail = capRows
 	}
@@ -1088,6 +1090,11 @@ func (s *DialogSelect) Render(w, h int) string {
 				lipgloss.NewStyle().Foreground(th.Text.Base.Color()))
 		}
 		drawWidget(cv, s.list, s.list.Bounds(), s.Bounds())
+		if s.Details && h >= 8 {
+			if row, ok := s.list.SelectedRow(); ok {
+				drawCells(cv, RenderMenuDetails(row.Desc, w, s.detailHeight()), 0, h-1-s.detailHeight(), w, s.detailHeight())
+			}
+		}
 		if s.Palette {
 			count := 0
 			for _, row := range s.list.Rows {

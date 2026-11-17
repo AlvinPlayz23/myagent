@@ -1,0 +1,23 @@
+
+
+
+
+
+
+
+             Commands                                           esc
+
+             Search commands…
+
+               Suggested  ─────────────────────────────────────────
+             › /models
+               Session  ───────────────────────────────────────────
+               /new
+               Tools & interface  ─────────────────────────────────
+               /tools
+
+             ──────────────────────────────────────────────────────
+             Switch model
+
+
+             ↑↓ navigate  enter select                    3 results
