@@ -93,10 +93,7 @@ func (m *model) kitModelPicker() KitPickerState {
 		if title == "" {
 			title = item.ID
 		}
-		desc := ""
-		if title != item.ID {
-			desc = item.ID
-		}
+		desc := item.Ref()
 		group := item.ProviderName
 		if group == "" {
 			group = item.Provider
@@ -133,9 +130,14 @@ func (m *model) kitCommandPicker() KitPickerState {
 			if category != group {
 				continue
 			}
-			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: item.name, Desc: item.description, Group: category})
+			label := item.label
+			if label == "" {
+				label = item.name
+			}
+			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: label + " (" + item.name + ")", Desc: item.description, Group: category})
 		}
 	}
+
 	return state
 }
 
@@ -229,13 +231,14 @@ func kitSessionItem(info session.Info, current bool) KitPickerItem {
 	if len(id) > 8 {
 		id = id[:8]
 	}
-	line := fmt.Sprintf("%s  %s  %s", info.Modified.Local().Format("Jan 02 15:04"), id, title)
+	line := title
+	description := fmt.Sprintf("%s · %s", info.Modified.Local().Format("Jan 02 15:04"), id)
 	footer := ""
 	if current {
 		line = "● CURRENT  " + line
 		footer = "current"
 	}
-	return KitPickerItem{ID: info.ID, Title: line, Footer: footer}
+	return KitPickerItem{ID: info.ID, Title: line, Desc: description, Footer: footer}
 }
 
 func (m *model) kitEffortPicker() KitPickerState {
