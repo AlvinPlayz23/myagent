@@ -133,7 +133,11 @@ func (m *model) kitCommandPicker() KitPickerState {
 			if category != group {
 				continue
 			}
-			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: item.name, Desc: item.description, Group: category})
+			label := item.label
+			if label == "" {
+				label = item.name
+			}
+			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: label + " (" + item.name + ")", Desc: item.description, Group: category})
 		}
 	}
 	return state

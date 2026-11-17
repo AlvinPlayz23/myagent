@@ -65,7 +65,8 @@ func (s *Shell) openPicker(state tui.KitPickerState, sig string) {
 		ID:          "kit.picker",
 		Items:       pickerItems(state.Items),
 		Placeholder: state.Placeholder,
-		Palette:     state.Kind == "models" || state.Kind == "commands",
+		Palette:     true,
+		Details:     state.Kind != "files",
 	})
 	query := state.Query
 	if state.Kind == "commands" {

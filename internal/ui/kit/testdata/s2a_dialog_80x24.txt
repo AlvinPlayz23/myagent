@@ -10,8 +10,8 @@
  ┃           search models
  ┃
  ┃           Anthropic
- ┃           ● Claude Opus  most capable                     ctrl+1
- ┃             Claude Sonnet  balanced                       ctrl+2
+ ┃           ● Claude Opus                                   ctrl+1
+ ┃             Claude Sonnet                                 ctrl+2
  ┃
              OpenAI
         le   …                                                         Status ╮
