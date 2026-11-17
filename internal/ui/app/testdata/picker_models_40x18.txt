@@ -1,0 +1,17 @@
+
+
+
+
+    Select a model               esc
+
+    Search models…
+
+      alpha                       8k
+    › beta          ✓ current · 200k
+    …
+
+    ────────────────────────────────
+    p/b
+
+
+    ↑↓ move  ↵ select
