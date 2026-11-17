@@ -91,6 +91,7 @@ type Shell struct {
 	lastTranscriptRev int
 	lastComposerRev   int
 	lastWelcome       bool
+	lastWelcomeRev    int
 	lastContentW      int
 	lastTranscriptH   int
 	lastComposerH     int
@@ -325,12 +326,17 @@ func (s *Shell) Sync() {
 	}
 	contentW := m.contentWidth(welcome)
 	s.host.KitSetSize(contentW, m.transcriptH)
+	welcomeRev := 0
+	if host, ok := s.host.(interface{ KitWelcomeRev() int }); ok && welcome {
+		welcomeRev = host.KitWelcomeRev()
+	}
 	rev := s.host.KitTranscriptRev()
 	crev := s.host.KitComposerRev()
 
 	dirty := false
 	if !s.haveState ||
 		welcome != s.lastWelcome ||
+		(welcome && welcomeRev != s.lastWelcomeRev) ||
 		rev != s.lastTranscriptRev ||
 		contentW != s.lastContentW ||
 		(welcome && m.transcriptH != s.lastTranscriptH) {
@@ -355,6 +361,7 @@ func (s *Shell) Sync() {
 	s.lastTranscriptRev = rev
 	s.lastComposerRev = crev
 	s.lastWelcome = welcome
+	s.lastWelcomeRev = welcomeRev
 	s.lastContentW = contentW
 	s.lastTranscriptH = m.transcriptH
 	s.lastComposerH = m.composerH

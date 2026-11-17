@@ -247,6 +247,17 @@ func (m *model) KitTranscriptRev() int { return m.transcript.rev }
 // KitShowWelcome reports the transient empty-session state.
 func (m *model) KitShowWelcome() bool { return m.showWelcome() }
 
+// KitWelcomeRev lets the retained shell repaint animation frames without
+// pretending the transcript changed.
+func (m *model) KitWelcomeRev() int {
+	for i, choice := range welcomeChoices {
+		if choice.style == m.welcomeStyle {
+			return i*welcomeFrameCount + m.welcomeFrame
+		}
+	}
+	return 0
+}
+
 // KitWelcomeHeight preserves full-height alternate startup styles.
 func (m *model) KitWelcomeHeight(available int) int {
 	if m.welcomeStyle == welcomeDefault {

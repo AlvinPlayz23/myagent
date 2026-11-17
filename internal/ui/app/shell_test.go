@@ -617,3 +617,30 @@ func TestComposerWidthIsAppliedBeforeHeightMeasurement(t *testing.T) {
 		t.Fatal("wrapped composer overlaps transcript")
 	}
 }
+
+type animatedWelcomeHost struct {
+	fakeHost
+	frame int
+}
+
+func (h *animatedWelcomeHost) KitWelcomeRev() int         { return h.frame }
+func (h *animatedWelcomeHost) KitWelcome(int, int) string { return strings.Repeat("█", h.frame+1) }
+
+func TestWelcomeAnimationRepaintsWithoutNewSession(t *testing.T) {
+	host := &animatedWelcomeHost{fakeHost: fakeHost{welcome: true, composerH: 2}}
+	s := newShell(host)
+	s.Resize(80, 24)
+	before := s.Render(80, 24)
+	host.frame++
+	s.Sync()
+	after := s.Render(80, 24)
+	if before == after {
+		t.Fatal("welcome reused cached animation frame")
+	}
+	composed := s.root.ComposeCount()
+	s.Sync()
+	s.Render(80, 24)
+	if s.root.ComposeCount() != composed {
+		t.Fatal("unchanged welcome frame recomposed")
+	}
+}

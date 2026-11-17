@@ -481,34 +481,19 @@ func (m *model) renderHomeWordmark(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	glyphs := [7][5]string{
-		{"█   █", "██ ██", "█ █ █", "█   █", "█   █"},
-		{"█   █", " █ █ ", "  █  ", "  █  ", "  █  "},
-		{" ███ ", "█   █", "█████", "█   █", "█   █"},
-		{" ████", "█    ", "█ ███", "█   █", " ███ "},
-		{"█████", "█    ", "████ ", "█    ", "█████"},
-		{"█   █", "██  █", "█ █ █", "█  ██", "█   █"},
-		{"█████", "  █  ", "  █  ", "  █  ", "  █  "},
-	}
 	rows := []string{}
-	if width >= 41 && height >= 6 {
-		for row := 0; row < 5; row++ {
-			var line strings.Builder
-			for letter := range glyphs {
-				if letter > 0 {
-					line.WriteByte(' ')
-				}
-				style := m.th.textPrimary
-				if letter < 2 {
-					style = m.th.muted
-				}
-				line.WriteString(style.Render(glyphs[letter][row]))
-			}
-			rows = append(rows, centerLine(line.String(), width))
+	if width >= 41 && height >= 4 {
+		for _, line := range m.pixelWordmark() {
+			rows = append(rows, centerLine(line, width))
+		}
+	} else if width >= 31 && height >= 2 {
+		for _, line := range bannerRows {
+			rows = append(rows, centerLine(m.th.textPrimary.Render(line), width))
 		}
 	} else {
 		rows = append(rows, centerLine(m.th.textPrimary.Bold(true).Render("myagent"), width))
 	}
+
 	if len(m.disabledTools) > 0 && len(rows) < height {
 		rows = append(rows, "", centerLine(ansi.Truncate(m.welcomeHintPlain(), width, "…"), width))
 	}
@@ -520,4 +505,49 @@ func (m *model) renderHomeWordmark(width, height int) string {
 		rows = append(rows, "")
 	}
 	return strings.Join(rows[:min(height, len(rows))], "\n")
+}
+
+// Pack square pixels into terminal half-blocks instead of stretching thin
+// one-cell strokes across tall character rows.
+func (m *model) pixelWordmark() []string {
+	glyphs := [7][7]string{
+		{"10001", "11011", "11111", "10101", "10001", "10001", "10001"},
+		{"11011", "11011", "11011", "01110", "00100", "00100", "00100"},
+		{"01110", "11011", "11011", "11111", "11011", "11011", "11011"},
+		{"01111", "11000", "11000", "11011", "11011", "11011", "01110"},
+		{"11111", "11000", "11000", "11110", "11000", "11000", "11111"},
+		{"11001", "11001", "11101", "11111", "11011", "11011", "11001"},
+		{"11111", "11111", "00100", "00100", "00100", "00100", "00100"},
+	}
+	rows := make([]string, 0, 4)
+	for y := 0; y < 7; y += 2 {
+		var line strings.Builder
+		for letter, glyph := range glyphs {
+			if letter > 0 {
+				line.WriteByte(' ')
+			}
+			var pixels strings.Builder
+			for x := 0; x < 5; x++ {
+				top := glyph[y][x] == '1'
+				bottom := y+1 < 7 && glyph[y+1][x] == '1'
+				switch {
+				case top && bottom:
+					pixels.WriteRune('█')
+				case top:
+					pixels.WriteRune('▀')
+				case bottom:
+					pixels.WriteRune('▄')
+				default:
+					pixels.WriteByte(' ')
+				}
+			}
+			style := m.th.textPrimary
+			if letter < 2 {
+				style = m.th.muted
+			}
+			line.WriteString(style.Render(pixels.String()))
+		}
+		rows = append(rows, line.String())
+	}
+	return rows
 }

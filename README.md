@@ -666,3 +666,18 @@ Either none exist yet (run an interactive session first), or
 ## License
 
 No license file yet — all rights reserved until one is added.
+
+### Interface themes
+
+Use `/customize` → **Theme** to change the whole interface. Choices include the
+existing adaptive Default plus **Tokyo Night**, **Catppuccin Mocha**, **Kanagawa**,
+**Vesper**, **Osaka Jade**, **Rosé Pine**, **Vercel**, and **Tokyo Mocha**.
+Tokyo Mocha combines Tokyo Night's blue-black surfaces with Catppuccin Mocha's
+text, mauve accent, and pastel syntax colors. Named palettes are intentionally
+dark; Default continues to follow the terminal's light/dark appearance.
+
+Choosing a theme recolors the current session and is saved in the `theme` field
+of `config.json`, independently of startup art, composer style, models, or tools.
+The selected theme is restored the next time the TUI starts. Unknown names fall
+back to Default. Theme previews and upstream attribution are in
+`docs/tui-lab/` and `THIRD_PARTY_NOTICES.md`.

@@ -245,3 +245,29 @@ func TestKitHomeWordmarkFitsPromptRegion(t *testing.T) {
 		t.Fatal("home must keep disabled-tools notice")
 	}
 }
+
+func TestHomeWordmarkUsesCompactPixels(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	rows := m.pixelWordmark()
+	if len(rows) != 4 {
+		t.Fatalf("pixel wordmark height = %d", len(rows))
+	}
+	text := ansi.Strip(strings.Join(rows, "\n"))
+	if !strings.Contains(text, "▀") || !strings.Contains(text, "▄") || !strings.Contains(text, "█") {
+		t.Fatal("wordmark should use packed pixel blocks")
+	}
+	for _, row := range rows {
+		if ansi.StringWidth(row) != 41 {
+			t.Fatalf("wordmark row width = %d", ansi.StringWidth(row))
+		}
+	}
+	for _, choice := range welcomeChoices {
+		m.welcomeStyle = choice.style
+		before := m.KitWelcomeRev()
+		m.onResize(80, 30)
+		m.update(tickMsg{})
+		if choice.style.animated() && m.KitWelcomeRev() == before {
+			t.Fatalf("%s did not advance", choice.style)
+		}
+	}
+}

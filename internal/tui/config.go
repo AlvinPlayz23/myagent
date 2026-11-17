@@ -19,6 +19,10 @@ func (m *model) configurePersistedSettings(persisted *config.Config) {
 		})
 	}
 	m.promptStyle = normalizePromptStyle(persisted.PromptStyle)
+	m.themeName = normalizeThemeName(persisted.Theme)
+	if m.th != nil {
+		m.setTheme(m.themeName)
+	}
 	m.savePromptStyle = func(style promptStyle) error {
 		return config.Update(func(cfg *config.Config) error {
 			cfg.PromptStyle = string(style)
@@ -27,6 +31,9 @@ func (m *model) configurePersistedSettings(persisted *config.Config) {
 	}
 	if parsed, err := llm.ParseEffort(persisted.DefaultEffort); err == nil {
 		m.defaultEffort = parsed
+	}
+	m.saveTheme = func(name string) error {
+		return config.Update(func(cfg *config.Config) error { cfg.Theme = normalizeThemeName(name); return nil })
 	}
 	m.saveDefaultEffort = func(effort llm.Effort) error {
 		return config.Update(func(cfg *config.Config) error {

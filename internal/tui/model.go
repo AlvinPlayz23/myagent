@@ -196,6 +196,7 @@ type customizeSection int
 const (
 	sectionStartup customizeSection = iota
 	sectionComposer
+	sectionTheme
 )
 
 // customizeGroup is one top-level entry of the /customize panel. Selecting it
@@ -209,6 +210,7 @@ type customizeGroup struct {
 var customizeGroups = []customizeGroup{
 	{section: sectionStartup, label: "Startup Style", description: "empty-session welcome"},
 	{section: sectionComposer, label: "Composer (Prompt Box)", description: "where you type"},
+	{section: sectionTheme, label: "Theme", description: "colors for the entire interface"},
 }
 
 // customizeRow is one selectable choice within a group.
@@ -218,10 +220,18 @@ type customizeRow struct {
 	description string
 	welcome     welcomeStyle
 	prompt      promptStyle
+	themeName   string
 }
 
 // customizeChoices returns the selectable choices belonging to a group.
 func customizeChoices(section customizeSection) []customizeRow {
+	if section == sectionTheme {
+		rows := make([]customizeRow, 0, len(themeChoices))
+		for _, choice := range themeChoices {
+			rows = append(rows, customizeRow{section: sectionTheme, label: choice.label, description: choice.description, themeName: choice.id})
+		}
+		return rows
+	}
 	if section == sectionComposer {
 		rows := make([]customizeRow, 0, len(promptChoices))
 		for _, choice := range promptChoices {
@@ -487,6 +497,8 @@ type model struct {
 	configureProvider  func(modelcatalog.Provider, string) error
 	saveWelcomeStyle   func(welcomeStyle) error
 	savePromptStyle    func(promptStyle) error
+	saveTheme          func(string) error
+	themeName          string
 	saveDefaultEffort  func(llm.Effort) error
 	defaultEffort      llm.Effort
 	// disabledTools is the /tools deny list, applied on top of whatever
@@ -2042,10 +2054,39 @@ func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
 	if m.customize.level != 1 || (m.customize.sel < 0 || m.customize.sel >= len(m.customize.choices())) {
 		return m, nil // no valid row under the cursor: save nothing
 	}
+	if row.section == sectionTheme {
+		return m.applyTheme(row)
+	}
 	if row.section == sectionComposer {
 		return m.applyPromptStyle(row)
 	}
 	return m.applyWelcomeStyle(row)
+}
+
+func (m *model) applyTheme(row customizeRow) (tea.Model, tea.Cmd) {
+	name := normalizeThemeName(row.themeName)
+	if m.saveTheme != nil {
+		if err := m.saveTheme(name); err != nil {
+			m.statusMsg = "Could not save customization: " + err.Error()
+			return m, nil
+		}
+	}
+	m.setTheme(name)
+	m.customize.close()
+	m.statusMsg = "Theme set to " + row.label + "."
+	m.updateLayout()
+	return m, nil
+}
+
+// Keep the shared style pointers intact: transcript and model own the same theme.
+func (m *model) setTheme(name string) {
+	SetThemeName(name)
+	m.themeName = CurrentThemeName()
+	*m.th = *newTheme()
+	m.md.reset()
+	m.transcript.invalidate()
+	m.kitComposerRev++
+	m.syncComposerStyle()
 }
 
 func (m *model) applyWelcomeStyle(row customizeRow) (tea.Model, tea.Cmd) {
@@ -3285,6 +3326,9 @@ func (m *model) renderCustomizeChoices(height int) string {
 
 // rowIsCurrent reports whether a row holds the value its group is set to.
 func (m *model) rowIsCurrent(row customizeRow) bool {
+	if row.section == sectionTheme {
+		return normalizeThemeName(m.themeName) == row.themeName
+	}
 	if row.section == sectionComposer {
 		return row.prompt == m.promptStyle
 	}

@@ -10,7 +10,7 @@ import (
 
 func TestConfigCallbacksPreserveExternalUpdates(t *testing.T) {
 	t.Setenv("MYAGENT_DIR", t.TempDir())
-	snapshot := &config.Config{DefaultModel: "openai/old-model", WelcomeStyle: "rain"}
+	snapshot := &config.Config{DefaultModel: "openai/old-model", WelcomeStyle: "rain", Theme: "default"}
 	if err := config.Save(snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +33,18 @@ func TestConfigCallbacksPreserveExternalUpdates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := m.saveTheme("tokyo-mocha"); err != nil {
+		t.Fatal(err)
+	}
 	got, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got.DisabledTools, []string{"bash"}) || got.DefaultModel != "openai/new-model" {
 		t.Fatal("TUI save clobbered an external update")
+	}
+	if got.Theme != "tokyo-mocha" {
+		t.Fatalf("theme not saved: %q", got.Theme)
 	}
 	if got.WelcomeStyle != "default" || got.PromptStyle != "default" || got.DefaultEffort != "high" {
 		t.Fatal("TUI callbacks did not persist their settings")

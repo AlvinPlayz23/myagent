@@ -24,11 +24,12 @@ import (
 // light/dark mode. glamour is not reactive, so a change to any of those
 // rebuilds it.
 type mdRenderer struct {
-	mu     sync.Mutex
-	width  int
-	marker int
-	dark   bool
-	r      *glamour.TermRenderer
+	mu            sync.Mutex
+	width         int
+	marker        int
+	dark          bool
+	themeRevision uint64
+	r             *glamour.TermRenderer
 }
 
 func newMDRenderer() *mdRenderer { return &mdRenderer{} }
@@ -54,10 +55,11 @@ func (m *mdRenderer) render(md string, width int) string {
 		marker = limit
 	}
 	dark := darkBackground.Load()
+	revision := ThemeRevision()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.r == nil || m.width != width || m.marker != marker || m.dark != dark {
+	if m.r == nil || m.width != width || m.marker != marker || m.dark != dark || m.themeRevision != revision {
 		r, err := glamour.NewTermRenderer(
 			glamour.WithStyles(markdownStyle()),
 			glamour.WithWordWrap(max(1, width-marker)),
@@ -69,6 +71,7 @@ func (m *mdRenderer) render(md string, width int) string {
 		m.width = width
 		m.marker = marker
 		m.dark = dark
+		m.themeRevision = revision
 	}
 	out, err := m.r.Render(md)
 	if err != nil {
@@ -108,6 +111,14 @@ func markdownStyle() glamouransi.StyleConfig {
 	chroma.Comment.Italic = boolPtr(true)
 	chroma.NameClass.Bold = boolPtr(true)
 	chroma.Background.BackgroundColor = hex(p.rule.resolve())
+
+	if CurrentThemeName() != "default" {
+		chroma.Background.BackgroundColor = hex(CurrentThemeTokens().Background.Raised.Base.Color())
+		chroma.Keyword = primitive(hex(ThemeSyntaxColor("syntaxKeyword")))
+		chroma.LiteralString = primitive(hex(ThemeSyntaxColor("syntaxString")))
+		chroma.NameFunction = primitive(hex(ThemeSyntaxColor("syntaxFunction")))
+		chroma.NameClass = primitive(hex(ThemeSyntaxColor("syntaxFunction")))
+	}
 
 	return glamouransi.StyleConfig{
 		Document: glamouransi.StyleBlock{

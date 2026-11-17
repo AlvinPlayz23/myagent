@@ -302,9 +302,9 @@ func (l *List) renderRow(idx, w int) string {
 		marker := l.marker()
 		if l.Palette {
 			marker = "›"
-			textFg, descFg = th.Text.Inverse.Color(), th.Text.Inverse.Color()
+			descFg = textFg
 		}
-		drawText(cv, 0, 0, 1, marker, th.Text.Inverse.Color())
+		drawText(cv, 0, 0, 1, marker, textFg)
 	}
 
 	footerW := ansi.StringWidth(row.Footer)
@@ -321,17 +321,14 @@ func (l *List) renderRow(idx, w int) string {
 		drawText(cv, 2+titleW+2, 0, avail-titleW-2, row.Desc, descFg)
 	}
 	if footerW > 0 && footerW < w-2 {
-		fg := th.Text.Muted
+		fg := th.Text.Muted.Color()
 		if row.Error {
-			fg = th.Text.Feedback.Error.Base
+			fg = th.Text.Feedback.Error.Base.Color()
 		}
 		if selected {
-			fg = th.Text.Selection
-			if l.Palette {
-				fg = th.Text.Inverse
-			}
+			fg = textFg
 		}
-		drawText(cv, w-footerW, 0, footerW, row.Footer, fg.Color())
+		drawText(cv, w-footerW, 0, footerW, row.Footer, fg)
 	}
 	return padCanvas(cv, w, 1)
 }

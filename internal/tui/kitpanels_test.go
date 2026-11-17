@@ -323,7 +323,7 @@ func TestKitPickerCustomizeIDsNavigateSaveAndBack(t *testing.T) {
 
 func TestKitPickerCustomizeRejectsInvalidIndexes(t *testing.T) {
 	m := openCustomize(t, welcomeDefault, promptDefault)
-	for _, id := range []string{"group:-1", "group:2", "choice:0", "other:0", "group:nope"} {
+	for _, id := range []string{"group:-1", "group:" + strconv.Itoa(len(customizeGroups)), "choice:0", "other:0", "group:nope"} {
 		m.KitPickerAccept(id)
 		if m.customize.level != 0 || m.customize.sel != 0 {
 			t.Fatalf("accepting %q changed customize selection: %+v", id, m.customize)

@@ -71,7 +71,7 @@ type palette struct {
 // code should use Tokens instead; this function exists only because this parity
 // release may not edit call sites.
 func newPalette() palette {
-	return paletteFromTokens(newTokens())
+	return paletteFromTokens(CurrentThemeTokens())
 }
 
 // paletteFromTokens maps the token set back to the flat palette markdown.go
@@ -212,7 +212,7 @@ func newTokens() Tokens {
 // DefaultTokens returns the built-in semantic token set. It is the entry point
 // for the S1 kit and S4 chrome phases, which should never reference the legacy
 // palette or raw lipgloss colors directly.
-func DefaultTokens() Tokens { return newTokens() }
+func DefaultTokens() Tokens { return CurrentThemeTokens() }
 
 // theme holds the lipgloss styles for the UI, derived from one semantic token
 // set so light and dark terminals share a single definition site.
@@ -264,7 +264,7 @@ func (t *theme) TokenSet() Tokens { return t.tokens }
 // the pre-token API; each assignment below is a thin alias, not a second
 // palette definition.
 func newTheme() *theme {
-	t := newTokens()
+	t := CurrentThemeTokens()
 	return &theme{
 		tokens: t,
 		userBlock: lipgloss.NewStyle().

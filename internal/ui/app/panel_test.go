@@ -411,3 +411,26 @@ func TestShellS6PanelGoldens(t *testing.T) {
 		})
 	}
 }
+
+func TestCustomizeThemeChoicesResizePanel(t *testing.T) {
+	host := &fakeHost{composerH: 2, pickerActive: true, picker: tui.KitPickerState{Kind: "customize", Mode: tui.KitPickerList, Title: "Customize", Hint: "select", Items: []tui.KitPickerItem{{ID: "group:0", Title: "Startup"}, {ID: "group:1", Title: "Composer"}, {ID: "group:2", Title: "Theme"}}}}
+	s := newShell(host)
+	s.Resize(120, 40)
+	s.Render(120, 40)
+	before := s.panelLayout.Bounds().H
+	host.picker.Title = "Customize › Theme"
+	host.picker.Items = nil
+	for _, name := range []string{"Default", "Tokyo Night", "Catppuccin Mocha", "Kanagawa", "Vesper", "Osaka Jade", "Rosé Pine", "Vercel", "Tokyo Mocha"} {
+		host.picker.Items = append(host.picker.Items, tui.KitPickerItem{ID: name, Title: name})
+	}
+	s.Sync()
+	frame := ansi.Strip(s.Render(120, 40))
+	if s.panelLayout.Bounds().H <= before {
+		t.Fatal("theme choices did not grow customize panel")
+	}
+	for _, want := range []string{"Tokyo Night", "Catppuccin Mocha", "Tokyo Mocha"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("theme %q not visible", want)
+		}
+	}
+}
