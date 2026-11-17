@@ -434,3 +434,31 @@ func TestCustomizeThemeChoicesResizePanel(t *testing.T) {
 		}
 	}
 }
+
+func TestMenusExpandOnlySelectedDescriptionExceptFiles(t *testing.T) {
+	for _, kind := range []string{"customize", "effort", "tools", "providers", "sessions", "files"} {
+		t.Run(kind, func(t *testing.T) {
+			host := &fakeHost{composerH: 2, pickerActive: true, picker: tui.KitPickerState{Kind: kind, Mode: tui.KitPickerList, Title: "Options", SelectedID: "one", Items: []tui.KitPickerItem{
+				{ID: "one", Title: "First item", Desc: "First description"}, {ID: "two", Title: "Second item", Desc: "Second description"},
+			}}}
+			s := newShell(host)
+			s.Resize(120, 40)
+			frame := ansi.Strip(s.Render(120, 40))
+			if s.panelLayout.Bounds().W != 60 {
+				t.Fatal("menu is not compact")
+			}
+			if strings.Contains(frame, "Second description") {
+				t.Fatal("unselected description shown")
+			}
+			if strings.Contains(frame, "First description") != (kind != "files") {
+				t.Fatal("file menu must omit details; other menus show selected details")
+			}
+			host.picker.SelectedID = "two"
+			s.Sync()
+			frame = ansi.Strip(s.Render(120, 40))
+			if strings.Contains(frame, "First description") || strings.Contains(frame, "Second description") != (kind != "files") {
+				t.Fatal("detail did not track highlight")
+			}
+		})
+	}
+}

@@ -1,0 +1,23 @@
+{
+  "streamMs": 10.93,
+  "idleUs": 2.236,
+  "streamRange": "10.69–12.25 ms",
+  "idleRange": "2.098–2.311 µs",
+  "streamAlloc": 8090590,
+  "streamAllocs": 2706,
+  "idleAlloc": 1536,
+  "idleAllocs": 4,
+  "streamCompose": 1,
+  "idleCompose": 0,
+  "normalBytes": 26934703,
+  "normalGzip": 12610052,
+  "releaseBytes": 19947785,
+  "releaseGzip": 6993964,
+  "opencodeBytes": 250685616,
+  "opencodeVersion": "v2.3.0",
+  "environment": "Go 1.26.11 · linux/amd64 · CGO_ENABLED=1 · shared Modal sandbox · 2026-11-16",
+  "symbolNote": "The normal binary exposes 197,460 bytes across 775 linker-visible symbols in internal/ui/app and internal/ui/kit. This excludes shared dependencies, internal/tui, type/runtime metadata, and other data. It is not an incremental gotui size measurement.",
+  "commands": "GOMAXPROCS=2 go test ./internal/ui/app -run '^$' \\\n  -bench='BenchmarkShell(StreamingAppend200x60|IdleFrame200x60)' \\\n  -benchmem -count=3 -benchtime=1s\n\ngo build -o /tmp/myagent-normal .\ngo build -trimpath -ldflags='-s -w' -o /tmp/myagent-release .\nwc -c /tmp/myagent-normal /tmp/myagent-release\ngzip -c /tmp/myagent-normal | wc -c\ngzip -c /tmp/myagent-release | wc -c\ngo tool nm -size /tmp/myagent-normal\ngo version; go env GOOS GOARCH CGO_ENABLED",
+  "confirmStreamMs": 13.558559,
+  "confirmIdleUs": 2.833
+}
