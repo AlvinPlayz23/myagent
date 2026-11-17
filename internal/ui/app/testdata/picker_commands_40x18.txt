@@ -1,0 +1,17 @@
+
+
+
+
+    Commands                     esc
+
+    Search commands…
+
+    › /models
+      /new
+      /tools
+
+    ────────────────────────────────
+    Switch model
+
+
+    ↑↓ move  ↵ select

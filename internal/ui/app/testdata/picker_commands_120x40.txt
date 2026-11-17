@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+                                 Commands                                           esc
+
+                                 Search commands…
+
+                                 › /models
+                                   /new
+                                   /tools
+
+                                 ──────────────────────────────────────────────────────
+                                 Switch model
+
+
+                                 ↑↓ navigate  enter select                    3 results
