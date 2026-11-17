@@ -1,0 +1,25 @@
+
+
+
+
+
+
+
+
+
+
+
+                   Commands                                                                       esc
+
+                   Search commands…
+
+                   Suggested
+                   › /models  Switch model
+
+                   Session
+                     /new  Start a conversation
+
+                   Tools & interface
+                     /tools  Choose enabled tools
+
+                   ↑↓ navigate  enter select                                                3 results
