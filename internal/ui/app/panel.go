@@ -22,13 +22,14 @@ type panelListBody struct {
 	list        *kit.List
 	hint        string
 	layoutDirty bool
+	details     bool
 }
 
 func newPanelListBody(s *Shell, state tui.KitPickerState) *panelListBody {
 	b := &panelListBody{
 		WidgetBase: kit.NewWidgetBase("kit.panel.list"),
 		shell:      s,
-		list:       kit.NewList(kit.ListOpts{ID: "kit.panel.list.rows"}),
+		list:       kit.NewList(kit.ListOpts{ID: "kit.panel.list.rows", Compact: true}),
 		hint:       state.Hint,
 	}
 	b.list.OnChoose = func(row kit.ListRow) bool {
@@ -44,6 +45,15 @@ func newPanelListBody(s *Shell, state tui.KitPickerState) *panelListBody {
 func (b *panelListBody) apply(state tui.KitPickerState) {
 	if len(b.list.Rows) != len(state.Items) || b.hint != state.Hint {
 		b.layoutDirty = true
+	}
+	b.details = false
+	if state.Kind != "files" {
+		for _, item := range state.Items {
+			if item.Desc != "" {
+				b.details = true
+				break
+			}
+		}
 	}
 	b.list.SetRows(panelRows(state.Items))
 	b.hint = state.Hint
@@ -77,11 +87,13 @@ func (b *panelListBody) selectedID() string {
 
 // listRect is the row area below the one-row hint.
 func (b *panelListBody) listRect(r kit.Rect) kit.Rect {
-	if b.hint == "" {
-		return r
+	if b.hint != "" {
+		r.Y++
+		r.H = max(0, r.H-1)
 	}
-	r.Y++
-	r.H = max(0, r.H-1)
+	if b.details {
+		r.H = max(0, r.H-kit.MenuDetailsHeight)
+	}
 	return r
 }
 
@@ -93,6 +105,9 @@ func (b *panelListBody) PreferredHeight(_, maxH int) int {
 	h := rows
 	if b.hint != "" {
 		h++
+	}
+	if b.details {
+		h += kit.MenuDetailsHeight
 	}
 	return max(1, h)
 }
@@ -112,13 +127,21 @@ func (b *panelListBody) Render(w, h int) string {
 	th := kit.DefaultTheme()
 	var lines []string
 	listH := h
+	if b.details {
+		listH = max(0, listH-kit.MenuDetailsHeight)
+	}
 	if b.hint != "" {
 		lines = append(lines, lipgloss.NewStyle().Foreground(th.Text.Muted.Color()).
 			Render(ansi.Truncate(b.hint, w, "…")))
-		listH = max(0, h-1)
+		listH = max(0, listH-1)
 	}
 	if listH > 0 {
 		lines = append(lines, strings.Split(b.list.Render(w, listH), "\n")...)
+	}
+	if b.details {
+		if row, ok := b.list.SelectedRow(); ok {
+			lines = append(lines, kit.RenderMenuDetails(row.Desc, w, min(kit.MenuDetailsHeight, h)))
+		}
 	}
 	return fitBlock(strings.Join(lines, "\n"), w, h)
 }

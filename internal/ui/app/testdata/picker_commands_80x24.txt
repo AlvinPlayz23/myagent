@@ -1,0 +1,19 @@
+
+
+
+
+
+
+
+             Commands                                           esc
+
+             Search commands…
+
+             Suggested
+             › /models  Switch model
+
+             Session
+               /new  Start a conversation
+             …
+
+             ↑↓ navigate  enter select                    3 results
