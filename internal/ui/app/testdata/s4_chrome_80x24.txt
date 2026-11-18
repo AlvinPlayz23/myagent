@@ -1,6 +1,4 @@
  myagent │ ⠋ fix-tabs ●
-  block line a                                                               │
-  block line b                                                               │
                                                                              │
   block line a                                                               │
   block line b                                                               │
@@ -9,12 +7,14 @@
   block line b                                                               │
                                                                              │
   block line a                                                               │
+  block line b                                                               │
+                                                                             │
+  block line a                                                               █
   block line b                                                               █
-                                                                             █
-  block line a                                                               │
-  block line b                                                               │
                                                                              │
   block line a                                                               │
+  block line b                                                               │
+
                                                             Jump to latest ↓
   [✓] wire chrome
   [•] write tests

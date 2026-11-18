@@ -16,7 +16,8 @@ import (
 	"github.com/AlvinPlayz23/myagent/internal/types"
 )
 
-func TestParseSlashCommand(t *testing.T) {	tests := []struct {
+func TestParseSlashCommand(t *testing.T) {
+	tests := []struct {
 		input string
 		kind  commandKind
 		arg   string
@@ -443,6 +444,29 @@ func TestCommandPickerFilteringAndSelection(t *testing.T) {
 	item, _ = p.selected()
 	if item.name != "/help" {
 		t.Fatalf("selected after up = %q, want /help", item.name)
+	}
+}
+
+func TestCommandPickerOpensEveryCommandWithoutDraft(t *testing.T) {
+	p := newCommandPicker()
+	p.openAll()
+	if !p.active || len(p.matched) != len(commandItems) {
+		t.Fatalf("picker = active %v, matches %d; want all commands", p.active, len(p.matched))
+	}
+	// Empty-composer syncs must not dismiss the ctrl+p palette.
+	p.sync("")
+	if !p.active {
+		t.Fatal("pinned palette closed on an empty composer")
+	}
+	// Typing filters the pinned list; clearing the filter restores every
+	// command instead of closing the ctrl+p palette.
+	p.sync("/h")
+	if item, ok := p.selected(); !ok || item.name != "/help" {
+		t.Fatalf("selected = %#v, %v; want /help", item, ok)
+	}
+	p.sync("")
+	if !p.active || len(p.matched) != len(commandItems) {
+		t.Fatalf("cleared pinned filter = active %v, matches %d; want all commands", p.active, len(p.matched))
 	}
 }
 

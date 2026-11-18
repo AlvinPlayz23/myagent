@@ -158,9 +158,11 @@ glyph literals below are taken from source, not guessed.
   in error color).
 - *Command palette*: DialogSelect over all keymap commands; "Suggested" pseudo-group when
   unfiltered; footer = first keybind.
-- *Toasts*: top-right (`top 1, right 2`, width ≤ min(60, w−6)); one visible + FIFO queue
-  with "+N more"; left/right `┃` borders tinted by variant; raised bg; bold title +
-  word-wrapped message; 5000 ms auto-dismiss, hover pauses, click activates `› action`.
+- *Toasts*: top-right (`top 1, right 2`, content-fit width ≤ min(60, w−6), anchored
+  to the main column beside the sidebar); one visible + FIFO queue with "+N more";
+  single left `┃` rail tinted by variant; raised bg; variant glyph + bold optional
+  title + word-wrapped message; 5000 ms auto-dismiss, hover pauses, click activates
+  the trailing `› action` row.
 - *Session tabs*: top bar or left rail (42, compact 5); active = bg-pulse; busy = spinner
   frames; unread = fading dot + glow (0.12 tint); titles marquee on hover; drag to
   reorder; half-block `▄/▀` edges; `⌕` opens the session switcher.
@@ -348,7 +350,7 @@ during layout for hit-testing (`hitregistry.go`).
 | `List` | Scrollable selectable rows (up/down, enter) with optional recency order — generalizes `model_picker.go` / `tools_picker.go` internals. |
 | `Tabs` | Horizontal rail of session tabs, active tab accent, click-to-switch. |
 | `DialogStack` | Modal manager: dimmed backdrop + stacked dialogs; intercepts all unhandled keys/mouse until empty (see 3.4). |
-| `ToastHost` | Overlay column top-right (`top 1, right 2`, width ≤ min(60, w−6)), FIFO one-visible + `+N more`, 5000 ms TTL with hover-pause, click dismisses and runs `› action`; auto-drain via tick driver — key-passive band (see 3.0.D). |
+| `ToastHost` | Overlay column top-right (`top 1, right 2`, content-fit width ≤ min(60, w−6)), anchored to the main column, single left rail tinted by variant, FIFO one-visible + `+N more`, 5000 ms TTL with hover-pause, click dismisses and runs `› action`; auto-drain via tick driver — key-passive band (see 3.0.D). |
 | `TickDriver` | Single `tea.Tick` loop at ~15–20 fps **only while animations/toasts are active**; widgets subscribe with an `Invalidator` callback. |
 
 ### 3.3 Render pipeline per frame

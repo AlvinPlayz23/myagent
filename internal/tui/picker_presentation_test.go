@@ -32,30 +32,24 @@ func TestModelPickerPresentation(t *testing.T) {
 	}
 }
 
-func TestCommandPickerCategoriesAreContiguous(t *testing.T) {
+func TestCommandMenuShowsFlatMatchedRows(t *testing.T) {
 	m := newPanelModel()
 	m.picker.sync("/")
 	state := m.kitCommandPicker()
 	if len(state.Items) != len(m.picker.items) {
 		t.Fatal("command rows were lost")
 	}
-	seen := map[string]bool{}
-	last := ""
-	for _, item := range state.Items {
-		if item.Group == "" || item.Header {
-			t.Fatalf("missing category: %+v", item)
+	// The inline menu is a flat, host-filtered list: rows carry the command
+	// ID and description, not dialog groups or headers.
+	for i, item := range state.Items {
+		if item.Header || item.Group != "" {
+			t.Fatalf("row %d is not flat: %+v", i, item)
 		}
-		if item.Group != last {
-			if seen[item.Group] {
-				t.Fatalf("repeated group %q", item.Group)
-			}
-			seen[item.Group] = true
-			last = item.Group
+		if item.ID != m.picker.items[i].name || item.Title != m.picker.items[i].name {
+			t.Fatalf("row %d = %+v, want command %q", i, item, m.picker.items[i].name)
 		}
-	}
-	for _, group := range []string{"Suggested", "Session", "Tools & interface"} {
-		if !seen[group] {
-			t.Fatalf("missing %q", group)
+		if item.Desc == "" {
+			t.Fatalf("row %d has no description", i)
 		}
 	}
 }

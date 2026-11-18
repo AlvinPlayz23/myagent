@@ -1,5 +1,5 @@
-info     border=#808080 body=#1E1E1E rows=5
-success  border=#7FD88F body=#1E1E1E rows=5
-warning  border=#F5A742 body=#1E1E1E rows=5
-error    border=#E06C75 body=#1E1E1E rows=5
+info     glyph=◈ rail=#808080 body=#1E1E1E rows=4
+success  glyph=✓ rail=#7FD88F body=#1E1E1E rows=4
+warning  glyph=! rail=#F5A742 body=#1E1E1E rows=4
+error    glyph=✗ rail=#E06C75 body=#1E1E1E rows=4
 

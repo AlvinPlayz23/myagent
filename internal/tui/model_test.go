@@ -695,6 +695,31 @@ func TestTypingSlashOpensCommandPicker(t *testing.T) {
 	}
 }
 
+func TestCtrlPOpensCommandPicker(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(80, 20)
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: 'p', Mod: tea.ModCtrl}))
+
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("input = %q, want untouched empty prompt", got)
+	}
+	if !m.picker.active || len(m.picker.matched) != len(commandItems) {
+		t.Fatalf("picker = active %v, matches %d; want all commands", m.picker.active, len(m.picker.matched))
+	}
+	if view := m.View().Content; !strings.Contains(view, "/help") || !strings.Contains(view, "/models") {
+		t.Fatal("ctrl+p view does not contain command choices")
+	}
+
+	// ctrl+p inside the open palette moves the cursor instead of reopening.
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.onKey(tea.KeyPressMsg(tea.Key{Code: 'p', Mod: tea.ModCtrl}))
+	item, _ := m.picker.selected()
+	if item.name != "/models" {
+		t.Fatalf("selected after ctrl+p = %q, want /models", item.name)
+	}
+}
+
 func TestCommandPickerFitsTerminalAndBorrowsViewportRows(t *testing.T) {
 	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
 	m.onResize(80, 12)
@@ -978,10 +1003,32 @@ func TestBoxedComposerStartsOneLineTall(t *testing.T) {
 			t.Errorf("composer row width = %d, want 60: %q", got, line)
 		}
 	}
-	for _, want := range []string{"┃", "╹", "Build", "model", "Ask anything…", "/ commands"} {
+	for _, want := range []string{"┃", "╹", "model", "Ask anything…", "/ commands"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("boxed composer missing %q:\n%s", want, plain)
 		}
+	}
+	if strings.Contains(plain, "Build") {
+		t.Errorf("boxed composer still shows the removed Build label:\n%s", plain)
+	}
+}
+
+func TestBoxedComposerShowsActiveProfileOnly(t *testing.T) {
+	m := newModel(nil, nil, nil, newTheme(), newMDRenderer(), "model", "")
+	m.onResize(60, 20)
+
+	plain := ansi.Strip(m.renderComposer())
+	if strings.Contains(plain, "plan") {
+		t.Fatalf("composer shows a profile before one is enabled:\n%s", plain)
+	}
+
+	m.activeProfile = "plan"
+	plain = ansi.Strip(m.renderComposer())
+	if !strings.Contains(plain, "plan") {
+		t.Fatalf("composer missing active profile:\n%s", plain)
+	}
+	if strings.Contains(plain, "Build") {
+		t.Fatalf("composer still shows the removed Build label:\n%s", plain)
 	}
 }
 

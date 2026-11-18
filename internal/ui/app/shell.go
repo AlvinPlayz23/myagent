@@ -47,6 +47,7 @@ type Shell struct {
 	contentW      int
 	transcriptH   int
 	composerH     int
+	composerGapH  int
 
 	// S4 geometry, resolved by measure and committed by Layout.
 	tabsH     int
@@ -88,6 +89,15 @@ type Shell struct {
 	dockH int
 	dockR kit.Rect
 
+	// Inline slash menu: command rows directly above the composer. The
+	// composer remains the filter input (legacy onKey owns the keys).
+	menu     *commandMenu
+	menuOpen bool
+	menuH    int
+	menuRows int
+	menuR    kit.Rect
+	menuSig  string
+
 	lastTranscriptRev int
 	lastComposerRev   int
 	lastWelcome       bool
@@ -95,6 +105,7 @@ type Shell struct {
 	lastContentW      int
 	lastTranscriptH   int
 	lastComposerH     int
+	lastComposerGapH  int
 	lastComposerW     int
 	lastWidth         int
 	lastNotice        string
@@ -129,6 +140,8 @@ func newShell(host tui.KitHost) *Shell {
 	s.todo = kit.NewTodoBlock(kit.TodoBlockOpts{ID: "kit.todos"})
 	s.footer = kit.NewComposerFooter(kit.ComposerFooterOpts{ID: "kit.footer", Animations: true})
 	s.dock = kit.NewDock(kit.DockOpts{ID: "kit.dock"})
+	s.menu = newCommandMenu(s)
+	s.menu.Hide()
 	s.jump = kit.NewJump(kit.JumpOpts{ID: "kit.jump", OnJump: s.scrollToEnd})
 	s.jump.SetBounds(kit.Rect{})
 	s.dialogs = kit.NewDialogStack()
@@ -325,6 +338,8 @@ func (s *Shell) Sync() {
 		m = s.measure(s.width, s.height)
 	}
 	contentW := m.contentWidth(welcome)
+	// Keep notices over the main column instead of covering the Usage sidebar.
+	s.toasts.SetAnchorWidth(m.mainW)
 	s.host.KitSetSize(contentW, m.transcriptH)
 	welcomeRev := 0
 	if host, ok := s.host.(interface{ KitWelcomeRev() int }); ok && welcome {
@@ -351,6 +366,7 @@ func (s *Shell) Sync() {
 		dirty = true
 	}
 	if m.transcriptH != s.lastTranscriptH || m.composerH != s.lastComposerH ||
+		m.composerGapH != s.lastComposerGapH ||
 		m.tabsH != s.tabsH || m.sidebarW != s.sidebarW ||
 		m.todoH != s.todoH || m.jumpH != s.jumpH || m.footerH != s.footerH ||
 		m.dockH != s.dockH {
@@ -365,11 +381,13 @@ func (s *Shell) Sync() {
 	s.lastContentW = contentW
 	s.lastTranscriptH = m.transcriptH
 	s.lastComposerH = m.composerH
+	s.lastComposerGapH = m.composerGapH
 	s.lastComposerW = promptW
 	s.lastWidth = s.width
 	s.contentW = contentW
 	s.transcriptH = m.transcriptH
 	s.composerH = m.composerH
+	s.composerGapH = m.composerGapH
 	s.tabsH, s.sidebarW = m.tabsH, m.sidebarW
 	s.todoH, s.jumpH, s.footerH = m.todoH, m.jumpH, m.footerH
 	s.dockH = m.dockH
@@ -442,7 +460,7 @@ func (s *Shell) emitNotice(n tui.KitNotice) {
 	case tui.KitNoticeError:
 		variant = kit.ToastError
 	}
-	s.toasts.Show(kit.Toast{Title: "myagent", Message: n.Text, Variant: variant})
+	s.toasts.Show(kit.Toast{Message: n.Text, Variant: variant})
 }
 
 // mapTabs converts the host projection into kit rail items.
@@ -483,16 +501,18 @@ func mapTodos(items []tui.KitTodo) []kit.TodoItem {
 
 // shellMetrics resolves the home group and session bands in terminal cells.
 type shellMetrics struct {
-	tabsH       int
-	sidebarW    int
-	mainW       int
-	bodyH       int
-	transcriptH int
-	todoH       int
-	jumpH       int
-	dockH       int
-	composerH   int
-	footerH     int
+	tabsH        int
+	sidebarW     int
+	mainW        int
+	bodyH        int
+	transcriptH  int
+	todoH        int
+	jumpH        int
+	dockH        int
+	menuH        int
+	composerH    int
+	composerGapH int
+	footerH      int
 }
 
 func (m shellMetrics) contentWidth(welcome bool) int {
@@ -515,6 +535,12 @@ func (m shellMetrics) promptWidth(welcome bool) int {
 func (s *Shell) measure(w, h int) shellMetrics {
 	m := shellMetrics{}
 	m.composerH = clamp(s.host.KitComposerHeight(), 0, h)
+	// The transcript and composer both paint raised surfaces. A blank row
+	// between them keeps a trailing user card from reading as part of the
+	// composer when no assistant text follows it.
+	if !s.host.KitShowWelcome() && m.composerH > 0 {
+		m.composerGapH = 1
+	}
 	if s.tabs.Len() > 1 {
 		m.tabsH = 1
 	}
@@ -526,13 +552,30 @@ func (s *Shell) measure(w, h int) shellMetrics {
 	if s.footer.Any() {
 		m.footerH = 1
 	}
-	m.dockH = min(s.dock.Height(), max(0, m.bodyH-m.composerH-m.footerH))
-	m.todoH = min(s.todo.Height(), max(0, m.bodyH-m.composerH-m.footerH-m.dockH))
+	m.dockH = min(s.dock.Height(), max(0, m.bodyH-m.composerH-m.composerGapH-m.footerH))
+	m.todoH = min(s.todo.Height(), max(0, m.bodyH-m.composerH-m.composerGapH-m.footerH-m.dockH))
 	if s.jump.Active() {
 		m.jumpH = 1
 	}
-	m.transcriptH = max(0, m.bodyH-m.todoH-m.jumpH-m.dockH-m.composerH-m.footerH)
-	if s.host.KitShowWelcome() {
+	welcome := s.host.KitShowWelcome()
+	if s.menuOpen {
+		budget := max(0, m.bodyH-m.composerH-m.composerGapH-m.footerH-m.dockH-m.todoH-m.jumpH)
+		if welcome {
+			// The welcome menu floats over the startup art instead of
+			// claiming transcript rows, so the composer keeps its place.
+			m.menuH = min(s.menuRows, maxCommandMenuRows, budget)
+		} else {
+			// The menu borrows transcript rows and keeps at least one line of
+			// conversation visible above it.
+			m.menuH = min(s.menuRows, maxCommandMenuRows, max(0, budget-1))
+		}
+	}
+	menuRows := m.menuH
+	if welcome {
+		menuRows = 0
+	}
+	m.transcriptH = max(0, m.bodyH-m.todoH-m.jumpH-menuRows-m.dockH-m.composerGapH-m.composerH-m.footerH)
+	if welcome {
 		if host, ok := s.host.(interface{ KitWelcomeHeight(int) int }); ok {
 			m.transcriptH = clamp(host.KitWelcomeHeight(m.transcriptH), 0, m.transcriptH)
 		} else {
@@ -553,23 +596,29 @@ func (s *Shell) Layout(r kit.Rect) {
 	s.width, s.height = r.W, r.H
 	s.tabsH, s.sidebarW, s.mainW, s.bodyH = m.tabsH, m.sidebarW, m.mainW, m.bodyH
 	s.todoH, s.jumpH, s.footerH = m.todoH, m.jumpH, m.footerH
-	s.dockH = m.dockH
-	s.composerH, s.transcriptH = m.composerH, m.transcriptH
+	s.dockH, s.menuH = m.dockH, m.menuH
+	s.composerH, s.composerGapH, s.transcriptH = m.composerH, m.composerGapH, m.transcriptH
 	s.contentW = m.contentWidth(s.host.KitShowWelcome())
 
 	s.tabs.Layout(kit.Rect{X: r.X, Y: r.Y, W: r.W, H: m.tabsH})
 	body := kit.Rect{X: r.X, Y: r.Y + m.tabsH, W: m.mainW, H: m.bodyH}
 	s.bodyRect = body
 
+	welcome := s.host.KitShowWelcome()
 	x := body.X + m.inset()
-	width := m.promptWidth(s.host.KitShowWelcome())
+	width := m.promptWidth(welcome)
 	y := body.Y
-	if s.host.KitShowWelcome() {
+	if welcome {
 		x = body.X + (body.W-width)/2
-		y += max(0, (body.H-m.footerH-m.transcriptH-m.dockH-m.composerH)/2)
+		// The menu overlays the welcome art, so the centered group ignores
+		// its rows and the composer stays put when the menu opens.
+		y += max(0, (body.H-m.footerH-m.transcriptH-m.dockH-m.composerGapH-m.composerH)/2)
 	}
 	s.scroll.Layout(kit.Rect{X: x, Y: y, W: width, H: m.transcriptH})
-	y += m.transcriptH
+	// Keep the separating row outside the scroll viewport so a trailing user
+	// card can never sit flush against the composer's raised surface. The jump,
+	// todo, and dock bands stay composer-adjacent below it.
+	y += m.transcriptH + m.composerGapH
 	s.jumpR = kit.Rect{X: x, Y: y, W: width, H: m.jumpH}
 	s.jump.Layout(s.jumpR)
 	y += m.jumpH
@@ -579,6 +628,17 @@ func (s *Shell) Layout(r kit.Rect) {
 	s.dockR = kit.Rect{X: x, Y: y, W: width, H: m.dockH}
 	s.dock.Layout(s.dockR)
 	y += m.dockH
+	if welcome {
+		// Anchor the popup just above the composer, over the startup art.
+		m.menuH = min(m.menuH, max(0, y-body.Y))
+		s.menuH = m.menuH
+		s.menuR = kit.Rect{X: x, Y: y - m.menuH, W: width, H: m.menuH}
+		s.menu.Layout(s.menuR)
+	} else {
+		s.menuR = kit.Rect{X: x, Y: y, W: width, H: m.menuH}
+		s.menu.Layout(s.menuR)
+		y += m.menuH
+	}
 	s.composerR = kit.Rect{X: x, Y: y, W: width, H: m.composerH}
 	s.composer.Layout(s.composerR)
 	y += m.composerH
@@ -603,8 +663,14 @@ func (s *Shell) renderBands(w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
-	layers := []*lipgloss.Layer{}
-	for _, child := range []kit.Widget{s.scroll, s.jump, s.todo, s.dock, s.composer, s.footer, s.sidebar, s.tabs} {
+	// The compositor sizes its canvas from the layer bounds, not from the
+	// requested terminal size. Every band is inset by two columns, so without a
+	// full-size base layer the bounds start at x=2 and the last two columns of
+	// the rightmost bands (the menu surface, composer rails) get clipped. The
+	// base layer anchors the bounds at (0,0) and keeps the frame fully opaque.
+	th := kit.DefaultTheme()
+	layers := []*lipgloss.Layer{lipgloss.NewLayer(kit.PaintBlock("", w, h, th.Background.Base))}
+	for _, child := range []kit.Widget{s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar, s.tabs} {
 		r := kit.WidgetBounds(child)
 		if r.Empty() {
 			continue
@@ -661,7 +727,7 @@ func (s *Shell) rebuildContent(welcome bool, contentW, transcriptH int) {
 
 // Children exposes the chrome + core bands for hit testing and revision walks.
 func (s *Shell) Children() []kit.Widget {
-	return []kit.Widget{s.tabs, s.scroll, s.jump, s.todo, s.dock, s.composer, s.footer, s.sidebar}
+	return []kit.Widget{s.tabs, s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar}
 }
 
 // FocusTarget is nil: the shell routes but never takes focus itself.

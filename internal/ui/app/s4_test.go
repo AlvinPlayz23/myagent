@@ -59,10 +59,10 @@ func TestShellS4Geometry(t *testing.T) {
 			t.Fatalf("heights = todo %d, footer %d, jump %d, composer %d; want 3/1/0/2",
 				s.todoH, s.footerH, s.jumpH, s.composerH)
 		}
-		if s.transcriptH != 33 {
-			t.Fatalf("transcript height = %d, want 33", s.transcriptH)
+		if s.transcriptH != 32 {
+			t.Fatalf("transcript height = %d, want 32", s.transcriptH)
 		}
-		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 88, H: 33}); got != want {
+		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 88, H: 32}); got != want {
 			t.Fatalf("scroll rect = %+v, want %+v", got, want)
 		}
 		if got, want := s.todoR, (kit.Rect{X: 2, Y: 34, W: 88, H: 3}); got != want {
@@ -88,11 +88,11 @@ func TestShellS4Geometry(t *testing.T) {
 			t.Fatalf("widths = sidebar %d, main %d, content %d; want 0/80/75",
 				s.sidebarW, s.mainW, s.contentW)
 		}
-		if s.tabsH != 1 || s.todoH != 3 || s.footerH != 1 || s.transcriptH != 17 {
-			t.Fatalf("heights = tabs %d, todo %d, footer %d, transcript %d; want 1/3/1/17",
+		if s.tabsH != 1 || s.todoH != 3 || s.footerH != 1 || s.transcriptH != 16 {
+			t.Fatalf("heights = tabs %d, todo %d, footer %d, transcript %d; want 1/3/1/16",
 				s.tabsH, s.todoH, s.footerH, s.transcriptH)
 		}
-		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 76, H: 17}); got != want {
+		if got, want := s.scroll.Bounds(), (kit.Rect{X: 2, Y: 1, W: 76, H: 16}); got != want {
 			t.Fatalf("scroll rect = %+v, want %+v", got, want)
 		}
 		if got, want := s.todoR, (kit.Rect{X: 2, Y: 18, W: 76, H: 3}); got != want {
@@ -164,8 +164,8 @@ func TestShellJumpResumesFollow(t *testing.T) {
 	if !s.jump.Active() || s.jumpH != 1 {
 		t.Fatalf("after pgup jump active=%v height=%d", s.jump.Active(), s.jumpH)
 	}
-	if s.transcriptH != 21 {
-		t.Fatalf("transcript height with jump = %d, want 21", s.transcriptH)
+	if s.transcriptH != 20 {
+		t.Fatalf("transcript height with jump = %d, want 20", s.transcriptH)
 	}
 	if got, want := s.jumpR, (kit.Rect{X: 2, Y: 21, W: 76, H: 1}); got != want {
 		t.Fatalf("jump rect = %+v, want %+v", got, want)
@@ -236,6 +236,17 @@ func TestShellNoticeToast(t *testing.T) {
 	frame := ansi.Strip(s.Render(80, 24))
 	if !strings.Contains(frame, "Saved settings.") {
 		t.Fatal("toast text missing from the frame")
+	}
+
+	// With the Usage sidebar visible the toast anchors to the main column, so
+	// it never covers the rail.
+	s.Resize(120, 40)
+	frame = ansi.Strip(s.Render(120, 40))
+	if !strings.Contains(frame, "Saved settings.") {
+		t.Fatal("anchored toast text missing from the frame")
+	}
+	if b := s.toasts.Bounds(); b.Empty() || b.X+b.W > s.sideR.X {
+		t.Fatalf("toast bounds = %+v, sidebar starts at %d", b, s.sideR.X)
 	}
 
 	// The same status line does not re-toast every sync.
@@ -358,51 +369,105 @@ func TestShellPickerRefreshAndReplace(t *testing.T) {
 		t.Fatalf("refreshed selection = %q, want q/d", got)
 	}
 
-	// A different picker kind replaces the dialog instead of stacking.
+	// A different picker kind replaces the dialog instead of stacking another
+	// modal; ctrl+p commands keep the modal palette.
 	host.picker = tui.KitPickerState{
 		Kind:  "commands",
 		Title: "Commands",
 		Items: []tui.KitPickerItem{{ID: "/help", Title: "/help", Group: "Suggested"}},
 	}
 	s.Sync()
-	if s.dialogs.Len() != 1 || s.pickerKind != "commands" {
-		t.Fatalf("replaced stack len/kind = %d/%q, want 1/commands", s.dialogs.Len(), s.pickerKind)
+	if !s.pickerOpen || !s.dialogs.Modal() || s.menuOpen {
+		t.Fatalf("commands = picker %v modal %v menu %v; want modal", s.pickerOpen, s.dialogs.Modal(), s.menuOpen)
 	}
 	if got := s.host.(*fakeHost).cancels; got != 0 {
 		t.Fatalf("kind replacement cancelled the legacy picker %d times", got)
 	}
 }
 
-func TestShellCommandPickerUsesPaletteChrome(t *testing.T) {
+func TestShellCommandMenuUsesInlineMenu(t *testing.T) {
 	host := pickerHost()
 	host.picker.Kind = "commands"
+	host.picker.Inline = true
 	host.picker.Title = "Commands"
 	host.picker.Placeholder = "search commands"
-	host.picker.Items = []tui.KitPickerItem{{ID: "/help", Title: "Help", Footer: "F1"}}
+	host.picker.Items = []tui.KitPickerItem{{ID: "/help", Title: "/help", Desc: "Show available commands", Footer: "F1"}}
 	s := newTestShell(host)
 	s.Sync()
 
+	if s.pickerOpen || s.dialogs.Modal() {
+		t.Fatal("command menu opened a modal dialog")
+	}
 	frame := ansi.Strip(s.Render(80, 24))
-	for _, want := range []string{"Commands", "esc", "search commands", "Help", "F1"} {
+	for _, want := range []string{"/help", "Show available commands"} {
 		if !strings.Contains(frame, want) {
-			t.Errorf("command palette missing %q:\n%s", want, frame)
+			t.Errorf("inline command menu missing %q:\n%s", want, frame)
 		}
 	}
 	for _, absent := range []string{"cancel", "confirm"} {
 		if strings.Contains(frame, absent) {
-			t.Errorf("command palette has redundant %q footer control:\n%s", absent, frame)
+			t.Errorf("inline command menu has redundant %q footer control:\n%s", absent, frame)
 		}
 	}
-	if !s.Key(tea.KeyPressMsg{Code: tea.KeyEnter}) || host.accepted != "/help" {
-		t.Fatalf("Enter without a footer accepted %q, want /help", host.accepted)
+
+	// The host owns the keys now; the shell only forwards them to the
+	// composer's legacy onKey path.
+	if !s.Key(tea.KeyPressMsg{Code: tea.KeyEnter}) {
+		t.Fatal("Enter not forwarded to the command menu host")
+	}
+	if len(host.keys) == 0 || host.keys[len(host.keys)-1] != "enter" {
+		t.Fatalf("forwarded keys = %v, want trailing enter", host.keys)
+	}
+	if !s.Key(tea.KeyPressMsg{Code: tea.KeyEsc}) {
+		t.Fatal("Esc not forwarded to the command menu host")
+	}
+	if len(host.keys) == 0 || host.keys[len(host.keys)-1] != "esc" {
+		t.Fatalf("forwarded keys = %v, want trailing esc", host.keys)
+	}
+}
+
+// TestShellCommandPaletteUsesModal pins ctrl+p to the popup palette: a modal
+// dialog with the command search, not the inline "/" menu.
+func TestShellCommandPaletteUsesModal(t *testing.T) {
+	host := pickerHost()
+	host.picker.Kind = "commands"
+	host.picker.Title = "Commands"
+	host.picker.Placeholder = "Search commands…"
+	host.picker.Items = []tui.KitPickerItem{{ID: "/help", Title: "/help", Desc: "Show available commands"}}
+	s := newTestShell(host)
+	s.Sync()
+	s.Render(80, 24)
+
+	if !s.pickerOpen || !s.dialogs.Modal() || s.menuOpen {
+		t.Fatalf("commands = picker %v modal %v menu %v; want modal", s.pickerOpen, s.dialogs.Modal(), s.menuOpen)
+	}
+	frame := ansi.Strip(s.Render(80, 24))
+	for _, want := range []string{"Commands", "/help", "Show available commands"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("command palette missing %q:\n%s", want, frame)
+		}
+	}
+	if !s.Key(tea.KeyPressMsg{Code: tea.KeyEnter}) {
+		t.Fatal("Enter not consumed by the command palette")
+	}
+	if host.accepted != "/help" {
+		t.Fatalf("accepted = %q, want /help", host.accepted)
+	}
+	s.Sync()
+	if s.pickerOpen || s.dialogs.Modal() {
+		t.Fatal("palette stayed open after accept")
 	}
 
 	cancelHost := pickerHost()
 	cancelHost.picker.Kind = "commands"
 	cancelShell := newTestShell(cancelHost)
 	cancelShell.Sync()
-	if !cancelShell.Key(tea.KeyPressMsg{Code: tea.KeyEsc}) || cancelHost.cancels != 1 {
-		t.Fatalf("Esc without a footer canceled %d times, want 1", cancelHost.cancels)
+	cancelShell.Render(80, 24)
+	if !cancelShell.Key(tea.KeyPressMsg{Code: tea.KeyEsc}) {
+		t.Fatal("Esc not consumed by the command palette")
+	}
+	if cancelHost.cancels != 1 {
+		t.Fatalf("canceled %d times, want 1", cancelHost.cancels)
 	}
 }
 

@@ -789,7 +789,7 @@ func TestCommandSectionDividersStayCompactAndSkipSelection(t *testing.T) {
 	stack.Push(dialog)
 	root := NewRoot(nil, WithDialogs(stack))
 	frame := ansi.Strip(root.Render(120, 40))
-	if !strings.Contains(frame, "Suggested  ─") || !strings.Contains(frame, "Session  ─") {
+	if !strings.Contains(frame, "─ Suggested") || !strings.Contains(frame, "─ Session") {
 		t.Fatal("quiet divider labels missing")
 	}
 	if len(sel.list.displayLines()) != 4 {

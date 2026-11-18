@@ -287,10 +287,13 @@ func (l *List) renderRow(idx, w int) string {
 	cv := lipgloss.NewCanvas(w, 1)
 
 	if row.Header && l.SectionDividers {
-		label := "  " + row.Title + "  "
-		label = ansi.Truncate(label, w, "")
-		rule := strings.Repeat("─", max(0, w-ansi.StringWidth(label)))
-		drawStyled(cv, 0, 0, w, label+rule, lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
+		title := ansi.Truncate(row.Title, w, "")
+		ruleW := w - ansi.StringWidth(title) - 1
+		line := strings.Repeat(" ", max(0, w-ansi.StringWidth(title))) + title
+		if ruleW > 0 {
+			line = strings.Repeat("─", ruleW) + " " + title
+		}
+		drawStyled(cv, 0, 0, w, line, lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 		return padCanvas(cv, w, 1)
 	}
 	if row.Header {

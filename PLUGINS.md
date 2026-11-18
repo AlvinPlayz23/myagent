@@ -208,9 +208,9 @@ How enforcement works: excluded tools are *removed* — if the model tries one, 
 
 TUI:
 
-- `/profile plan` — activate. `/profile reset` — leave. Bare `/profile` — list profiles (shows the active one).
-- If you have a profile literally named `plan`, you also get `/plan`, `/plan on` (activate), `/plan off` (leave).
-- The footer shows the active profile, e.g. `model • effort • profile:plan`.
+- `/profile plan` — toggle: activate, or leave if `plan` is already active. `/profile reset` — leave explicitly. Bare `/profile` — list profiles (shows the active one).
+- If you have a profile literally named `plan`, you also get `/plan` (toggle), `/plan on` (activate), `/plan off` (leave).
+- The kit composer label shows the active profile, e.g. `plan  local/gpt-6-luna`; the legacy footer shows `model • effort • profile:plan`.
 - Switching is per-session. `/new` and `/resume` reset to no profile unless you pinned one at startup. You can't switch mid-run — cancel first.
 - Unknown name → error listing what's available, no crash.
 

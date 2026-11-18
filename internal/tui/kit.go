@@ -142,6 +142,9 @@ type KitPickerState struct {
 	Masked bool
 	// Hint is the muted secondary line/instruction.
 	Hint string
+	// Inline marks a panel the shell should paint inline above the composer
+	// (the typed "/" command menu) instead of as a modal dialog (ctrl+p).
+	Inline bool
 	// Footer labels. Empty values fall back to cancel/confirm/enter.
 	ConfirmLabel string
 	ConfirmKey   string
@@ -401,7 +404,7 @@ func (m *model) KitSelectTab(string) tea.Cmd { return nil }
 
 // KitSidebar projects the footer's usage data into the right-hand rail.
 func (m *model) KitSidebar() (string, []KitStat) {
-	if m.KitShowWelcome() {
+	if m.KitShowWelcome() || m.hideUsage {
 		return "", nil
 	}
 	rows := []KitStat{
@@ -429,7 +432,7 @@ func (m *model) KitTodos() []KitTodo { return nil }
 // KitFooter reports the composer status row: busy state, cwd, and the active
 // file-context chip (the mention being picked, else the first mention).
 func (m *model) KitFooter() KitFooter {
-	f := KitFooter{Busy: m.working, Cwd: m.cwd, Hint: "myagent"}
+	f := KitFooter{Busy: m.working, Cwd: m.cwd, Hint: "ctrl+p commands"}
 	if m.KitShowWelcome() {
 		f.Cwd = ""
 	}
@@ -601,7 +604,14 @@ func (m *model) renderComposerAt(width int) string {
 		for _, line := range strings.Split(m.input.View(), "\n") {
 			lines = append(lines, row(line))
 		}
-		label := accent.Background(t.Background.Raised.Base.Color()).Render("Build") + surface.Render("  "+m.modelID)
+		// The label row carries the active profile (when one is enabled), the
+		// model, and any non-default effort. The static "Build" chip that used
+		// to lead this row was removed; an enabled profile takes its place.
+		label := ""
+		if profile := strings.TrimSpace(m.activeProfile); profile != "" {
+			label = accent.Background(t.Background.Raised.Base.Color()).Render(profile) + surface.Render("  ")
+		}
+		label += surface.Render(m.modelID)
 		if effort := m.effortLabel(); effort != "" && effort != "default" {
 			label += surface.Render("  ") + muted.Background(t.Background.Raised.Base.Color()).Render(effort)
 		}

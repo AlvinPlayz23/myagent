@@ -29,6 +29,7 @@ const (
 	commandMouse
 	commandPaste
 	commandTools
+	commandUsage
 )
 
 type slashCommand struct {
@@ -64,6 +65,7 @@ var commandItems = []commandItem{
 	{name: "/init", label: "Initialize workspace", usage: "/init", description: "Analyse this repo and write an AGENTS.md", kind: commandInit},
 	{name: "/thinking", label: "Toggle reasoning", usage: "/thinking [on|off]", description: "Show or hide the model's thinking in the transcript", kind: commandThinking},
 	{name: "/tools", label: "Manage tools", usage: "/tools", description: "Enable or disable tools for the model", kind: commandTools},
+	{name: "/usage", label: "Toggle usage sidebar", usage: "/usage", description: "Show or hide the usage sidebar", kind: commandUsage},
 	{name: "/mouse", label: "Toggle mouse capture", usage: "/mouse [on|off]", description: "Toggle mouse clicks and hover (off restores native selection)", kind: commandMouse},
 	{name: "/paste", label: "Paste attachment", usage: "/paste", description: "Attach the clipboard image (works when ctrl+v is intercepted)", kind: commandPaste},
 }
@@ -77,31 +79,72 @@ type commandPicker struct {
 	prefix        string
 	active        bool
 	dismissedText string
+	// pinned keeps the list open while the composer stays empty. ctrl+p uses
+	// it so the palette does not need a typed "/" to stay visible.
+	pinned bool
 }
 
 func newCommandPicker() commandPicker {
 	return commandPicker{items: commandItems}
 }
 
+// openAll shows every command with an empty composer. It backs the ctrl+p
+// shortcut; sync() remains the path for a typed "/" so the list keeps
+// following the draft.
+func (p *commandPicker) openAll() {
+	p.dismissedText = ""
+	p.prefix = "/"
+	p.matched = p.matched[:0]
+	for i, item := range p.items {
+		if strings.HasPrefix(strings.ToLower(item.name), p.prefix) {
+			p.matched = append(p.matched, i)
+		}
+	}
+	p.sel = 0
+	p.active = len(p.matched) > 0
+	p.pinned = p.active
+}
+
 // sync updates the picker from the textarea value. It is active only while
 // editing a command name; arguments and multiline input are left to textarea.
 func (p *commandPicker) sync(text string) {
 	trimmed := strings.TrimLeft(text, " \t")
-	if text == p.dismissedText {
-		p.close()
-		return
-	}
-	if strings.ContainsAny(trimmed, " \t\r\n") || !strings.HasPrefix(trimmed, "/") {
-		p.dismissedText = ""
-		p.close()
-		return
+	if p.pinned {
+		// A ctrl+p palette keeps an empty composer open and accepts filter
+		// text without a leading "/" ("mo" matches /models).
+		switch {
+		case strings.TrimSpace(text) == "":
+			// Clearing the filter restores the full ctrl+p list instead of
+			// leaving the previous matches (or an empty menu) on screen.
+			p.openAll()
+			return
+		case text == p.dismissedText:
+			p.close()
+			return
+		case strings.ContainsAny(trimmed, " \t\r\n"):
+			p.dismissedText = ""
+			p.close()
+			return
+		}
+	} else {
+		if text == p.dismissedText {
+			p.close()
+			return
+		}
+		if strings.ContainsAny(trimmed, " \t\r\n") || !strings.HasPrefix(trimmed, "/") {
+			p.dismissedText = ""
+			p.close()
+			return
+		}
 	}
 	p.dismissedText = ""
 
 	p.prefix = strings.ToLower(trimmed)
 	p.matched = p.matched[:0]
+	needle := strings.TrimPrefix(p.prefix, "/")
 	for i, item := range p.items {
-		if strings.HasPrefix(strings.ToLower(item.name), p.prefix) {
+		name := strings.TrimPrefix(strings.ToLower(item.name), "/")
+		if strings.HasPrefix(name, needle) {
 			p.matched = append(p.matched, i)
 		}
 	}
@@ -120,6 +163,7 @@ func (p *commandPicker) close() {
 	p.matched = p.matched[:0]
 	p.sel = 0
 	p.prefix = ""
+	p.pinned = false
 }
 
 func (p *commandPicker) dismiss(text string) {
@@ -249,7 +293,7 @@ func buildHelpText(extra ...string) string {
 	for _, e := range extra {
 		b.WriteString(e)
 	}
-	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v or alt+v paste, /paste fallback, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+o expand details, ctrl+c clear draft then quit")
+	b.WriteString("\nKeys: enter send/queue follow-up, ctrl+v or alt+v paste, /paste fallback, ctrl+enter newline, alt+enter steer, esc cancel, ctrl+p command menu, ctrl+o expand details, ctrl+c clear draft then quit")
 	b.WriteString("\nImages: press ctrl+v or alt+v (or run /paste) for a clipboard image, or mention a png, jpeg, gif, or webp file with @path")
 	return b.String()
 }

@@ -79,14 +79,15 @@ func toastSurface(t *testing.T, host *ToastHost) string {
 }
 
 func TestToastWidthCap(t *testing.T) {
+	// Short notices are content-fit: wide bands do not stretch them to 60.
 	cases := []struct {
 		band int
 		want int
 	}{
-		{120, 60},
-		{80, 60},
-		{65, 59},
-		{40, 34},
+		{120, 17},
+		{80, 17},
+		{65, 17},
+		{40, 17},
 		{20, 14},
 		{16, 10},
 		{14, 8},
@@ -116,8 +117,17 @@ func TestToastWidthCap(t *testing.T) {
 		}
 	}
 
-	host := NewToastHost(ToastOpts{MaxWidth: 20})
-	host.Show(Toast{Message: "narrow"})
+	// A long message still fills up to the cap.
+	long := strings.Repeat("word ", 30)
+	host := NewToastHost(ToastOpts{})
+	host.Show(Toast{Message: long})
+	host.Layout(Rect{W: 120, H: 24})
+	if got := host.Bounds().W; got != toastMaxWidth {
+		t.Fatalf("long message width = %d, want %d", got, toastMaxWidth)
+	}
+
+	host = NewToastHost(ToastOpts{MaxWidth: 20})
+	host.Show(Toast{Message: long})
 	host.Layout(Rect{W: 80, H: 24})
 	if got := host.Bounds().W; got != 20 {
 		t.Fatalf("MaxWidth 20 produced width %d", got)
@@ -126,6 +136,27 @@ func TestToastWidthCap(t *testing.T) {
 	host.Layout(Rect{W: 120, H: 24})
 	if got := host.Bounds().W; got != toastMaxWidth {
 		t.Fatalf("MaxWidth above cap produced width %d", got)
+	}
+}
+
+func TestToastAnchorWidth(t *testing.T) {
+	host := NewToastHost(ToastOpts{})
+	host.Show(Toast{Message: "Saved."})
+	host.SetAnchorWidth(60)
+	host.Layout(Rect{X: 0, Y: 0, W: 80, H: 24})
+	r := host.Bounds()
+	if r.Empty() {
+		t.Fatal("anchored toast did not lay out")
+	}
+	if got, want := r.X+r.W, 60-toastRightInset; got != want {
+		t.Fatalf("toast right edge = %d, want %d", got, want)
+	}
+	// Zero restores the full-band anchor.
+	host.SetAnchorWidth(0)
+	host.Layout(Rect{X: 0, Y: 0, W: 80, H: 24})
+	r = host.Bounds()
+	if got, want := r.X+r.W, 80-toastRightInset; got != want {
+		t.Fatalf("full-band toast right edge = %d, want %d", got, want)
 	}
 }
 
@@ -251,18 +282,30 @@ func TestToastVariantTints(t *testing.T) {
 		if got := hexOf(toastTint(th, c.v).Color()); got != c.tint {
 			t.Fatalf("variant %d tint %s, want %s", c.v, got, c.tint)
 		}
-		// The variant is a rendered property: every left/right border cell
-		// carries the feedback color, not merely a token value in isolation.
+		// The variant is a rendered property: the left rail carries the feedback
+		// color, and the first-row glyph repeats it as a non-color cue.
+		wantBg := hexOf(th.Background.Raised.High.Color())
 		for y := 0; y < r.H; y++ {
-			for _, x := range []int{0, r.W - 1} {
-				cell := cv.CellAt(x, y)
-				if cell == nil || cell.Content != "┃" || cell.Style.Fg == nil {
-					t.Fatalf("variant %d border cell (%d,%d) = %+v", c.v, x, y, cell)
-				}
-				if got := hexOf(cell.Style.Fg); got != c.tint {
-					t.Fatalf("variant %d border (%d,%d) = %s, want %s", c.v, x, y, got, c.tint)
-				}
+			cell := cv.CellAt(0, y)
+			if cell == nil || cell.Content != "┃" || cell.Style.Fg == nil {
+				t.Fatalf("variant %d rail cell (%d,%d) = %+v", c.v, 0, y, cell)
 			}
+			if got := hexOf(cell.Style.Fg); got != c.tint {
+				t.Fatalf("variant %d rail (%d,%d) = %s, want %s", c.v, 0, y, got, c.tint)
+			}
+			if cell.Style.Bg == nil || hexOf(cell.Style.Bg) != wantBg {
+				t.Fatalf("variant %d rail bg = %v, want %s", c.v, cell.Style.Bg, wantBg)
+			}
+		}
+		glyph := cv.CellAt(toastRailW+toastPadX, 1)
+		if glyph == nil || glyph.Content != toastGlyph(c.v) || glyph.Style.Fg == nil {
+			t.Fatalf("variant %d glyph cell = %+v", c.v, glyph)
+		}
+		if got := hexOf(glyph.Style.Fg); got != c.tint {
+			t.Fatalf("variant %d glyph = %s, want %s", c.v, got, c.tint)
+		}
+		if glyph.Style.Bg == nil || hexOf(glyph.Style.Bg) != wantBg {
+			t.Fatalf("variant %d glyph bg = %v, want %s", c.v, glyph.Style.Bg, wantBg)
 		}
 		body := cv.CellAt(1, 0)
 		if body == nil || body.Style.Bg == nil {
@@ -274,8 +317,8 @@ func TestToastVariantTints(t *testing.T) {
 		if !hasBold(frame) {
 			t.Fatalf("variant %d title is not bold", c.v)
 		}
-		lines = append(lines, fmt.Sprintf("%-8s border=%s body=%s rows=%d",
-			variantName(c.v), c.tint, hexOf(body.Style.Bg), r.H))
+		lines = append(lines, fmt.Sprintf("%-8s glyph=%s rail=%s body=%s rows=%d",
+			variantName(c.v), toastGlyph(c.v), c.tint, hexOf(body.Style.Bg), r.H))
 	}
 	writeGolden(t, "s2b_toast_variants.txt", strings.Join(lines, "\n")+"\n")
 }
@@ -290,6 +333,17 @@ func variantName(v ToastVariant) string {
 		return "error"
 	default:
 		return "info"
+	}
+}
+
+// TestToastGlyphsAreSingleCell protects the width math: every glyph shares the
+// one-cell gutter reserved by naturalWidth/rows.
+func TestToastGlyphsAreSingleCell(t *testing.T) {
+	for _, v := range []ToastVariant{ToastInfo, ToastSuccess, ToastWarning, ToastError} {
+		if got := ansi.StringWidth(toastGlyph(v)); got != toastGlyphW {
+			t.Fatalf("variant %s glyph %q width = %d, want %d",
+				variantName(v), toastGlyph(v), got, toastGlyphW)
+		}
 	}
 }
 
@@ -343,7 +397,8 @@ func TestToastRootBandLifecycle(t *testing.T) {
 	if !strings.Contains(ansi.Strip(frame), "Saved") {
 		t.Fatalf("toast not composed into the frame:\n%s", ansi.Strip(frame))
 	}
-	hit, ok := root.Hit(20, 2)
+	r := host.Bounds()
+	hit, ok := root.Hit(r.X+2, r.Y+1)
 	if !ok || hit.Band != BandToasts || hit.ID != "toasts" {
 		t.Fatalf("toast hit = %+v/%v", hit, ok)
 	}

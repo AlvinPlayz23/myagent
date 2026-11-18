@@ -106,6 +106,22 @@ func putGlyph(c *lipgloss.Canvas, x, y int, glyph string, fg color.Color) {
 	c.SetCell(x, y, cell)
 }
 
+// PaintBlock composites a rendered block over a solid token background. Unlike
+// wrapping the block in a background style, this fills every cell first and
+// then stamps the block with drawCells, so foreground-only glyphs keep the
+// surface color behind them and embedded style resets cannot punch holes.
+// Inline palettes use it to share the composer's raised surface.
+// OpenTUI counterpart: a parent renderable background behind child text.
+func PaintBlock(s string, w, h int, token tui.Token) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	cv := lipgloss.NewCanvas(w, h)
+	fillRect(cv, 0, 0, w, h, token)
+	drawCells(cv, s, 0, 0, w, h)
+	return padCanvas(cv, w, h)
+}
+
 // fitBlock makes an arbitrary rendered string exactly w by h cells: each line
 // is truncated to w and padded with spaces, missing lines are added, and extra
 // lines are dropped. ANSI styles are preserved by ansi.Truncate.

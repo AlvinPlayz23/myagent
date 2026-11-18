@@ -16,8 +16,18 @@ func (s *Shell) syncPicker() {
 	if !active {
 		s.closePicker()
 		s.closePanel()
+		s.closeCommandMenu()
 		return
 	}
+	// A typed "/" gets the inline command menu above the composer; ctrl+p
+	// keeps the modal palette. Both paths close the other surface.
+	if state.Kind == "commands" && state.Inline {
+		s.closePicker()
+		s.closePanel()
+		s.syncCommandMenu(state)
+		return
+	}
+	s.closeCommandMenu()
 	if state.Mode == tui.KitPickerSelect {
 		s.closePanel()
 		s.syncSelectPicker(state)

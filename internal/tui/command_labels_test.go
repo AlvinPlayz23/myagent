@@ -29,14 +29,17 @@ func TestCommandItemsHaveLabelsAndStableIDs(t *testing.T) {
 	}
 }
 
-func TestCommandPickerDisplaysLabelAndCommandID(t *testing.T) {
+func TestCommandPickerDisplaysCommandIDAndDescription(t *testing.T) {
 	m := newPanelModel()
 	m.picker.sync("/")
 	state := m.kitCommandPicker()
+	if !state.Inline {
+		t.Fatal("typed slash projected a modal palette")
+	}
 
 	for _, item := range state.Items {
 		if item.ID == "/customize" {
-			if item.Title != "Customize myagent (/customize)" {
+			if item.Title != "/customize" {
 				t.Errorf("/customize title = %q", item.Title)
 			}
 			if item.Desc != "Customize the startup style and composer" {
@@ -46,6 +49,42 @@ func TestCommandPickerDisplaysLabelAndCommandID(t *testing.T) {
 		}
 	}
 	t.Fatal("/customize missing from command picker")
+}
+
+// TestCtrlPCommandPaletteIsGroupedModal pins the ctrl+p popup: every command,
+// grouped, with its display label, and never the inline slash menu.
+func TestCtrlPCommandPaletteIsGroupedModal(t *testing.T) {
+	m := newPanelModel()
+	m.picker.openAll()
+	state := m.kitCommandPicker()
+	if state.Inline {
+		t.Fatal("ctrl+p projected the inline slash menu")
+	}
+	if len(state.Items) != len(m.picker.items) {
+		t.Fatalf("modal items = %d, want %d", len(state.Items), len(m.picker.items))
+	}
+	counts := map[string]int{}
+	found := false
+	for _, item := range state.Items {
+		if item.ID == "/customize" {
+			found = true
+			if item.Title != "Customize myagent (/customize)" {
+				t.Errorf("/customize modal title = %q", item.Title)
+			}
+		}
+		if item.Title == "" || item.Desc == "" || item.Group == "" {
+			t.Fatalf("modal row incomplete: %+v", item)
+		}
+		counts[item.Group]++
+	}
+	if !found {
+		t.Fatal("/customize missing from the ctrl+p palette")
+	}
+	for _, group := range []string{"Suggested", "Session", "Tools & interface"} {
+		if counts[group] == 0 {
+			t.Errorf("missing %q group in the ctrl+p palette", group)
+		}
+	}
 }
 
 func commandItemByName(name string) (commandItem, bool) {

@@ -22,6 +22,23 @@ func (f *fakeKitUI) Render(w, h int) string {
 	return ""
 }
 
+func TestUsageSidebarHiddenByDefaultAndToggled(t *testing.T) {
+	m := newPanelModel()
+	m.transcript.addUser("hello")
+	if title, rows := m.KitSidebar(); title != "" || rows != nil {
+		t.Fatalf("default sidebar = %q, %d rows; want hidden", title, len(rows))
+	}
+	m.runCommand("/usage")
+	title, rows := m.KitSidebar()
+	if title != "Usage" || len(rows) == 0 {
+		t.Fatalf("after /usage = %q, %d rows; want visible", title, len(rows))
+	}
+	m.runCommand("/usage")
+	if title, rows := m.KitSidebar(); title != "" || rows != nil {
+		t.Fatalf("after second /usage = %q, %d rows; want hidden", title, len(rows))
+	}
+}
+
 func (f *fakeKitUI) Key(ev tea.KeyPressMsg) bool {
 	f.keys = append(f.keys, ev.Keystroke())
 	return true

@@ -277,8 +277,8 @@ func TestShellKeyRouting(t *testing.T) {
 	s := newTestShell(host)
 	s.Render(80, 24)
 	maxScroll := s.scroll.MaxScroll()
-	if maxScroll != 97 {
-		t.Fatalf("maxScroll = %d, want 97", maxScroll)
+	if maxScroll != 98 {
+		t.Fatalf("maxScroll = %d, want 98", maxScroll)
 	}
 	if got := s.scroll.ScrollTop(); got != maxScroll {
 		t.Fatalf("initial scrollTop = %d, want %d", got, maxScroll)
@@ -288,7 +288,7 @@ func TestShellKeyRouting(t *testing.T) {
 	if !s.Key(tea.KeyPressMsg{Code: tea.KeyPgUp}) {
 		t.Fatal("pgup not consumed")
 	}
-	if got, want := s.scroll.ScrollTop(), maxScroll-20; got != want {
+	if got, want := s.scroll.ScrollTop(), maxScroll-(s.scroll.ViewportHeight()-2); got != want {
 		t.Fatalf("pgup scrollTop = %d, want %d", got, want)
 	}
 	if !s.Key(tea.KeyPressMsg{Code: tea.KeyHome}) {
@@ -521,8 +521,8 @@ func TestShellResizeUpdatesTranscriptWidth(t *testing.T) {
 		t.Fatal("resize with a width change should invalidate the transcript")
 	}
 	last := host.sizes[len(host.sizes)-1]
-	if last != [2]int{55, 13} {
-		t.Fatalf("published size = %v, want [55 13]", last)
+	if last != [2]int{55, 12} {
+		t.Fatalf("published size = %v, want [55 12]", last)
 	}
 	s.Render(60, 15)
 	if got := host.blocks[0].lastWidth; got != 55 {
@@ -585,6 +585,19 @@ func TestHomeCentersPromptWithoutUsageRail(t *testing.T) {
 	}
 }
 
+func TestTranscriptLeavesGapAboveComposer(t *testing.T) {
+	host := &fakeHost{
+		blocks:    []*fakeBlock{textBlock("user › hello", "no response yet")},
+		composer:  "> draft prompt\n  enter to send",
+		composerH: 2,
+	}
+	s := newTestShell(host)
+	s.Render(80, 24)
+	if got := s.composerR.Y - (s.scroll.Bounds().Y + s.scroll.Bounds().H); got != 1 {
+		t.Fatalf("gap above composer = %d, want 1", got)
+	}
+}
+
 type wrappingHost struct {
 	fakeHost
 	promptWidth int
@@ -613,8 +626,8 @@ func TestComposerWidthIsAppliedBeforeHeightMeasurement(t *testing.T) {
 	if host.promptWidth != 56 || s.composerH != 4 {
 		t.Fatalf("wrapped prompt: width %d height %d", host.promptWidth, s.composerH)
 	}
-	if s.scroll.Bounds().Y+s.scroll.Bounds().H != s.composerR.Y {
-		t.Fatal("wrapped composer overlaps transcript")
+	if got := s.composerR.Y - (s.scroll.Bounds().Y + s.scroll.Bounds().H); got != 1 {
+		t.Fatalf("gap above composer = %d, want 1", got)
 	}
 }
 

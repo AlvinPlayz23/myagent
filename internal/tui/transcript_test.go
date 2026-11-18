@@ -349,6 +349,53 @@ func TestMessageComponentsUseOpenCodeLayout(t *testing.T) {
 	}
 }
 
+// TestAssistantContentAlignsWithComposer pins the alignment that makes the
+// transcript read as left-aligned: paragraphs and bullets sit on the
+// composer's prompt marker, bullet bodies on its input text, and ordered
+// bodies one cell further for the enumeration marker.
+func TestAssistantContentAlignsWithComposer(t *testing.T) {
+	m := newPanelModel()
+	const width = 76
+	m.transcript.beginAssistant()
+	m.transcript.appendAssistantDelta("assistant paragraph\n\n- list body\n\n1. ordered body")
+	block := ansi.Strip(m.transcript.renderBlock(m.transcript.blocks[0], width))
+	column := func(text string) int {
+		for _, line := range strings.Split(block, "\n") {
+			if idx := strings.Index(line, text); idx >= 0 {
+				return ansi.StringWidth(line[:idx])
+			}
+		}
+		t.Fatalf("missing %q in assistant block:\n%s", text, block)
+		return -1
+	}
+
+	m.input.SetValue("prompt")
+	var composerLine string
+	for _, line := range strings.Split(ansi.Strip(m.renderComposerAt(width)), "\n") {
+		if strings.Contains(line, "prompt") {
+			composerLine = line
+			break
+		}
+	}
+	if composerLine == "" {
+		t.Fatal("prompt missing from composer")
+	}
+	composerCol := ansi.StringWidth(composerLine[:strings.Index(composerLine, "prompt")])
+
+	if got := column("assistant paragraph"); got != 3 {
+		t.Fatalf("assistant paragraph column = %d, want 3", got)
+	}
+	if got := column("•"); got != 3 {
+		t.Fatalf("assistant bullet column = %d, want 3", got)
+	}
+	if got := column("list body"); got != composerCol {
+		t.Fatalf("assistant bullet body column = %d, composer input column = %d", got, composerCol)
+	}
+	if got := column("ordered body"); got != composerCol+1 {
+		t.Fatalf("assistant ordered body column = %d, want composer input column+1 = %d", got, composerCol+1)
+	}
+}
+
 func TestRetryNoticeExpandsWithToggle(t *testing.T) {
 	tr := newTranscript(newTheme(), newMDRenderer())
 	tr.addRetryNotice("∼ Provider error, retrying… (attempt 2/10)", "429: rate limited")

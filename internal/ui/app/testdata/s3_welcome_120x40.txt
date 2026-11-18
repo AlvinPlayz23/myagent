@@ -1,1 +1,25 @@
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      myagent
+                      ───────
+                      kit shell · S3 strangler
+
+
+
+
+
+                      > draft prompt
+                        enter to send

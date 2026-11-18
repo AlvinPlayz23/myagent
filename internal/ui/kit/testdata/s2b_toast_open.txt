@@ -1,5 +1,5 @@
-┃                                                          ┃
-┃  Saved                                           › undo  ┃
-┃                                                          ┃
-┃  3 files written to the workspace                        ┃
-┃                                                          ┃
+┃
+┃  ✓ Saved
+┃    3 files written to the workspace
+┃                              › undo
+┃

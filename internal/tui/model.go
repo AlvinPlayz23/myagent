@@ -449,6 +449,9 @@ type model struct {
 	kitHeight      int
 	kitViewportH   int
 	kitComposerRev int
+	// hideUsage collapses the right-hand usage rail. The shell hides its
+	// sidebar column when KitSidebar reports no rows.
+	hideUsage bool
 
 	working         bool // an agent Run is in progress
 	abortRequested  bool // cancellation requested; runner is still unwinding
@@ -600,6 +603,9 @@ func newModel(ctx context.Context, r *runner, q *msgQueue, th *theme, md *mdRend
 		newSession:     createSession,
 		mouseCapture:   true,
 		hoverIdx:       -1,
+		// The usage rail is optional chrome; start with it hidden and let
+		// /usage bring it back when the session numbers matter.
+		hideUsage: true,
 	}
 	m.initKit()
 	return m
@@ -1228,10 +1234,10 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.picker.active {
 		switch ks {
-		case "up":
+		case "up", "ctrl+p":
 			m.picker.move(-1)
 			return m, nil
-		case "down":
+		case "down", "ctrl+n":
 			m.picker.move(1)
 			return m, nil
 		case "tab":
@@ -1262,6 +1268,9 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.armPendingStatus("ctrl+c", "quit", "Cleared the prompt. Press ctrl+c again to quit.")
 		}
 		return m.requestQuit()
+
+	case "ctrl+p":
+		return m.openCommandPalette()
 
 	case "ctrl+o":
 		m.cancelSelection()
@@ -1377,6 +1386,15 @@ func (m *model) acceptFilePicker() (tea.Model, tea.Cmd) {
 	value = value[:m.files.start] + "@" + path + value[m.files.end:]
 	m.input.SetValue(value)
 	m.files.dismiss(value)
+	m.updateLayout()
+	return m, nil
+}
+
+// openCommandPalette shows every command without requiring a typed "/". The
+// draft is left untouched, and accept/cancel reuse the slash menu paths.
+func (m *model) openCommandPalette() (tea.Model, tea.Cmd) {
+	m.picker.openAll()
+	m.files.close()
 	m.updateLayout()
 	return m, nil
 }
@@ -1878,7 +1896,7 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		m.statusMsg = err.Error()
 		return m, nil
 	}
-	if m.working && cmd.kind != commandThinking && cmd.kind != commandPaste {
+	if m.working && cmd.kind != commandThinking && cmd.kind != commandUsage && cmd.kind != commandPaste {
 		m.statusMsg = "Cancel the current run before using slash commands."
 		return m, nil
 	}
@@ -1919,6 +1937,13 @@ func (m *model) runCommand(text string) (tea.Model, tea.Cmd) {
 		return m.applyShowThinking(cmd.arg), nil
 	case commandMouse:
 		return m.applyMouseToggle(cmd.arg), nil
+	case commandUsage:
+		m.hideUsage = !m.hideUsage
+		if m.hideUsage {
+			m.statusMsg = "Usage sidebar hidden."
+		} else {
+			m.statusMsg = "Usage sidebar shown."
+		}
 	case commandPaste:
 		return m.startClipboardRead()
 	case commandModel:

@@ -126,7 +126,10 @@ func markdownStyle() glamouransi.StyleConfig {
 				BlockSuffix: "\n",
 				Color:       hex(p.textPrimary.resolve()),
 			},
-			Margin: uintPtr(2),
+			// The transcript already owns a three-cell message indent. A
+			// document margin here would double it and push assistant text
+			// right of the composer's input column.
+			Margin: uintPtr(0),
 		},
 		BlockQuote: glamouransi.StyleBlock{
 			StylePrimitive: glamouransi.StylePrimitive{Color: hex(p.textDim.resolve())},

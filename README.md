@@ -305,7 +305,8 @@ Slash commands run locally in the TUI. They are not sent to the model or
 stored as user messages. Commands that change conversation state are available
 only while the agent is idle. Typing `/` opens the command list; continue
 typing to filter it, use **Up / Down** to select, **Tab** to complete, **Enter**
-to run, or **Esc** to dismiss it.
+to run, or **Esc** to dismiss it. **Ctrl+P** opens the same menu without
+touching the prompt; type to filter, then use **Enter** to run a command.
 
 | Command              | Action                                                  |
 | -------------------- | ------------------------------------------------------- |

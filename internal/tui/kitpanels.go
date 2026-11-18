@@ -114,30 +114,43 @@ func (m *model) kitModelPicker() KitPickerState {
 }
 
 func (m *model) kitCommandPicker() KitPickerState {
-	state := KitPickerState{Kind: "commands", Mode: KitPickerSelect, Title: "Commands", Placeholder: "Search commands…", Query: m.picker.prefix}
+	state := KitPickerState{Kind: "commands", Mode: KitPickerSelect, Title: "Commands", Placeholder: "Search commands…"}
 	if item, ok := m.picker.selected(); ok {
 		state.SelectedID = item.name
 	}
-	for _, group := range []string{"Suggested", "Session", "Tools & interface"} {
-		for _, item := range m.picker.items {
-			category := "Suggested"
-			switch item.kind {
-			case commandCompact, commandClear, commandNew, commandResume, commandRename, commandExport, commandInit:
-				category = "Session"
-			case commandThinking, commandTools, commandMouse, commandPaste:
-				category = "Tools & interface"
+	if m.picker.pinned {
+		// ctrl+p opens the modal palette: every command, grouped, with the
+		// dialog owning its own search.
+		state.Query = strings.TrimPrefix(m.picker.prefix, "/")
+		for _, group := range []string{"Suggested", "Session", "Tools & interface"} {
+			for _, item := range m.picker.items {
+				category := "Suggested"
+				switch item.kind {
+				case commandCompact, commandClear, commandNew, commandResume, commandRename, commandExport, commandInit:
+					category = "Session"
+				case commandThinking, commandTools, commandMouse, commandPaste:
+					category = "Tools & interface"
+				}
+				if category != group {
+					continue
+				}
+				label := item.label
+				if label == "" {
+					label = item.name
+				}
+				state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: label + " (" + item.name + ")", Desc: item.description, Group: category})
 			}
-			if category != group {
-				continue
-			}
-			label := item.label
-			if label == "" {
-				label = item.name
-			}
-			state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: label + " (" + item.name + ")", Desc: item.description, Group: category})
 		}
+		return state
 	}
-
+	// A typed "/" opens the inline menu: the host owns the filter and the rows
+	// are the flat matched list in picker order, so highlight and up/down agree.
+	state.Inline = true
+	state.Query = m.input.Value()
+	for _, index := range m.picker.matched {
+		item := m.picker.items[index]
+		state.Items = append(state.Items, KitPickerItem{ID: item.name, Title: item.name, Desc: item.description})
+	}
 	return state
 }
 

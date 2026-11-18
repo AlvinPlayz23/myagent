@@ -54,7 +54,7 @@ func (m *model) refreshPluginCommands() {
 			items = append(items, commandItem{
 				name:        "/profile",
 				usage:       "/profile [name|reset]",
-				description: "Switch plugin profile (tool allowlist + instructions)",
+				description: "Toggle plugin profile (tool allowlist + instructions)",
 				kind:        commandProfile,
 				requiresArg: true,
 			})
@@ -104,8 +104,20 @@ func (m *model) dispatchPluginCommand(cmd slashCommand) (tea.Model, tea.Cmd, boo
 		return m, m.runPluginRun(def, cmd.arg), true
 	case commandProfile:
 		if cmd.name == "/plan" {
-			switch strings.ToLower(strings.TrimSpace(cmd.arg)) {
-			case "", "on", "plan":
+			arg := strings.ToLower(strings.TrimSpace(cmd.arg))
+			switch arg {
+			case "":
+				// Bare /plan is a toggle: entering it again leaves plan mode.
+				// The toggle lives here, not in applyProfile, because applyProfile
+				// is also used to re-apply the active profile after tool changes.
+				name := "plan"
+				if m.activeProfile == name {
+					name = "reset"
+				}
+				if err := m.applyProfile(name); err != nil {
+					m.statusMsg = err.Error()
+				}
+			case "on", "plan":
 				if err := m.applyProfile("plan"); err != nil {
 					m.statusMsg = err.Error()
 				}
@@ -134,6 +146,10 @@ func (m *model) dispatchPluginCommand(cmd slashCommand) (tea.Model, tea.Cmd, boo
 			m.refreshViewport()
 			return m, nil, true
 		}
+		// Re-entering the active profile toggles it off, matching /plan.
+		if arg == m.activeProfile {
+			arg = "reset"
+		}
 		if err := m.applyProfile(arg); err != nil {
 			m.statusMsg = err.Error()
 		}
@@ -145,6 +161,10 @@ func (m *model) dispatchPluginCommand(cmd slashCommand) (tea.Model, tea.Cmd, boo
 // applyProfile activates (or resets with "" / "reset") a plugin profile.
 // It filters the registry, rebuilds the system prompt, applies effort, and
 // wraps bash with bashDeny. Refuses while a run is active.
+//
+// It is intentionally not a toggle: applyToolTogglesScoped re-applies the
+// current profile after tool changes, so toggle semantics belong to the command
+// dispatch in dispatchPluginCommand.
 func (m *model) applyProfile(name string) error {
 	if m.working {
 		return fmt.Errorf("Cancel the current run before switching profiles.")

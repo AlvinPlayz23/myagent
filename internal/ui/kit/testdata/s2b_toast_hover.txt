@@ -3,7 +3,8 @@ hover=true
 bold=true
 dismissed-while-paused=false
 frame:
-┃                                                          ┃
-┃  deploy failed                                  › retry  ┃
-┃                                                          ┃
+┃
+┃  ◈ deploy failed
+┃          › retry
+┃
 

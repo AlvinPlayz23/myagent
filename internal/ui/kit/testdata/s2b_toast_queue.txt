@@ -1,7 +1,5 @@
-┃                                                          ┃
-┃  Build                                                   ┃
-┃                                                          ┃
-┃  compiling package kit                                   ┃
-┃                                                          ┃
-┃  +2 more                                                 ┃
-┃                                                          ┃
+┃
+┃  ◈ Build
+┃    compiling package kit
+┃    +2 more
+┃

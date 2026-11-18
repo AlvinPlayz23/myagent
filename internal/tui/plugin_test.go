@@ -73,7 +73,27 @@ func TestProfileCommandAndPlanSugar(t *testing.T) {
 	if m.activeProfile != "plan" {
 		t.Fatalf("active = %q", m.activeProfile)
 	}
-	// reset
+	// Re-entering bare /plan toggles plan off.
+	if _, _, handled := m.dispatchPluginCommand(cmd); !handled {
+		t.Fatal("second /plan not handled")
+	}
+	if m.activeProfile != "" {
+		t.Fatalf("after toggle active = %q, want none", m.activeProfile)
+	}
+	// /profile <name> toggles the same way when that profile is active.
+	m.runCommand("/profile plan")
+	if m.activeProfile != "plan" {
+		t.Fatalf("after /profile plan active = %q", m.activeProfile)
+	}
+	m.runCommand("/profile plan")
+	if m.activeProfile != "" {
+		t.Fatalf("after /profile plan re-entry active = %q, want none", m.activeProfile)
+	}
+	// Explicit reset still works from either state.
+	m.runCommand("/plan on")
+	if m.activeProfile != "plan" {
+		t.Fatalf("after /plan on active = %q", m.activeProfile)
+	}
 	m.runCommand("/profile reset")
 	if m.activeProfile != "" {
 		t.Fatalf("after reset active = %q", m.activeProfile)
@@ -83,13 +103,17 @@ func TestProfileCommandAndPlanSugar(t *testing.T) {
 func TestPlanOnOff(t *testing.T) {
 	cases := []struct {
 		input string
+		pre   string
 		want  string
 		usage bool
 	}{
-		{"/plan", "plan", false},
-		{"/plan on", "plan", false},
-		{"/plan off", "", false},
-		{"/plan bogus", "", true},
+		{"/plan", "", "plan", false},
+		{"/plan", "plan", "", false},
+		{"/plan on", "", "plan", false},
+		{"/plan on", "plan", "plan", false},
+		{"/plan off", "plan", "", false},
+		{"/plan off", "", "", false},
+		{"/plan bogus", "", "", true},
 	}
 	for _, tc := range cases {
 		q := newMsgQueue()
@@ -103,8 +127,8 @@ func TestPlanOnOff(t *testing.T) {
 		m.basePrompt = r.cfg.SystemPrompt
 		m.baseEffort = r.cfg.Effort
 		m.refreshPluginCommands()
-		if tc.input == "/plan off" {
-			if err := m.applyProfile("plan"); err != nil {
+		if tc.pre != "" {
+			if err := m.applyProfile(tc.pre); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -122,7 +146,7 @@ func TestPlanOnOff(t *testing.T) {
 			continue
 		}
 		if m.activeProfile != tc.want {
-			t.Fatalf("%s: active = %q, want %q", tc.input, m.activeProfile, tc.want)
+			t.Fatalf("%s (pre %q): active = %q, want %q", tc.input, tc.pre, m.activeProfile, tc.want)
 		}
 	}
 }
