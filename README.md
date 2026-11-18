@@ -1,10 +1,15 @@
 # myagent
 
 A Go coding agent. Headless **print mode** for one-shot prompts, an
-interactive **TUI** built on [bubbletea v2][btea] for multi-turn work, and a
-**server mode** exposing multiple concurrent sessions over WebSocket
-JSON-RPC. Speaks the OpenAI streaming protocol against any compatible
-endpoint (OpenAI, Ollama, LM Studio, vLLM, etc.).
+interactive **TUI** rendered by **GoTUI** — myagent's own retained-mode
+terminal UI engine — for multi-turn work, and a **server mode** exposing
+multiple concurrent sessions over WebSocket JSON-RPC. Speaks the OpenAI
+streaming protocol against any compatible endpoint (OpenAI, Ollama, LM Studio,
+vLLM, etc.).
+
+Earlier releases drew the interface with Charmbracelet's [Bubbletea][btea] and
+Lip Gloss; GoTUI grew out of that work and now owns the widget tree, layout,
+hit-testing, and screen composition.
 
 [btea]: https://github.com/charmbracelet/bubbletea
 
@@ -22,6 +27,25 @@ go run . sessions        # list persisted sessions, exits cleanly
 ```
 
 Everything below assumes you `cd`-ed into this repo.
+
+---
+
+## The GoTUI engine
+
+The interactive TUI is drawn by **GoTUI**, the custom terminal UI engine that
+ships with myagent. The widget toolkit lives in `internal/ui/kit` and the
+composed shell in `internal/ui/app`.
+
+GoTUI is retained-mode: every widget keeps its own state and bounds, the shell
+lays out a widget tree, and a central hit registry routes mouse input. Only
+dirty frames are recomposited, which is what makes the interface feel like a
+terminal DOM — clipped widget bounds, Z-ordered layers, a dialog stack, a
+scrollable transcript, an inline slash-command menu, hover states, toasts, and
+live theme swaps — without repainting the whole screen on every keystroke.
+
+The project previously built its TUI on Charmbracelet's Bubbletea and Lip
+Gloss. That legacy renderer remains available for one release with
+`MYAGENT_UI=legacy` (see [TUI renderer](#tui-renderer)).
 
 ---
 
@@ -286,7 +310,7 @@ file by mentioning it with `@path` (PNG, JPEG, GIF, or WebP).
 
 ### TUI renderer
 
-The retained widget renderer is the default. The pre-cutover frame remains
+The GoTUI renderer is the default. The pre-cutover Bubbletea frame remains
 available for one release as an escape hatch:
 
 ```bash
@@ -559,7 +583,10 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 │   ├── setup/           # first-run setup + provider manager wizard
 │   ├── terminal/        # terminal capability helpers
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
-│   ├── tui/             # bubbletea v2 UI: transcript, input, footer
+│   ├── tui/             # legacy Charm-based UI: transcript, input, footer
+│   ├── ui/
+│   │   ├── kit/         # GoTUI widget toolkit: layout, hit registry, dialogs, compositor
+│   │   └── app/         # GoTUI shell: home, transcript, composer, pickers, chrome
 │   └── types/           # Message / Content / ToolCall / Usage / Event
 ├── desktop/             # Electron desktop client (connects to `myagent serve`)
 ├── scripts/
