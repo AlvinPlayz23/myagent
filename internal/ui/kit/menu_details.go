@@ -18,6 +18,12 @@ func RenderMenuDetails(description string, w, h int) string {
 		return fitBlock("", w, h)
 	}
 	th := DefaultTheme()
+	if h == 1 {
+		line := ansi.Wrap(description, w, "")
+		line = strings.SplitN(line, "\n", 2)[0]
+		line = ansi.Truncate(line, w, "…")
+		return fitBlock(lipgloss.NewStyle().Foreground(th.Text.Muted.Color()).Render(line), w, h)
+	}
 	rule := lipgloss.NewStyle().Foreground(th.Border.Base.Color()).Render(strings.Repeat("─", w))
 	lines := strings.Split(ansi.Wrap(description, w, ""), "\n")
 	if len(lines) > h-1 {
