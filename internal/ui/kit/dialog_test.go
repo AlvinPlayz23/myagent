@@ -346,8 +346,7 @@ func TestDialogLayoutBands(t *testing.T) {
 	}
 }
 
-// TestDialogChromeText asserts the BOLD title, the right-aligned muted "esc",
-// and the lowercase footer hints with their 1-cell hover pads.
+// TestDialogChromeText checks that the footer owns the only Escape hint.
 func TestDialogChromeText(t *testing.T) {
 	d := testDialog("Pick a model", NewText(TextOpts{Content: "body"}))
 	d.Layout(Rect{X: 0, Y: 0, W: 60, H: 14})
@@ -357,8 +356,8 @@ func TestDialogChromeText(t *testing.T) {
 	if got := strings.TrimLeft(header, " "); !strings.HasPrefix(got, "Pick a model") {
 		t.Fatalf("header = %q, want the title first", header)
 	}
-	if !strings.HasSuffix(header, " esc") {
-		t.Fatalf("header = %q, want a right-aligned esc hint", header)
+	if strings.HasSuffix(header, " esc") {
+		t.Fatalf("header = %q, duplicates the footer Escape hint", header)
 	}
 
 	footer := strings.TrimRight(lines[12], " ")
@@ -370,6 +369,24 @@ func TestDialogChromeText(t *testing.T) {
 	}
 	if strings.Contains(footer, "CANCEL") || strings.Contains(footer, "Confirm") {
 		t.Fatalf("footer hints are not lowercase: %q", footer)
+	}
+}
+
+func TestDialogHeaderEscapeMatchesVisibleAffordance(t *testing.T) {
+	d := testDialog("Commands", NewText(TextOpts{Content: "body"}))
+	d.OnClose = func() bool { return true }
+	bounds := Rect{W: 60, H: 14}
+	d.Layout(bounds)
+	click := tea.MouseClickMsg{X: 56, Y: 1, Button: tea.MouseLeft}
+	if d.Mouse(click, bounds) {
+		t.Fatal("click on the hidden header hint closed the dialog")
+	}
+
+	d.Footer.Hide()
+	d.Layout(bounds)
+	header := strings.Split(ansi.Strip(d.Render(60, 14)), "\n")[1]
+	if !strings.HasSuffix(strings.TrimRight(header, " "), "esc") || !d.Mouse(click, bounds) {
+		t.Fatal("dialog without a visible footer must have a clickable header Escape hint")
 	}
 }
 

@@ -643,7 +643,7 @@ func (l *DialogLayout) Render(w, h int) string {
 			drawStyled(cv, hx, hy, l.header.W, l.Title,
 				lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
 			hint := l.escHint()
-			if hw := ansi.StringWidth(hint); l.header.W > hw+2 {
+			if hw := ansi.StringWidth(hint); hw > 0 {
 				drawStyled(cv, hx+l.header.W-hw, hy, hw, hint,
 					lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 			}
@@ -658,12 +658,19 @@ func (l *DialogLayout) Render(w, h int) string {
 	})
 }
 
-// escHint resolves the header hint label.
+// escHint is the header shortcut when the footer doesn't already show it.
 func (l *DialogLayout) escHint() string {
-	if l.EscHint != "" {
-		return l.EscHint
+	if l.Footer != nil && l.Footer.Visible && l.footerRect.Y > l.header.Y && l.Footer.showsEscape() {
+		return ""
 	}
-	return "esc"
+	hint := l.EscHint
+	if hint == "" {
+		hint = "esc"
+	}
+	if l.header.W <= ansi.StringWidth(hint)+2 {
+		return ""
+	}
+	return hint
 }
 
 // Children exposes body and footer for hit/focus/rev walks.
@@ -706,9 +713,13 @@ func (l *DialogLayout) Mouse(ev tea.MouseMsg, r Rect) bool {
 	if !ok || click.Button != tea.MouseLeft || l.header.Empty() {
 		return false
 	}
+	hint := l.escHint()
+	if hint == "" {
+		return false
+	}
 	m := ev.Mouse()
-	hintX := l.header.X + l.header.W - ansi.StringWidth(l.escHint())
-	if m.Y == l.header.Y && m.X >= hintX {
+	hintX := l.header.X + l.header.W - ansi.StringWidth(hint)
+	if l.header.Contains(m.X, m.Y) && m.X >= hintX {
 		if l.OnClose != nil {
 			return l.OnClose()
 		}
@@ -800,6 +811,31 @@ func (f *DialogFooter) Layout(r Rect) {
 		f.rects[i] = Rect{X: rx, Y: r.Y, W: w, H: 1}
 		rx -= 1
 	}
+}
+
+func (f *DialogFooter) showsEscape() bool {
+	for i, b := range f.Buttons {
+		if !strings.EqualFold(strings.TrimSpace(b.Key), "esc") || i >= len(f.rects) {
+			continue
+		}
+		r := f.rects[i]
+		keyW := len("esc")
+		key := Rect{X: r.X + r.W - 1 - keyW, Y: r.Y, W: keyW, H: 1}
+		if key.Intersect(f.Bounds()) != key {
+			continue
+		}
+		visible := true
+		for _, later := range f.rects[i+1:] {
+			if !key.Intersect(later).Empty() {
+				visible = false
+				break
+			}
+		}
+		if visible {
+			return true
+		}
+	}
+	return false
 }
 
 // Render paints one footer row. Labels are lowercase and the primary action is

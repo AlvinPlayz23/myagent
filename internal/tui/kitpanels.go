@@ -159,7 +159,7 @@ func (m *model) kitExportFormat() KitPickerState {
 		Kind:         "export-format",
 		Mode:         KitPickerList,
 		Title:        "Export session as",
-		Hint:         "↑/↓ select, enter continue, esc cancel",
+		Hint:         "↑/↓ select, enter continue",
 		ConfirmLabel: "continue",
 		SelectedID:   "markdown",
 	}
@@ -182,7 +182,7 @@ func (m *model) kitExportOverwrite() KitPickerState {
 		Kind:         "export-overwrite",
 		Mode:         KitPickerConfirm,
 		Title:        "Export",
-		Body:         "File exists — enter overwrite, ↑/↓ return to name, esc cancel",
+		Body:         "File exists — enter overwrite, ↑/↓ return to name",
 		Hint:         "↑/↓ return to name",
 		ConfirmLabel: "overwrite",
 		ConfirmKey:   "enter",
@@ -196,7 +196,7 @@ func (m *model) kitExportName() KitPickerState {
 		Mode:         KitPickerInput,
 		Title:        "Export as " + export.Label(m.exportFormat),
 		Input:        m.exportName.View(),
-		Hint:         "enter export, esc cancel",
+		Hint:         "enter export",
 		ConfirmLabel: "export",
 		ConfirmKey:   "enter",
 		CancelLabel:  "cancel",
@@ -208,7 +208,7 @@ func (m *model) kitSessionPicker() KitPickerState {
 		Kind:         "sessions",
 		Mode:         KitPickerList,
 		Title:        "Resume session",
-		Hint:         "↑/↓ select, enter resume, esc cancel",
+		Hint:         "↑/↓ select, enter resume",
 		ConfirmLabel: "resume",
 	}
 	current := len(m.sessions.items) > 0 && m.sessions.currentID != "" &&
@@ -267,7 +267,7 @@ func (m *model) kitEffortPicker() KitPickerState {
 		Kind:         "effort",
 		Mode:         KitPickerList,
 		Title:        "Reasoning effort",
-		Hint:         "↑/↓ select, enter saves as myagent default, esc cancel",
+		Hint:         "↑/↓ select, enter saves as myagent default",
 		SelectedID:   strconv.Itoa(m.effort.sel),
 		ConfirmLabel: "save",
 	}
@@ -297,7 +297,7 @@ func (m *model) kitCustomizePicker() KitPickerState {
 		Kind:         "customize",
 		Mode:         KitPickerList,
 		Title:        "Customize",
-		Hint:         "↑/↓ select, enter open, esc cancel",
+		Hint:         "↑/↓ select, enter open",
 		SelectedID:   "group:" + strconv.Itoa(m.customize.sel),
 		ConfirmLabel: "open",
 	}
@@ -313,7 +313,7 @@ func (m *model) kitCustomizePicker() KitPickerState {
 	}
 	group := customizeGroups[m.customize.group]
 	state.Title = "Customize › " + group.label
-	state.Hint = "↑/↓ select, enter save, ←/esc back"
+	state.Hint = "↑/↓ select, enter save, ← back"
 	state.ConfirmLabel = "save"
 	state.SelectedID = "choice:" + strconv.Itoa(m.customize.sel)
 	for i, row := range m.customize.choices() {
@@ -394,7 +394,7 @@ func (m *model) kitProviderKey() KitPickerState {
 		Placeholder:  m.keyInput.Placeholder,
 		Input:        m.keyInput.View(),
 		Masked:       true,
-		Hint:         "enter saves, esc cancels",
+		Hint:         "enter saves",
 		ConfirmLabel: "save",
 		ConfirmKey:   "enter",
 		CancelLabel:  "cancel",
@@ -433,7 +433,7 @@ func (m *model) kitFilePicker() KitPickerState {
 		Kind:         "files",
 		Mode:         KitPickerList,
 		Title:        "Files",
-		Hint:         "↑/↓ select, enter or tab insert, esc cancel",
+		Hint:         "↑/↓ select, enter or tab insert",
 		ConfirmLabel: "insert",
 	}
 	if path, ok := m.files.selected(); ok {

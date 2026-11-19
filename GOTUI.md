@@ -676,3 +676,17 @@ home centering and session rail suppression, input/selection interaction tests,
 and screenshots of both real CLIs in a 120×40 terminal. The earlier byte-identical
 legacy/golden claims above describe the initial gotui migration, before this
 intentional visual restyle.
+
+## 2026-11-19 — TUI polish pass
+
+- The shell paints directly into the shared frame, skipping an intermediate
+  composition. The 200×60 streaming benchmark allocated about 35% less memory
+  per update (9.4 MB → 6.1 MB); cached idle frames still did not recompose.
+- Transcript clicks stay aligned with the visible rows after scrolling, and
+  scrolling against the viewport edge no longer forces a redraw.
+- Short pickers keep the selected choice visible before optional hints or help.
+  Narrow tabs clip their click targets to the visible rail, and the composer
+  footer keeps file or hint text from overlapping the working directory.
+
+The TUI tests and a live terminal smoke test passed, covering command
+navigation, resize, dialog dismissal, and transcript scrolling.

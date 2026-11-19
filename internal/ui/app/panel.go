@@ -91,14 +91,25 @@ func (b *panelListBody) selectedID() string {
 
 // listRect is the row area below the one-row hint.
 func (b *panelListBody) listRect(r kit.Rect) kit.Rect {
-	if b.hint != "" {
-		r.Y++
-		r.H = max(0, r.H-1)
+	hintH, detailsH := b.contentHeights(r.H)
+	r.Y += hintH
+	r.H = max(0, r.H-hintH-detailsH)
+	return r
+}
+
+// contentHeights preserves one row for choices before spending space on
+// optional hint and details text in a short panel.
+func (b *panelListBody) contentHeights(h int) (hintH, detailsH int) {
+	if h <= 0 {
+		return 0, 0
+	}
+	if b.hint != "" && h > 1 {
+		hintH = 1
 	}
 	if b.details {
-		r.H = max(0, r.H-kit.MenuDetailsHeight)
+		detailsH = min(kit.MenuDetailsHeight, max(0, h-hintH-1))
 	}
-	return r
+	return hintH, detailsH
 }
 
 // PreferredHeight sizes the dialog to the hint plus visible rows, capped by
@@ -130,21 +141,18 @@ func (b *panelListBody) Render(w, h int) string {
 	}
 	th := kit.DefaultTheme()
 	var lines []string
-	listH := h
-	if b.details {
-		listH = max(0, listH-kit.MenuDetailsHeight)
-	}
-	if b.hint != "" {
+	hintH, detailsH := b.contentHeights(h)
+	listH := max(0, h-hintH-detailsH)
+	if hintH > 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(th.Text.Muted.Color()).
 			Render(ansi.Truncate(b.hint, w, "…")))
-		listH = max(0, listH-1)
 	}
 	if listH > 0 {
 		lines = append(lines, strings.Split(b.list.Render(w, listH), "\n")...)
 	}
-	if b.details {
+	if detailsH > 0 {
 		if row, ok := b.list.SelectedRow(); ok {
-			lines = append(lines, kit.RenderMenuDetails(row.Desc, w, min(kit.MenuDetailsHeight, h)))
+			lines = append(lines, kit.RenderMenuDetails(row.Desc, w, detailsH))
 		}
 	}
 	return fitBlock(strings.Join(lines, "\n"), w, h)

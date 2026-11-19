@@ -108,15 +108,20 @@ func (f *ComposerFooter) Render(w, h int) string {
 			right = f.Hint
 		}
 		rightW := ansi.StringWidth(right)
+		if statusW := max(0, w-x); rightW > statusW {
+			right = ansi.Truncate(strings.TrimSpace(right), statusW, "…")
+			rightW = ansi.StringWidth(right)
+		}
 		leftW := max(0, w-x)
-		if rightW > 0 && rightW+2 < w {
-			leftW = w - rightW - 1
+		if rightW > 0 {
+			rightX := w - rightW
+			leftW = max(0, rightX-x-1)
 		}
 		if f.Cwd != "" && leftW > 0 {
 			drawStyled(cv, x, 0, leftW, ansi.Truncate(f.Cwd, leftW, "…"),
 				lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 		}
-		if rightW > 0 && rightW < w {
+		if rightW > 0 {
 			rx := w - rightW
 			fg := th.Text.Muted
 			if f.File != "" {

@@ -167,7 +167,19 @@ func (b *baseWidget) Layout(r kit.Rect) {
 	b.SetBounds(r)
 	b.shell.Layout(r)
 }
-func (b *baseWidget) Render(w, h int) string { return b.shell.renderBands(w, h) }
+func (b *baseWidget) Render(w, h int) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	cv := lipgloss.NewCanvas(w, h)
+	b.PaintInto(cv)
+	return fitBlock(cv.Render(), w, h)
+}
+
+func (b *baseWidget) PaintInto(cv *lipgloss.Canvas) {
+	s := b.shell
+	kit.PaintWidgets(cv, s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar, s.tabs)
+}
 
 // Key/Mouse return false: the model calls Shell.Key/Mouse directly, so Root
 // must not bounce base-band input back into the shell entry points.
@@ -286,12 +298,13 @@ func (s *Shell) scrollToEnd() {
 // only routes motion to the widget under the pointer, so an app-level pass is
 // what makes hover leave work when the pointer crosses a block boundary.
 func (s *Shell) syncHover(x, y int) {
+	canHover := !s.dialogs.Modal() && s.inScroll(x, y)
 	for _, item := range s.scroll.Items {
 		h, ok := item.W.(*kit.Hoverable)
 		if !ok {
 			continue
 		}
-		h.SetHovered(h.Bounds().Contains(x, y))
+		h.SetHovered(canHover && h.Bounds().Contains(x, y))
 	}
 }
 
@@ -656,28 +669,6 @@ func (s *Shell) Layout(r kit.Rect) {
 		}
 	}
 	s.layoutDirty = false
-}
-
-// renderBands uses the same bounds for painting and hit testing.
-func (s *Shell) renderBands(w, h int) string {
-	if w <= 0 || h <= 0 {
-		return ""
-	}
-	// The compositor sizes its canvas from the layer bounds, not from the
-	// requested terminal size. Every band is inset by two columns, so without a
-	// full-size base layer the bounds start at x=2 and the last two columns of
-	// the rightmost bands (the menu surface, composer rails) get clipped. The
-	// base layer anchors the bounds at (0,0) and keeps the frame fully opaque.
-	th := kit.DefaultTheme()
-	layers := []*lipgloss.Layer{lipgloss.NewLayer(kit.PaintBlock("", w, h, th.Background.Base))}
-	for _, child := range []kit.Widget{s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar, s.tabs} {
-		r := kit.WidgetBounds(child)
-		if r.Empty() {
-			continue
-		}
-		layers = append(layers, lipgloss.NewLayer(child.Render(r.W, r.H)).X(r.X).Y(r.Y))
-	}
-	return fitBlock(lipgloss.NewCompositor(layers...).Render(), w, h)
 }
 
 // NeedsLayout reports staged scroll content, a composer/chrome height change,
