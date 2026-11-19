@@ -21,7 +21,7 @@ func (s *Shell) syncPicker() {
 	}
 	// A typed "/" gets the inline command menu above the composer; ctrl+p
 	// keeps the modal palette. Both paths close the other surface.
-	if state.Kind == "commands" && state.Inline {
+	if state.Inline && (state.Kind == "commands" || state.Kind == "effort") {
 		s.closePicker()
 		s.closePanel()
 		s.syncCommandMenu(state)
