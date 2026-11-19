@@ -606,6 +606,28 @@ go build -o ./myagent.exe .
 default — install a C toolchain (e.g. `scoop install gcc`, or use WSL) to
 enable race-detected test runs.
 
+### Publishing a release
+
+From a clean, full checkout with Go and [GoReleaser](https://goreleaser.com/install/)
+installed, run:
+
+```bash
+./release.sh v0.1.9
+```
+
+The script checks the repository and GoReleaser configuration, confirms the
+release, creates an annotated tag, pushes it to `origin`, and runs
+`goreleaser release --clean`. If `GITHUB_TOKEN` is not set, it prompts for a
+GitHub token without echoing or saving it. The token needs permission to write
+repository contents; pushing the tag uses your existing Git authentication.
+
+**Avoid duplicate publishers:** this repository also runs GoReleaser in
+[GitHub Actions](.github/workflows/release.yml) on `v*` tag pushes. Disable
+that tag-triggered workflow for a local release before confirming the script,
+or use the workflow instead of running the script. `--clean` removes the
+existing `dist` directory. If publishing fails after the push, inspect GitHub
+for a partial release before retrying; the script can reuse a matching tag.
+
 ### Common tasks
 
 ```bash
