@@ -15,10 +15,7 @@ import (
 // most of the transcript instead of a five-row peek.
 const maxCommandMenuRows = 10
 
-// commandMenu is the inline slash menu: command rows above the composer, with
-// the composer itself acting as the filter input. It stays host-driven, so
-// typing, arrows, tab, enter, and esc keep running through the legacy onKey
-// path; the shell only paints rows and forwards clicks.
+// commandMenu paints host-driven command or effort rows above the composer.
 type commandMenu struct {
 	kit.WidgetBase
 
@@ -29,8 +26,9 @@ func newCommandMenu(s *Shell) *commandMenu {
 	m := &commandMenu{
 		WidgetBase: kit.NewWidgetBase("kit.commands"),
 		list: kit.NewList(kit.ListOpts{
-			ID:      "kit.commands.rows",
-			Palette: true,
+			ID:           "kit.commands.rows",
+			Palette:      true,
+			HideOverflow: true,
 		}),
 	}
 	m.list.OnChoose = func(row kit.ListRow) bool {
@@ -114,16 +112,17 @@ func (m *commandMenu) FocusTarget() *kit.FocusTarget { return nil }
 // Children exposes the row list for hit registration.
 func (m *commandMenu) Children() []kit.Widget { return []kit.Widget{m.list} }
 
-// syncCommandMenu mirrors the host-filtered command rows onto the inline menu.
+// syncCommandMenu mirrors the host selection onto the inline menu.
 func (s *Shell) syncCommandMenu(state tui.KitPickerState) {
-	rows := make([]kit.ListRow, 0, len(state.Items))
-	for _, item := range state.Items {
-		rows = append(rows, kit.ListRow{ID: item.ID, Title: item.Title, Desc: item.Desc})
-	}
 	sig := pickerSignature(state)
 	if s.menuOpen && sig == s.menuSig {
 		return
 	}
+	rows := make([]kit.ListRow, 0, len(state.Items))
+	for _, item := range state.Items {
+		rows = append(rows, kit.ListRow{ID: item.ID, Title: item.Title, Desc: item.Desc})
+	}
+	s.layoutDirty = s.layoutDirty || !s.menuOpen || s.menuRows != len(rows)
 	s.menu.list.SetRows(rows)
 	s.menuRows = len(rows)
 	if state.SelectedID != "" {
@@ -137,12 +136,11 @@ func (s *Shell) syncCommandMenu(state tui.KitPickerState) {
 	}
 	s.menu.list.MarkDirty()
 	s.menuSig = sig
+	s.menuKind = state.Kind
 	if !s.menuOpen {
 		s.menuOpen = true
 		s.menu.Show()
 	}
-	// Row count changes resize the band; selection changes only repaint.
-	s.layoutDirty = true
 }
 
 // closeCommandMenu hides the band and reclaims its rows.
@@ -153,6 +151,7 @@ func (s *Shell) closeCommandMenu() {
 	s.menuOpen = false
 	s.menuRows = 0
 	s.menuSig = ""
+	s.menuKind = ""
 	s.menu.Hide()
 	s.layoutDirty = true
 }

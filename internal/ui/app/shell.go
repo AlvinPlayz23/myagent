@@ -97,6 +97,7 @@ type Shell struct {
 	menuRows int
 	menuR    kit.Rect
 	menuSig  string
+	menuKind string
 
 	lastTranscriptRev int
 	lastComposerRev   int
@@ -207,6 +208,10 @@ func (s *Shell) Key(ev tea.KeyPressMsg) bool {
 	if s.dialogs.Modal() {
 		return s.root.HandleKey(ev)
 	}
+	if s.menuOpen && s.menuKind == "effort" {
+		s.emit(s.host.KitKey(ev))
+		return true
+	}
 	if s.jump.Active() && ev.String() == "enter" && s.host.KitComposerEmpty() {
 		s.scrollToEnd()
 		return true
@@ -236,6 +241,14 @@ func (s *Shell) Mouse(ev tea.MouseMsg) bool {
 		if m.Button != tea.MouseLeft {
 			s.syncHover(m.X, m.Y)
 		}
+	}
+	if delta, wheel := kit.WheelDelta(ev); wheel && !s.dialogs.Modal() && s.menuOpen && s.menuR.Contains(ev.Mouse().X, ev.Mouse().Y) {
+		key := tea.KeyDown
+		if delta < 0 {
+			key = tea.KeyUp
+		}
+		s.emit(s.host.KitKey(tea.KeyPressMsg{Code: key}))
+		return true
 	}
 	if s.root.HandleMouse(ev, kit.Rect{}) {
 		return true
@@ -461,7 +474,7 @@ func (s *Shell) emitNotice(n tui.KitNotice) {
 		return
 	}
 	s.lastNotice = n.Text
-	if (s.pickerOpen || s.panelOpen) && n.Severity == tui.KitNoticeInfo {
+	if (s.pickerOpen || s.panelOpen || (s.menuOpen && s.menuKind == "effort")) && n.Severity == tui.KitNoticeInfo {
 		return
 	}
 	variant := kit.ToastInfo
