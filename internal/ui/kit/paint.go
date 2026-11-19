@@ -47,13 +47,18 @@ func drawCells(c *lipgloss.Canvas, s string, x, y, w, h int) {
 	if c == nil || s == "" || w <= 0 || h <= 0 {
 		return
 	}
+	startX, startY := max(0, -x), max(0, -y)
+	endX, endY := min(w, c.Width()-x), min(h, c.Height()-y)
+	if startX >= endX || startY >= endY {
+		return
+	}
 	// Parse through a scratch canvas: StyledString.Lines in this ultraviolet
 	// version stops after the first sequence when built without bounds, while
 	// StyledString.Draw honors the explicit area.
-	tmp := lipgloss.NewCanvas(w, h)
-	uv.NewStyledString(s).Draw(tmp, uv.Rect(0, 0, w, h))
-	for row := 0; row < h; row++ {
-		for col := 0; col < w; col++ {
+	tmp := lipgloss.NewCanvas(w, endY)
+	uv.NewStyledString(s).Draw(tmp, uv.Rect(0, 0, w, endY))
+	for row := startY; row < endY; row++ {
+		for col := startX; col < endX; col++ {
 			cell := tmp.CellAt(col, row)
 			if cell == nil || (cell.Content == "" && cell.Width == 0) {
 				continue // empty buffer cell or wide-grapheme placeholder
@@ -83,6 +88,15 @@ func drawWidget(c *lipgloss.Canvas, w Widget, abs, origin Rect) {
 	}
 	out := w.Render(abs.W, abs.H)
 	drawCells(c, out, abs.X-origin.X, abs.Y-origin.Y, abs.W, abs.H)
+}
+
+// PaintWidgets paints visible widgets in order at their laid-out screen bounds.
+func PaintWidgets(c *lipgloss.Canvas, widgets ...Widget) {
+	for _, w := range widgets {
+		if w != nil && WidgetVisible(w) {
+			drawWidget(c, w, WidgetBounds(w), Rect{})
+		}
+	}
 }
 
 // drawText paints a styled one-line label at a fixed cell.

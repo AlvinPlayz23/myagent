@@ -123,17 +123,19 @@ func (t *Tabs) has(id string) bool {
 func (t *Tabs) Layout(r Rect) {
 	t.SetBounds(r)
 	t.rects = t.rects[:0]
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	end := r.X + r.W
 	x := r.X
 	for i, item := range t.Items {
-		w := t.tabWidth(item)
+		w := min(t.tabWidth(item), end-x)
 		t.rects = append(t.rects, Rect{X: x, Y: r.Y, W: w, H: 1})
 		x += w
-		if i < len(t.Items)-1 {
-			x++ // separator column
-		}
-		if x >= r.X+r.W {
+		if i == len(t.Items)-1 || x+1 >= end {
 			break
 		}
+		x++ // separator column
 	}
 }
 
@@ -190,6 +192,18 @@ func (t *Tabs) Render(w, h int) string {
 			if active {
 				style = style.Bold(true)
 			}
+			frameW := 2
+			if item.Busy {
+				frameW += 2
+			}
+			if item.Unread {
+				frameW += 2
+			}
+			if r.W < frameW+1 {
+				title := ansi.Truncate(tabTitle(item.Title), r.W, "…")
+				drawStyled(cv, x, 0, r.W, title, style)
+				continue
+			}
 			cursor := x + 1
 			if item.Busy {
 				glyph := BrailleFrames[0]
@@ -199,13 +213,14 @@ func (t *Tabs) Render(w, h int) string {
 				drawStyled(cv, cursor, 0, 2, glyph, lipgloss.NewStyle().Foreground(th.Text.Feedback.Warning.Base.Color()))
 				cursor += 2
 			}
-			title := ansi.Truncate(tabTitle(item.Title), max(0, r.W-(cursor-x)-1), "…")
-			drawStyled(cv, cursor, 0, max(0, r.W-(cursor-x)-1), title, style)
+			titleW := r.W - frameW
+			title := ansi.Truncate(tabTitle(item.Title), titleW, "…")
+			drawStyled(cv, cursor, 0, titleW, title, style)
 			cursor += ansi.StringWidth(title)
 			if item.Unread {
 				drawStyled(cv, cursor+1, 0, 1, "●", lipgloss.NewStyle().Foreground(th.Text.Feedback.Info.Base.Color()))
 			}
-			if i < len(t.Items)-1 && x+r.W < w {
+			if i+1 < len(t.rects) && x+r.W < w {
 				drawStyled(cv, x+r.W, 0, 1, "│", lipgloss.NewStyle().Foreground(th.Border.Base.Color()))
 			}
 		}
