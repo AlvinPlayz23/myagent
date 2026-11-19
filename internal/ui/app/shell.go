@@ -75,6 +75,7 @@ type Shell struct {
 	// P6 panel bridge. Select-mode pickers keep the fields above; every other
 	// panel kind uses this dialog body and forwards keys to the legacy path.
 	panelList           *panelListBody
+	panelEffort         *effortSelector
 	panelInput          *panelInputBody
 	panelLayout         *kit.DialogLayout
 	panelFooter         *kit.DialogFooter
@@ -92,11 +93,13 @@ type Shell struct {
 	// Inline slash menu: command rows directly above the composer. The
 	// composer remains the filter input (legacy onKey owns the keys).
 	menu     *commandMenu
+	effort   *effortSelector
 	menuOpen bool
 	menuH    int
 	menuRows int
 	menuR    kit.Rect
 	menuSig  string
+	menuKind string
 
 	lastTranscriptRev int
 	lastComposerRev   int
@@ -142,6 +145,8 @@ func newShell(host tui.KitHost) *Shell {
 	s.dock = kit.NewDock(kit.DockOpts{ID: "kit.dock"})
 	s.menu = newCommandMenu(s)
 	s.menu.Hide()
+	s.effort = newEffortSelector(s)
+	s.effort.Hide()
 	s.jump = kit.NewJump(kit.JumpOpts{ID: "kit.jump", OnJump: s.scrollToEnd})
 	s.jump.SetBounds(kit.Rect{})
 	s.dialogs = kit.NewDialogStack()
@@ -178,7 +183,7 @@ func (b *baseWidget) Render(w, h int) string {
 
 func (b *baseWidget) PaintInto(cv *lipgloss.Canvas) {
 	s := b.shell
-	kit.PaintWidgets(cv, s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar, s.tabs)
+	kit.PaintWidgets(cv, s.scroll, s.jump, s.todo, s.dock, s.menu, s.effort, s.composer, s.footer, s.sidebar, s.tabs)
 }
 
 // Key/Mouse return false: the model calls Shell.Key/Mouse directly, so Root
@@ -206,6 +211,10 @@ func (s *Shell) Render(w, h int) string {
 func (s *Shell) Key(ev tea.KeyPressMsg) bool {
 	if s.dialogs.Modal() {
 		return s.root.HandleKey(ev)
+	}
+	if s.menuOpen && s.menuKind == "effort" {
+		s.emit(s.host.KitKey(ev))
+		return true
 	}
 	if s.jump.Active() && ev.String() == "enter" && s.host.KitComposerEmpty() {
 		s.scrollToEnd()
@@ -236,6 +245,14 @@ func (s *Shell) Mouse(ev tea.MouseMsg) bool {
 		if m.Button != tea.MouseLeft {
 			s.syncHover(m.X, m.Y)
 		}
+	}
+	if delta, wheel := kit.WheelDelta(ev); wheel && !s.dialogs.Modal() && s.menuOpen && s.menuR.Contains(ev.Mouse().X, ev.Mouse().Y) {
+		key := tea.KeyDown
+		if delta < 0 {
+			key = tea.KeyUp
+		}
+		s.emit(s.host.KitKey(tea.KeyPressMsg{Code: key}))
+		return true
 	}
 	if s.root.HandleMouse(ev, kit.Rect{}) {
 		return true
@@ -461,7 +478,7 @@ func (s *Shell) emitNotice(n tui.KitNotice) {
 		return
 	}
 	s.lastNotice = n.Text
-	if (s.pickerOpen || s.panelOpen) && n.Severity == tui.KitNoticeInfo {
+	if (s.pickerOpen || s.panelOpen || (s.menuOpen && s.menuKind == "effort")) && n.Severity == tui.KitNoticeInfo {
 		return
 	}
 	variant := kit.ToastInfo
@@ -647,9 +664,11 @@ func (s *Shell) Layout(r kit.Rect) {
 		s.menuH = m.menuH
 		s.menuR = kit.Rect{X: x, Y: y - m.menuH, W: width, H: m.menuH}
 		s.menu.Layout(s.menuR)
+		s.effort.Layout(s.menuR)
 	} else {
 		s.menuR = kit.Rect{X: x, Y: y, W: width, H: m.menuH}
 		s.menu.Layout(s.menuR)
+		s.effort.Layout(s.menuR)
 		y += m.menuH
 	}
 	s.composerR = kit.Rect{X: x, Y: y, W: width, H: m.composerH}
@@ -718,7 +737,7 @@ func (s *Shell) rebuildContent(welcome bool, contentW, transcriptH int) {
 
 // Children exposes the chrome + core bands for hit testing and revision walks.
 func (s *Shell) Children() []kit.Widget {
-	return []kit.Widget{s.tabs, s.scroll, s.jump, s.todo, s.dock, s.menu, s.composer, s.footer, s.sidebar}
+	return []kit.Widget{s.tabs, s.scroll, s.jump, s.todo, s.dock, s.menu, s.effort, s.composer, s.footer, s.sidebar}
 }
 
 // FocusTarget is nil: the shell routes but never takes focus itself.

@@ -12,7 +12,7 @@ func TestCustomizeOffersAllNamedThemes(t *testing.T) {
 	SetThemeName("default")
 	t.Cleanup(func() { SetThemeName("default") })
 	m := newPanelModel()
-	if len(customizeGroups) != 3 || customizeGroups[2].section != sectionTheme {
+	if len(customizeGroups) != 4 || customizeGroups[2].section != sectionTheme {
 		t.Fatal("theme group missing")
 	}
 	for i, choice := range themeChoices {
@@ -27,6 +27,53 @@ func TestCustomizeOffersAllNamedThemes(t *testing.T) {
 		if len(state.Items) != len(themeChoices) || state.Items[i].Footer != "(current)" {
 			t.Fatalf("theme picker projection: %+v", state)
 		}
+	}
+}
+
+func TestEffortSelectorStyleNormalizesUnknownValuesToCustom(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  effortSelectorStyle
+	}{
+		{input: "", want: effortSelectorCustom},
+		{input: "custom", want: effortSelectorCustom},
+		{input: "list", want: effortSelectorList},
+		{input: "unknown", want: effortSelectorCustom},
+	} {
+		if got := normalizeEffortSelectorStyle(test.input); got != test.want {
+			t.Errorf("normalizeEffortSelectorStyle(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestEffortSelectorStyleLoadsAndSavesNormalizedConfig(t *testing.T) {
+	t.Setenv("MYAGENT_DIR", t.TempDir())
+	for _, test := range []struct {
+		stored string
+		want   effortSelectorStyle
+	}{
+		{stored: "", want: effortSelectorCustom},
+		{stored: "list", want: effortSelectorList},
+		{stored: "removed", want: effortSelectorCustom},
+	} {
+		m := &model{}
+		m.configurePersistedSettings(&config.Config{EffortSelectorStyle: test.stored})
+		if m.effortSelectorStyle != test.want {
+			t.Errorf("loaded style for %q = %q, want %q", test.stored, m.effortSelectorStyle, test.want)
+		}
+	}
+
+	m := &model{}
+	m.configurePersistedSettings(&config.Config{})
+	if err := m.saveEffortSelectorStyle("removed"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.EffortSelectorStyle != string(effortSelectorCustom) {
+		t.Fatalf("saved unknown style = %q, want %q", saved.EffortSelectorStyle, effortSelectorCustom)
 	}
 }
 

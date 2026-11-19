@@ -145,6 +145,8 @@ type KitPickerState struct {
 	// Inline marks a panel the shell should paint inline above the composer
 	// (the typed "/" command menu) instead of as a modal dialog (ctrl+p).
 	Inline bool
+	// EffortStyle selects the composer-attached effort control.
+	EffortStyle string
 	// Footer labels. Empty values fall back to cancel/confirm/enter.
 	ConfirmLabel string
 	ConfirmKey   string

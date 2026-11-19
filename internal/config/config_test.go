@@ -254,7 +254,11 @@ func TestThemeRoundTripAndBackwardCompatibility(t *testing.T) {
 	if old.Theme != "" {
 		t.Fatalf("old config theme = %q", old.Theme)
 	}
+	if old.EffortSelectorStyle != "" {
+		t.Fatalf("old config effort selector style = %q", old.EffortSelectorStyle)
+	}
 	old.Theme = "tokyo-mocha"
+	old.EffortSelectorStyle = "list"
 	if err := Save(old); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +266,7 @@ func TestThemeRoundTripAndBackwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Theme != "tokyo-mocha" || got.DefaultModel != "local/old" {
-		t.Fatalf("theme roundtrip = %+v", got)
+	if got.Theme != "tokyo-mocha" || got.DefaultModel != "local/old" || got.EffortSelectorStyle != "list" {
+		t.Fatalf("config roundtrip = %+v", got)
 	}
 }
