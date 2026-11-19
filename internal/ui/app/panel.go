@@ -305,8 +305,55 @@ func (s *Shell) syncPanel(state tui.KitPickerState) {
 	if s.panelInput != nil {
 		s.panelInput.apply(state)
 	}
+	if s.panelEffort != nil {
+		s.panelEffort.setState(state)
+	}
 	s.setPanelButtons(state)
 	s.panelSig = sig
+}
+
+// openEffortInPalette replaces the command palette's contents in place.
+func (s *Shell) openEffortInPalette(state tui.KitPickerState) {
+	layout := s.pickerLayout
+	body := s.effortPanelBody(state)
+	s.panelInput = nil
+	s.panelKind, s.panelMode = state.Kind, state.Mode
+	s.panelSig = pickerSignature(state)
+	s.panelOpen = true
+	s.panelFooter = kit.NewDialogFooter(
+		kit.DialogButton{Label: panelCancelLabel(state), Key: "esc", Action: func() bool {
+			s.cancelPanel()
+			return true
+		}},
+		kit.DialogButton{Label: panelConfirmLabel(state), Key: "enter", Primary: true, Action: func() bool {
+			s.emit(s.host.KitKey(tea.KeyPressMsg{Code: tea.KeyEnter}))
+			return true
+		}},
+	)
+	layout.Body = body
+	layout.Footer = s.panelFooter
+	layout.SetTitle(state.Title)
+	layout.OnDismiss = s.panelDismissed
+	layout.MarkDirty()
+	s.panelLayout = layout
+	s.picker = nil
+	s.pickerLayout = nil
+	s.pickerOpen = false
+	s.pickerSig, s.pickerKind = "", ""
+	s.layoutDirty = true
+}
+
+func (s *Shell) effortPanelBody(state tui.KitPickerState) kit.Widget {
+	if state.EffortStyle == "list" {
+		s.panelList = newPanelListBody(s, state)
+		s.panelEffort = nil
+		return s.panelList
+	}
+	s.panelList = nil
+	s.panelEffort = newEffortSelector(s)
+	s.panelEffort.modal = true
+	s.panelEffort.setState(state)
+	return s.panelEffort
 }
 
 // openPanel builds the dialog surface for the active non-select panel.
@@ -324,9 +371,13 @@ func (s *Shell) openPanel(state tui.KitPickerState, sig string) {
 	var body kit.Widget
 	switch state.Mode {
 	case tui.KitPickerList:
-		s.panelList = newPanelListBody(s, state)
+		if state.Kind == "effort" {
+			body = s.effortPanelBody(state)
+		} else {
+			s.panelList = newPanelListBody(s, state)
+			body = s.panelList
+		}
 		s.panelInput = nil
-		body = s.panelList
 	case tui.KitPickerInput:
 		s.panelInput = newPanelInputBody(s, state)
 		s.panelList = nil
@@ -437,6 +488,7 @@ func (s *Shell) closePanel() {
 	}
 	s.suppressPanelCancel = false
 	s.panelList = nil
+	s.panelEffort = nil
 	s.panelInput = nil
 	s.panelLayout = nil
 	s.panelFooter = nil
@@ -463,6 +515,7 @@ func (s *Shell) panelDismissed() {
 	}
 	kind := s.panelKind
 	s.panelList = nil
+	s.panelEffort = nil
 	s.panelInput = nil
 	s.panelLayout = nil
 	s.panelFooter = nil

@@ -266,6 +266,8 @@ func (m *model) kitEffortPicker() KitPickerState {
 	state := KitPickerState{
 		Kind:         "effort",
 		Mode:         KitPickerList,
+		Inline:       !m.effort.fromPalette,
+		EffortStyle:  string(normalizeEffortSelectorStyle(string(m.effortSelectorStyle))),
 		Title:        "Reasoning effort",
 		Hint:         "↑/↓ select, enter saves as myagent default",
 		SelectedID:   strconv.Itoa(m.effort.sel),
@@ -464,6 +466,12 @@ func (m *model) KitPickerAccept(id string) tea.Cmd {
 			if item.name != id {
 				continue
 			}
+			if item.kind == commandEffort && m.picker.pinned {
+				m.picker.close()
+				_, cmd := m.openEffortPicker("")
+				m.effort.fromPalette = true
+				return cmd
+			}
 			needsInput := item.requiresArg && item.kind != commandModel && item.kind != commandEffort
 			value := item.name
 			if needsInput {
@@ -509,8 +517,8 @@ func (m *model) KitPickerAccept(id string) tea.Cmd {
 		if err != nil || index < 0 || index >= len(effortChoices) {
 			return nil
 		}
-		if m.effort.sel == index {
-			_, cmd := m.applyEffort(m.effort.selected().effort)
+		if m.effort.sel == index || !m.effort.fromPalette || normalizeEffortSelectorStyle(string(m.effortSelectorStyle)) == effortSelectorCustom {
+			_, cmd := m.applyEffort(effortChoices[index].effort)
 			return cmd
 		}
 		m.effort.sel = index

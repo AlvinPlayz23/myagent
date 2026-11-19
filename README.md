@@ -80,6 +80,13 @@ has changed.
 *Screenshots were captured from the running app using a demo configuration and
 the Tokyo Night theme.*
 
+### Effort selector style
+
+Use `/customize` → **Effort Selector** to choose the default interactive
+horizontal control or the vertical **List** above the composer. Both save the
+selected effort as your default. Ctrl+P uses the same style inside the command
+palette.
+
 ### Interface themes
 
 Use `/customize` → **Theme** to change the whole interface. Choices include the

@@ -47,11 +47,12 @@ func (h *panelTestHost) KitPickerCancel() tea.Cmd {
 
 func panelState() tui.KitPickerState {
 	return tui.KitPickerState{
-		Kind:       "effort",
-		Mode:       tui.KitPickerList,
-		Title:      "Reasoning effort",
-		Hint:       "↑/↓ select, enter saves as myagent default",
-		SelectedID: "1",
+		Kind:        "effort",
+		Mode:        tui.KitPickerList,
+		EffortStyle: "list",
+		Title:       "Reasoning effort",
+		Hint:        "↑/↓ select, enter saves as myagent default",
+		SelectedID:  "1",
 		Items: []tui.KitPickerItem{
 			{ID: "0", Title: "Low", Desc: "fast, lightweight reasoning"},
 			{ID: "1", Title: "Medium", Desc: "balanced reasoning  (current)"},
