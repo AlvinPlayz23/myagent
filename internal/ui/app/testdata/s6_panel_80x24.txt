@@ -5,9 +5,9 @@
   block line b
 
   block li
-  block li   Reasoning effort                                   esc
+  block li   Reasoning effort
 
-  block li   ↑/↓ select, enter saves as myagent default, esc cancel
+  block li   ↑/↓ select, enter saves as myagent default
   block li     Low
              ● Medium
                High

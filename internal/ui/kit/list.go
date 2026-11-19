@@ -206,7 +206,9 @@ func (l *List) windowState(h int) (start, slots int, overflow bool) {
 	if limit <= 0 {
 		return 0, 0, false
 	}
-	overflow = len(display) > limit
+	// Keep a selectable row visible in a one-line viewport. There is no room
+	// for both a row and the overflow marker at that height.
+	overflow = len(display) > limit && limit > 1
 	slots = limit
 	if overflow {
 		slots--
