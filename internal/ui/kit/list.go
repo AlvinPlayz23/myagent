@@ -40,6 +40,8 @@ type ListOpts struct {
 	MaxRows int
 	// NoMotion swaps the ● marker for the ▪ fallback.
 	NoMotion bool
+	// HideOverflow lets a surrounding scrollbar indicate additional rows.
+	HideOverflow bool
 	// Palette uses compact command-palette selection chrome.
 	Compact         bool
 	SectionDividers bool
@@ -63,6 +65,7 @@ type List struct {
 	Compact         bool
 	SectionDividers bool
 	Selected        int
+	hideOverflow    bool
 	OnChoose        func(ListRow) bool
 	Offset          int
 	cache           RenderCache
@@ -77,6 +80,7 @@ func NewList(opts ListOpts) *List {
 		Palette:         opts.Palette,
 		Compact:         opts.Compact,
 		SectionDividers: opts.SectionDividers,
+		hideOverflow:    opts.HideOverflow,
 		Selected:        -1,
 	}
 	l.BindRows(opts.Rows)
@@ -208,7 +212,7 @@ func (l *List) windowState(h int) (start, slots int, overflow bool) {
 	}
 	// Keep a selectable row visible in a one-line viewport. There is no room
 	// for both a row and the overflow marker at that height.
-	overflow = len(display) > limit && limit > 1
+	overflow = !l.hideOverflow && len(display) > limit && limit > 1
 	slots = limit
 	if overflow {
 		slots--
