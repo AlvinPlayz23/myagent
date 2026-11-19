@@ -237,6 +237,14 @@ func (s *Shell) Mouse(ev tea.MouseMsg) bool {
 			s.syncHover(m.X, m.Y)
 		}
 	}
+	if delta, wheel := kit.WheelDelta(ev); wheel && !s.dialogs.Modal() && s.menuOpen && s.menuR.Contains(ev.Mouse().X, ev.Mouse().Y) {
+		key := tea.KeyDown
+		if delta < 0 {
+			key = tea.KeyUp
+		}
+		s.emit(s.host.KitKey(tea.KeyPressMsg{Code: key}))
+		return true
+	}
 	if s.root.HandleMouse(ev, kit.Rect{}) {
 		return true
 	}
