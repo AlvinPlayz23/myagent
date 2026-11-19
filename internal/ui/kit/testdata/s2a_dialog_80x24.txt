@@ -5,7 +5,7 @@
  ┃
  ┃  The pack contains many widgets with borders and padded surfaces. This
  ┃  paragr                                                            th-
- ┃  aware    Select a model                                           al
+ ┃  aware    ◆ Select a model                                         al
  ┃  sizes.
  ┃           search models
  ┃

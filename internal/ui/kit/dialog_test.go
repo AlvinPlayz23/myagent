@@ -353,7 +353,7 @@ func TestDialogChromeText(t *testing.T) {
 	lines := strings.Split(ansi.Strip(d.Render(60, 14)), "\n")
 
 	header := strings.TrimRight(lines[1], " ")
-	if got := strings.TrimLeft(header, " "); !strings.HasPrefix(got, "Pick a model") {
+	if got := strings.TrimLeft(header, " "); !strings.HasPrefix(got, "◆ Pick a model") {
 		t.Fatalf("header = %q, want the title first", header)
 	}
 	if strings.HasSuffix(header, " esc") {

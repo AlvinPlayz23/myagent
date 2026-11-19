@@ -5,9 +5,9 @@
 
 
 
-             Commands                                           esc
+             ◆ Commands                                         esc
 
-             Search commands…
+              ⌕ Search commands…
 
              ──────────────────────────────────────────── Suggested
              › /models
@@ -16,7 +16,7 @@
              ──────────────────────────────────── Tools & interface
                /tools
 
-             ──────────────────────────────────────────────────────
+             ────────
              Switch model
 
 

@@ -23,7 +23,7 @@ func RenderMenuDetails(description string, w, h int) string {
 		line = ansi.Truncate(line, w, "…")
 		return fitBlock(lipgloss.NewStyle().Foreground(th.Text.Muted.Color()).Render(line), w, h)
 	}
-	rule := lipgloss.NewStyle().Foreground(th.Border.Base.Color()).Render(strings.Repeat("─", w))
+	rule := lipgloss.NewStyle().Foreground(th.Border.Base.Color()).Render(strings.Repeat("─", min(w, 8)))
 	lines := strings.Split(ansi.Wrap(description, w, ""), "\n")
 	if len(lines) > h-1 {
 		lines = lines[:h-1]

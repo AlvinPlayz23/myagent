@@ -640,11 +640,21 @@ func (l *DialogLayout) Render(w, h int) string {
 		origin := l.Bounds()
 		if l.Title != "" && !l.header.Empty() {
 			hx, hy := l.header.X-origin.X, l.header.Y-origin.Y
-			drawStyled(cv, hx, hy, l.header.W, l.Title,
-				lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
 			hint := l.escHint()
-			if hw := ansi.StringWidth(hint); hw > 0 {
-				drawStyled(cv, hx+l.header.W-hw, hy, hw, hint,
+			hintW := ansi.StringWidth(hint)
+			titleW := l.header.W
+			if hintW > 0 {
+				titleW -= hintW + 1
+			}
+			if titleW >= 10 {
+				putGlyph(cv, hx, hy, "◆", th.Text.Action.Primary.Color())
+				hx += 2
+				titleW -= 2
+			}
+			drawStyled(cv, hx, hy, titleW, l.Title,
+				lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
+			if hintW > 0 {
+				drawStyled(cv, l.header.X-origin.X+l.header.W-hintW, hy, hintW, hint,
 					lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 			}
 		}
@@ -861,6 +871,9 @@ func (f *DialogFooter) Render(w, h int) string {
 			}
 			if i == f.hover {
 				fillCells(cv, x, y, r.W, th.Background.Raised.High.Color())
+			} else if b.Primary {
+				surface := tui.Tint(th.Background.Raised.Base, th.Text.Action.Primary, 0.12)
+				fillCells(cv, x, y, r.W, surface.Color())
 			}
 			fg := tokenOr(f.Fg, th.Text.Muted)
 			style := lipgloss.NewStyle().Foreground(fg.Color())
@@ -1114,17 +1127,20 @@ func (s *DialogSelect) Render(w, h int) string {
 	return s.cache.Render(w, h, subtreeRev(s), func() string {
 		th := DefaultTheme()
 		cv := lipgloss.NewCanvas(w, h)
-		if string(s.query) == "" {
-			label := s.Placeholder
+		label, fg := s.Query(), th.Text.Base
+		if label == "" {
+			label, fg = s.Placeholder, th.Text.Muted
 			if label == "" {
 				label = "Search"
 			}
-			drawStyled(cv, 0, 0, w, label,
-				lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
-		} else {
-			drawStyled(cv, 0, 0, w, string(s.query),
-				lipgloss.NewStyle().Foreground(th.Text.Base.Color()))
 		}
+		searchX := 0
+		if s.Palette && w >= 10 {
+			fillCells(cv, 0, 0, w, th.Background.Raised.High.Color())
+			putGlyph(cv, 1, 0, "⌕", th.Text.Action.Primary.Color())
+			searchX = 3
+		}
+		drawStyled(cv, searchX, 0, w-searchX, label, lipgloss.NewStyle().Foreground(fg.Color()))
 		drawWidget(cv, s.list, s.list.Bounds(), s.Bounds())
 		if s.Details && h >= 8 {
 			if row, ok := s.list.SelectedRow(); ok {
