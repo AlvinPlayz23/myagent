@@ -820,3 +820,22 @@ func TestCommandSectionDividersStayCompactAndSkipSelection(t *testing.T) {
 		t.Fatal("description did not follow selection")
 	}
 }
+
+func TestDialogHeaderKeepsEscapeSeparateFromLongTitle(t *testing.T) {
+	d := NewDialogLayout(DialogLayoutOpts{Title: "Choose from your configured providers"})
+	d.Layout(Rect{W: 24, H: 8})
+	line := strings.TrimSpace(strings.Split(ansi.Strip(d.Render(24, 8)), "\n")[1])
+	if !strings.HasSuffix(line, "… esc") {
+		t.Fatalf("header = %q, want truncated title followed by a separate Esc hint", line)
+	}
+}
+
+func TestDialogSearchShowsEndOfLongQuery(t *testing.T) {
+	sel := NewDialogSelect(DialogSelectOpts{Palette: true})
+	sel.SetQuery("provider/日本語/model")
+	sel.Layout(Rect{W: 9, H: 6})
+	line := strings.TrimSpace(strings.Split(ansi.Strip(sel.Render(9, 6)), "\n")[0])
+	if !strings.HasPrefix(line, "…") || !strings.HasSuffix(line, "/model") {
+		t.Fatalf("search = %q, want the latest input visible", line)
+	}
+}
