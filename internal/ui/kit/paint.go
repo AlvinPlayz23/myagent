@@ -85,6 +85,15 @@ func drawWidget(c *lipgloss.Canvas, w Widget, abs, origin Rect) {
 	drawCells(c, out, abs.X-origin.X, abs.Y-origin.Y, abs.W, abs.H)
 }
 
+// PaintWidgets paints visible widgets in order at their laid-out screen bounds.
+func PaintWidgets(c *lipgloss.Canvas, widgets ...Widget) {
+	for _, w := range widgets {
+		if w != nil && WidgetVisible(w) {
+			drawWidget(c, w, WidgetBounds(w), Rect{})
+		}
+	}
+}
+
 // drawText paints a styled one-line label at a fixed cell.
 // OpenTUI counterpart: fg/bg on a text renderable.
 func drawText(c *lipgloss.Canvas, x, y, w int, s string, fg color.Color) {

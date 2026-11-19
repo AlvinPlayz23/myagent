@@ -3,6 +3,7 @@ package kit
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"sort"
 
 	"github.com/AlvinPlayz23/myagent/internal/tui"
 )
@@ -264,6 +265,7 @@ func (b *ScrollBox) ScrollBy(delta int) {
 	if delta == 0 {
 		return
 	}
+	before := b.scrollTop
 	maxScroll := b.MaxScroll()
 	switch b.target {
 	case targetEnd:
@@ -295,6 +297,9 @@ func (b *ScrollBox) ScrollBy(delta int) {
 		}
 	}
 	b.stickyActive = b.atStickyEdge()
+	if b.scrollTop != before {
+		b.MarkDirty()
+	}
 }
 
 // Key implements the OpenTUI scroll keymap: line +/-1, ctrl/shift/alt + arrow
@@ -321,7 +326,6 @@ func (b *ScrollBox) Key(ev tea.KeyPressMsg) bool {
 	default:
 		return false
 	}
-	b.MarkDirty()
 	return true
 }
 
@@ -333,7 +337,6 @@ func (b *ScrollBox) Mouse(ev tea.MouseMsg, _ Rect) bool {
 		return false
 	}
 	b.ScrollBy(delta)
-	b.MarkDirty()
 	return true
 }
 
@@ -357,19 +360,12 @@ func (b *ScrollBox) paint(cv *lipgloss.Canvas, w, h int) {
 	}
 	top := b.scrollTop
 	bottom := top + h
-	start, end := 0, len(b.Items)
-	for i := 0; i < len(b.Items); i++ {
-		if b.offsets[i]+b.heights[i] > top {
-			start = i
-			break
-		}
-	}
-	for i := start; i < len(b.Items); i++ {
-		if b.offsets[i] >= bottom {
-			end = i
-			break
-		}
-	}
+	start := sort.Search(len(b.Items), func(i int) bool {
+		return b.offsets[i]+b.heights[i] > top
+	})
+	end := sort.Search(len(b.Items), func(i int) bool {
+		return b.offsets[i] >= bottom
+	})
 	if start > 0 {
 		start-- // one item of overscan above
 	}

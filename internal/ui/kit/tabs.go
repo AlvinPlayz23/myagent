@@ -123,15 +123,25 @@ func (t *Tabs) has(id string) bool {
 func (t *Tabs) Layout(r Rect) {
 	t.SetBounds(r)
 	t.rects = t.rects[:0]
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	end := r.X + r.W
 	x := r.X
 	for i, item := range t.Items {
-		w := t.tabWidth(item)
+		available := end - x
+		if available <= 0 {
+			break
+		}
+		w := min(t.tabWidth(item), available)
 		t.rects = append(t.rects, Rect{X: x, Y: r.Y, W: w, H: 1})
 		x += w
-		if i < len(t.Items)-1 {
-			x++ // separator column
+		if w < t.tabWidth(item) || i == len(t.Items)-1 || x >= end {
+			break
 		}
-		if x >= r.X+r.W {
+		if i < len(t.Items)-1 && x+1 < end {
+			x++ // separator column
+		} else {
 			break
 		}
 	}
@@ -189,6 +199,18 @@ func (t *Tabs) Render(w, h int) string {
 			style := lipgloss.NewStyle().Foreground(fg.Color())
 			if active {
 				style = style.Bold(true)
+			}
+			frameW := 2
+			if item.Busy {
+				frameW += 2
+			}
+			if item.Unread {
+				frameW += 2
+			}
+			if r.W < frameW+1 {
+				title := ansi.Truncate(tabTitle(item.Title), r.W, "…")
+				drawStyled(cv, x, 0, r.W, title, style)
+				continue
 			}
 			cursor := x + 1
 			if item.Busy {
