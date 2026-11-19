@@ -19,15 +19,19 @@ func (s *Shell) syncPicker() {
 		s.closeCommandMenu()
 		return
 	}
-	// A typed "/" gets the inline command menu above the composer; ctrl+p
-	// keeps the modal palette. Both paths close the other surface.
-	if state.Kind == "commands" && state.Inline {
+	// Slash commands and their effort selector share the composer menu;
+	// the ctrl+p path stays in a modal.
+	if state.Inline && (state.Kind == "commands" || state.Kind == "effort") {
 		s.closePicker()
 		s.closePanel()
 		s.syncCommandMenu(state)
 		return
 	}
 	s.closeCommandMenu()
+	if state.Kind == "effort" && !state.Inline && s.pickerOpen && s.pickerKind == "commands" {
+		s.openEffortInPalette(state)
+		return
+	}
 	if state.Mode == tui.KitPickerSelect {
 		s.closePanel()
 		s.syncSelectPicker(state)
@@ -191,6 +195,7 @@ func pickerSignature(state tui.KitPickerState) string {
 	write(state.Placeholder)
 	write(state.Query)
 	write(state.SelectedID)
+	write(state.EffortStyle)
 	write(strconv.Itoa(int(state.Mode)))
 	write(state.Body)
 	write(state.Input)

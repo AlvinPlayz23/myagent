@@ -12,7 +12,7 @@ func TestCustomizeOffersAllNamedThemes(t *testing.T) {
 	SetThemeName("default")
 	t.Cleanup(func() { SetThemeName("default") })
 	m := newPanelModel()
-	if len(customizeGroups) != 3 || customizeGroups[2].section != sectionTheme {
+	if len(customizeGroups) != 4 || customizeGroups[2].section != sectionTheme {
 		t.Fatal("theme group missing")
 	}
 	for i, choice := range themeChoices {
@@ -26,6 +26,22 @@ func TestCustomizeOffersAllNamedThemes(t *testing.T) {
 		state, _ := m.KitPicker()
 		if len(state.Items) != len(themeChoices) || state.Items[i].Footer != "(current)" {
 			t.Fatalf("theme picker projection: %+v", state)
+		}
+	}
+}
+
+func TestEffortSelectorStyleNormalizesUnknownValuesToCustom(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  effortSelectorStyle
+	}{
+		{input: "", want: effortSelectorCustom},
+		{input: "custom", want: effortSelectorCustom},
+		{input: "list", want: effortSelectorList},
+		{input: "unknown", want: effortSelectorCustom},
+	} {
+		if got := normalizeEffortSelectorStyle(test.input); got != test.want {
+			t.Errorf("normalizeEffortSelectorStyle(%q) = %q, want %q", test.input, got, test.want)
 		}
 	}
 }

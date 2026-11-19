@@ -27,6 +27,7 @@ func TestConfigCallbacksPreserveExternalUpdates(t *testing.T) {
 	for _, save := range []func() error{
 		func() error { return m.saveWelcomeStyle(welcomeStyle("default")) },
 		func() error { return m.savePromptStyle(promptStyle("default")) },
+		func() error { return m.saveEffortSelectorStyle(effortSelectorList) },
 		func() error { return m.saveDefaultEffort(llm.Effort("high")) },
 	} {
 		if err := save(); err != nil {
@@ -46,7 +47,7 @@ func TestConfigCallbacksPreserveExternalUpdates(t *testing.T) {
 	if got.Theme != "tokyo-mocha" {
 		t.Fatalf("theme not saved: %q", got.Theme)
 	}
-	if got.WelcomeStyle != "default" || got.PromptStyle != "default" || got.DefaultEffort != "high" {
+	if got.WelcomeStyle != "default" || got.PromptStyle != "default" || got.DefaultEffort != "high" || got.EffortSelectorStyle != "list" {
 		t.Fatal("TUI callbacks did not persist their settings")
 	}
 	if err := m.saveDisabledTools([]string{"write"}); err != nil {

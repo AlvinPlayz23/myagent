@@ -19,6 +19,7 @@ func (m *model) configurePersistedSettings(persisted *config.Config) {
 		})
 	}
 	m.promptStyle = normalizePromptStyle(persisted.PromptStyle)
+	m.effortSelectorStyle = normalizeEffortSelectorStyle(persisted.EffortSelectorStyle)
 	m.themeName = normalizeThemeName(persisted.Theme)
 	if m.th != nil {
 		m.setTheme(m.themeName)
@@ -26,6 +27,12 @@ func (m *model) configurePersistedSettings(persisted *config.Config) {
 	m.savePromptStyle = func(style promptStyle) error {
 		return config.Update(func(cfg *config.Config) error {
 			cfg.PromptStyle = string(style)
+			return nil
+		})
+	}
+	m.saveEffortSelectorStyle = func(style effortSelectorStyle) error {
+		return config.Update(func(cfg *config.Config) error {
+			cfg.EffortSelectorStyle = string(normalizeEffortSelectorStyle(string(style)))
 			return nil
 		})
 	}

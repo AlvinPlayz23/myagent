@@ -197,6 +197,7 @@ const (
 	sectionStartup customizeSection = iota
 	sectionComposer
 	sectionTheme
+	sectionEffortSelector
 )
 
 // customizeGroup is one top-level entry of the /customize panel. Selecting it
@@ -211,6 +212,7 @@ var customizeGroups = []customizeGroup{
 	{section: sectionStartup, label: "Startup Style", description: "empty-session welcome"},
 	{section: sectionComposer, label: "Composer (Prompt Box)", description: "where you type"},
 	{section: sectionTheme, label: "Theme", description: "colors for the entire interface"},
+	{section: sectionEffortSelector, label: "Effort Selector", description: "choose the effort control"},
 }
 
 // customizeRow is one selectable choice within a group.
@@ -221,10 +223,17 @@ type customizeRow struct {
 	welcome     welcomeStyle
 	prompt      promptStyle
 	themeName   string
+	effortStyle effortSelectorStyle
 }
 
 // customizeChoices returns the selectable choices belonging to a group.
 func customizeChoices(section customizeSection) []customizeRow {
+	if section == sectionEffortSelector {
+		return []customizeRow{
+			{section: sectionEffortSelector, label: "Interactive", description: "compact horizontal selector", effortStyle: effortSelectorCustom},
+			{section: sectionEffortSelector, label: "List", description: "vertical list above the composer", effortStyle: effortSelectorList},
+		}
+	}
 	if section == sectionTheme {
 		rows := make([]customizeRow, 0, len(themeChoices))
 		for _, choice := range themeChoices {
@@ -367,12 +376,14 @@ var effortChoices = []effortChoice{
 }
 
 type effortPicker struct {
-	active bool
-	sel    int
+	active      bool
+	fromPalette bool
+	sel         int
 }
 
 func (p *effortPicker) open(current llm.Effort) {
 	p.active = true
+	p.fromPalette = false
 	p.sel = 0
 	for i, choice := range effortChoices {
 		if choice.effort == current {
@@ -492,18 +503,20 @@ type model struct {
 	// endpoint. It returns an error when the provider is unreachable; the
 	// catalog-backed list stays usable either way. The context lets an
 	// in-flight lookup die with the session.
-	discoverModels     func(context.Context, string) ([]string, error)
-	discovering        string // provider currently being live-discovered, "" = idle
-	providerConfigured func(string) bool
-	providerIsCustom   func(string) bool
-	providerAPIKey     func(string) string
-	configureProvider  func(modelcatalog.Provider, string) error
-	saveWelcomeStyle   func(welcomeStyle) error
-	savePromptStyle    func(promptStyle) error
-	saveTheme          func(string) error
-	themeName          string
-	saveDefaultEffort  func(llm.Effort) error
-	defaultEffort      llm.Effort
+	discoverModels          func(context.Context, string) ([]string, error)
+	discovering             string // provider currently being live-discovered, "" = idle
+	providerConfigured      func(string) bool
+	providerIsCustom        func(string) bool
+	providerAPIKey          func(string) string
+	configureProvider       func(modelcatalog.Provider, string) error
+	saveWelcomeStyle        func(welcomeStyle) error
+	savePromptStyle         func(promptStyle) error
+	effortSelectorStyle     effortSelectorStyle
+	saveEffortSelectorStyle func(effortSelectorStyle) error
+	saveTheme               func(string) error
+	themeName               string
+	saveDefaultEffort       func(llm.Effort) error
+	defaultEffort           llm.Effort
 	// disabledTools is the /tools deny list, applied on top of whatever
 	// base or profile registry is active (a profile cannot re-enable a tool).
 	disabledTools     []string
@@ -1108,9 +1121,9 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.effort.active {
 		switch ks {
-		case "up":
+		case "up", "left":
 			m.effort.move(-1)
-		case "down":
+		case "down", "right":
 			m.effort.move(1)
 		case "enter":
 			return m.applyEffort(m.effort.selected().effort)
@@ -2082,6 +2095,19 @@ func (m *model) applyCustomizeSelection() (tea.Model, tea.Cmd) {
 	if row.section == sectionTheme {
 		return m.applyTheme(row)
 	}
+	if row.section == sectionEffortSelector {
+		if m.saveEffortSelectorStyle != nil {
+			if err := m.saveEffortSelectorStyle(row.effortStyle); err != nil {
+				m.statusMsg = "Could not save customization: " + err.Error()
+				return m, nil
+			}
+		}
+		m.effortSelectorStyle = row.effortStyle
+		m.customize.close()
+		m.statusMsg = "Effort selector set to " + row.label + "."
+		m.updateLayout()
+		return m, nil
+	}
 	if row.section == sectionComposer {
 		return m.applyPromptStyle(row)
 	}
@@ -2355,7 +2381,7 @@ func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
 		return m.applyEffort(effort)
 	}
 	m.effort.open(m.runner.cfg.Effort)
-	m.statusMsg = "Choose reasoning effort — saved as the myagent default."
+	m.statusMsg = "Choose reasoning effort — Enter saves it as the myagent default."
 	m.updateLayout()
 	return m, nil
 }
@@ -3351,6 +3377,9 @@ func (m *model) renderCustomizeChoices(height int) string {
 
 // rowIsCurrent reports whether a row holds the value its group is set to.
 func (m *model) rowIsCurrent(row customizeRow) bool {
+	if row.section == sectionEffortSelector {
+		return normalizeEffortSelectorStyle(string(m.effortSelectorStyle)) == row.effortStyle
+	}
 	if row.section == sectionTheme {
 		return normalizeThemeName(m.themeName) == row.themeName
 	}
