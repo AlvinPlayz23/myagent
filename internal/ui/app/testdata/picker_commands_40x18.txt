@@ -2,15 +2,15 @@
 
 
 
-    Commands                     esc
+    ◆ Commands                   esc
 
-    Search commands…
+     ⌕ Search commands…
 
     ────────────────────── Suggested
     › /models
     …
 
-    ────────────────────────────────
+    ────────
     Switch model
 
 

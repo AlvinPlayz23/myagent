@@ -9,9 +9,9 @@
 
 
 
-                                 Select a model                                     esc
+                                 ◆ Select a model                                   esc
 
-                                 Search models…
+                                  ⌕ Search models…
 
                                  P
                                    alpha                                             8k
@@ -20,7 +20,7 @@
                                  Q
                                    gamma
 
-                                 ──────────────────────────────────────────────────────
+                                 ────────
                                  p/b
 
 

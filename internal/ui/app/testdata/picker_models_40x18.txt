@@ -2,15 +2,15 @@
 
 
 
-    Select a model               esc
+    ◆ Select a model             esc
 
-    Search models…
+     ⌕ Search models…
 
       alpha                       8k
     › beta          ✓ current · 200k
     …
 
-    ────────────────────────────────
+    ────────
     p/b
 
 

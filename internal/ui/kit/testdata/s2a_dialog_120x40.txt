@@ -9,7 +9,7 @@
  ┃
  ┃
  ┃
- ┃                               Select a model
+ ┃                               ◆ Select a model
  ┃
  ┃                               search models
  ┃
