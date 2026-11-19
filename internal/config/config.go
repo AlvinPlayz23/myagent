@@ -73,13 +73,14 @@ type ProviderConfig struct {
 // DefaultEffort persists the /effort selection across restarts; empty means
 // use the provider default.
 type Config struct {
-	Providers     map[string]ProviderConfig `json:"providers"`
-	DefaultModel  string                    `json:"default_model"`
-	DefaultEffort string                    `json:"default_effort,omitempty"`
-	Retry         *RetryConfig              `json:"retry,omitempty"`
-	WelcomeStyle  string                    `json:"welcomeStyle,omitempty"`
-	PromptStyle   string                    `json:"promptStyle,omitempty"`
-	Theme         string                    `json:"theme,omitempty"`
+	Providers           map[string]ProviderConfig `json:"providers"`
+	DefaultModel        string                    `json:"default_model"`
+	DefaultEffort       string                    `json:"default_effort,omitempty"`
+	EffortSelectorStyle string                    `json:"effort_selector_style,omitempty"`
+	Retry               *RetryConfig              `json:"retry,omitempty"`
+	WelcomeStyle        string                    `json:"welcomeStyle,omitempty"`
+	PromptStyle         string                    `json:"promptStyle,omitempty"`
+	Theme               string                    `json:"theme,omitempty"`
 	// DisabledTools lists tool names hidden from the model. Unknown names are
 	// ignored; new tools default to enabled, so this stays a deny list.
 	DisabledTools []string `json:"disabledTools,omitempty"`

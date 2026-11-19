@@ -186,6 +186,7 @@ func TestKitPickerAcceptSelectsThenActivates(t *testing.T) {
 	t.Run("effort", func(t *testing.T) {
 		m := newPanelModel()
 		m.effort.open(llm.EffortLow)
+		m.effort.fromPalette = true
 		if cmd := m.KitPickerAccept("4"); cmd != nil {
 			t.Fatal("selection move returned a command")
 		}
@@ -390,5 +391,55 @@ func TestKitKeyStillReachesLegacyPanels(t *testing.T) {
 	}
 	if m.effort.active {
 		t.Fatal("esc did not close the effort panel")
+	}
+}
+
+func TestEffortPickerOriginAndInlineClick(t *testing.T) {
+	m := newPanelModel()
+	m.runner = newRunner(agent.Config{Effort: llm.EffortLow}, newMsgQueue(), nil)
+	m.effort.open(llm.EffortLow)
+	state, _ := m.KitPicker()
+	if !state.Inline {
+		t.Fatal("typed effort should be inline")
+	}
+	m.KitPickerAccept("4")
+	if m.effort.active || m.runner.cfg.Effort != llm.EffortHigh {
+		t.Fatalf("inline click did not apply high: active=%v effort=%q", m.effort.active, m.runner.cfg.Effort)
+	}
+	m.input.SetValue("keep this draft")
+	m.openCommandPalette()
+	m.KitPickerAccept("/effort")
+	state, ok := m.KitPicker()
+	if !ok || state.Kind != "effort" || state.Inline || m.input.Value() != "keep this draft" {
+		t.Fatalf("palette effort = %+v, active=%v, draft=%q", state, ok, m.input.Value())
+	}
+	m.KitPickerCancel()
+	if m.effort.active || m.input.Value() != "keep this draft" {
+		t.Fatal("cancel should preserve the draft")
+	}
+}
+
+func TestCustomizeEffortSelectorStyle(t *testing.T) {
+	m := newPanelModel()
+	if got := m.currentCustomizeChoice(3); got != 0 {
+		t.Fatalf("default style index = %d, want interactive", got)
+	}
+	var saved effortSelectorStyle
+	m.saveEffortSelectorStyle = func(style effortSelectorStyle) error {
+		saved = style
+		return nil
+	}
+	m.customize.open()
+	m.customize.sel = 3
+	m.confirmCustomize()
+	m.customize.sel = 1
+	m.confirmCustomize()
+	if saved != effortSelectorList || m.effortSelectorStyle != effortSelectorList || m.customize.active {
+		t.Fatalf("saved=%q current=%q open=%v", saved, m.effortSelectorStyle, m.customize.active)
+	}
+	m.effort.open(llm.EffortLow)
+	state, _ := m.KitPicker()
+	if state.EffortStyle != "list" {
+		t.Fatalf("projected style = %q, want list", state.EffortStyle)
 	}
 }
