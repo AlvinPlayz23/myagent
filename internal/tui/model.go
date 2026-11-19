@@ -367,12 +367,14 @@ var effortChoices = []effortChoice{
 }
 
 type effortPicker struct {
-	active bool
-	sel    int
+	active      bool
+	fromPalette bool
+	sel         int
 }
 
 func (p *effortPicker) open(current llm.Effort) {
 	p.active = true
+	p.fromPalette = false
 	p.sel = 0
 	for i, choice := range effortChoices {
 		if choice.effort == current {
