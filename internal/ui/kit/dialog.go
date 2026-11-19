@@ -640,11 +640,16 @@ func (l *DialogLayout) Render(w, h int) string {
 		origin := l.Bounds()
 		if l.Title != "" && !l.header.Empty() {
 			hx, hy := l.header.X-origin.X, l.header.Y-origin.Y
-			drawStyled(cv, hx, hy, l.header.W, l.Title,
-				lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
 			hint := l.escHint()
-			if hw := ansi.StringWidth(hint); hw > 0 {
-				drawStyled(cv, hx+l.header.W-hw, hy, hw, hint,
+			hintW := ansi.StringWidth(hint)
+			titleW := l.header.W
+			if hintW > 0 {
+				titleW -= hintW + 1
+			}
+			drawStyled(cv, hx, hy, titleW, l.Title,
+				lipgloss.NewStyle().Bold(true).Foreground(th.Text.Strong.Color()))
+			if hintW > 0 {
+				drawStyled(cv, hx+l.header.W-hintW, hy, hintW, hint,
 					lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 			}
 		}
@@ -1122,7 +1127,11 @@ func (s *DialogSelect) Render(w, h int) string {
 			drawStyled(cv, 0, 0, w, label,
 				lipgloss.NewStyle().Foreground(th.Text.Muted.Color()))
 		} else {
-			drawStyled(cv, 0, 0, w, string(s.query),
+			query := s.Query()
+			if width := ansi.StringWidth(query); width > w {
+				query = "…" + ansi.TruncateLeft(query, width-w+1, "")
+			}
+			drawStyled(cv, 0, 0, w, query,
 				lipgloss.NewStyle().Foreground(th.Text.Base.Color()))
 		}
 		drawWidget(cv, s.list, s.list.Bounds(), s.Bounds())
