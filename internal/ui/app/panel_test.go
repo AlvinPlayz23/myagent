@@ -169,6 +169,21 @@ func TestShellPanelWheelMovesSelection(t *testing.T) {
 	}
 }
 
+func TestPanelListKeepsChoiceVisibleInOneLineBody(t *testing.T) {
+	host := newPanelHost(panelState())
+	s := newShell(host)
+	body := newPanelListBody(s, host.state)
+	body.Layout(kit.Rect{W: 40, H: 1})
+
+	got := ansi.Strip(body.Render(40, 1))
+	if !strings.Contains(got, "Medium") {
+		t.Fatalf("one-line panel hides selected choice: %q", got)
+	}
+	if bounds := body.list.Bounds(); bounds.H != 1 {
+		t.Fatalf("one-line panel list height = %d, want 1", bounds.H)
+	}
+}
+
 func TestShellPanelBackdropCancel(t *testing.T) {
 	host := newPanelHost(panelState())
 	s := newShell(host)

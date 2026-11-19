@@ -421,7 +421,11 @@ func (r *Root) compose(w, h int) string {
 				applyScrim(cv, full, tok, alpha)
 			}
 		}
-		drawWidget(cv, l.w, WidgetBounds(l.w), full)
+		if direct, ok := l.w.(interface{ PaintInto(*lipgloss.Canvas) }); ok {
+			direct.PaintInto(cv)
+		} else {
+			drawWidget(cv, l.w, WidgetBounds(l.w), full)
+		}
 	}
 	return padCanvas(cv, w, h)
 }
