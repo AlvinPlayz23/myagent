@@ -1,66 +1,29 @@
 # myagent
 
-A Go coding agent. Headless **print mode** for one-shot prompts, an
-interactive **TUI** rendered by **GoTUI** — myagent's own retained-mode
-terminal UI engine — for multi-turn work, and a **server mode** exposing
-multiple concurrent sessions over WebSocket JSON-RPC. Speaks the OpenAI
-streaming protocol against any compatible endpoint (OpenAI, Ollama, LM Studio,
-vLLM, etc.).
+A Go coding agent for terminal conversations, one-shot prompts, and applications
+that need a WebSocket API. Use a hosted OpenAI-compatible provider or connect
+to a local server such as Ollama, LM Studio, or vLLM.
 
-Earlier releases drew the interface with Charmbracelet's [Bubbletea][btea] and
-Lip Gloss; GoTUI grew out of that work and now owns the widget tree, layout,
-hit-testing, and screen composition.
+![myagent home screen with the prompt composer and model indicator in Tokyo Night](docs/screenshots/home.png)
 
-[btea]: https://github.com/charmbracelet/bubbletea
+[Quick start](#quick-start) · [Installation](#installation) · [GoTUI](#gotui) ·
+[Usage](#usage) · [Configuration](#configuration) · [Sessions](#sessions) ·
+[Server mode](#server-mode) · [Development](#development)
 
----
+## Quick start
 
-## TL;DR
+After [installing](#installation), run `myagent` from the project you want to
+work in. On first launch, choose an OpenAI-compatible endpoint and model, and
+enter an API key if the endpoint requires one. Configuration is saved under
+`$MYAGENT_DIR` (by default, `~/.myagent`).
 
 ```bash
-# First run opens setup, which creates ~/.myagent/config.json.
-# Interactive TUI (default mode, no args)
-go run .
-
-# Quick smoke (no API key needed)
-go run . sessions        # list persisted sessions, exits cleanly
+myagent                         # Start an interactive session
+myagent -p "Explain this repo"  # Run a one-shot prompt
+myagent sessions                # List saved sessions; no API key needed
 ```
 
-Everything below assumes you `cd`-ed into this repo.
-
----
-
-## The GoTUI engine
-
-The interactive TUI is drawn by **GoTUI**, the custom terminal UI engine that
-ships with myagent. The widget toolkit lives in `internal/ui/kit` and the
-composed shell in `internal/ui/app`.
-
-GoTUI is retained-mode: every widget keeps its own state and bounds, the shell
-lays out a widget tree, and a central hit registry routes mouse input. Only
-dirty frames are recomposited, which is what makes the interface feel like a
-terminal DOM — clipped widget bounds, Z-ordered layers, a dialog stack, a
-scrollable transcript, an inline slash-command menu, hover states, toasts, and
-live theme swaps — without repainting the whole screen on every keystroke.
-
-The project previously built its TUI on Charmbracelet's Bubbletea and Lip
-Gloss. That legacy renderer remains available for one release with
-`MYAGENT_UI=legacy` (see [TUI renderer](#tui-renderer)).
-
----
-
-## Prerequisites 
-
-- **Go** — see `go.mod` for the minimum toolchain version.
-- An API key for at least one configured **OpenAI-compatible provider**. First
-  run collects an OpenAI-compatible provider. The initial endpoint is
-  `https://api.openai.com/v1` and model is `gpt-5.5`.
-- A real terminal for the TUI:
-  - macOS / Linux: any modern terminal.
-  - Windows: **Windows Terminal** (ConPTY + 24-bit color). PowerShell
-    ISE won't render the alt-screen UI.
-
----
+Running from a source checkout? Replace `myagent` with `go run .`.
 
 ## Installation
 
@@ -74,17 +37,193 @@ curl -fsSL https://raw.githubusercontent.com/AlvinPlayz23/myagent/main/install.s
 irm https://raw.githubusercontent.com/AlvinPlayz23/myagent/main/install.ps1 | iex
 ```
 
----
+### Build from source
 
-## Setup (Manual)
+Install [Go](https://go.dev/dl/) (see [`go.mod`](go.mod) for the required
+version), then:
 
 ```bash
-git clone https://github.com/AlvinPlayz23/myagent.git myagent
+git clone https://github.com/AlvinPlayz23/myagent.git
 cd myagent
-go mod download         # pull bubble/lipgloss/glamour deps
+go run .
 ```
 
----
+Use a modern terminal for the interactive UI. On Windows, use Windows Terminal
+rather than PowerShell ISE.
+
+## GoTUI
+
+GoTUI is myagent’s default terminal interface. It’s a widget toolkit built on
+[Bubble Tea](https://github.com/charmbracelet/bubbletea) and Lip Gloss, not a
+separate application. It gives the prompt, transcript, menus, and dialogs their
+own state and screen bounds. The shell lays them out together, routes clicks to
+the visible widget under the pointer, and reuses the last frame when nothing
+has changed.
+
+- **Stay in the conversation.** The transcript follows new output until you
+  scroll up. Use Page Up and Page Down to browse, or Ctrl+G to jump back to the
+  latest output.
+- **Find actions from the prompt.** Type `/` for inline suggestions or press
+  **Ctrl+P** to search commands. Open `/models` to switch models or
+  `/customize` to change startup art, composer style, and theme.
+- **See what’s queued.** Image attachments and follow-up messages appear above
+  the composer. Short dialogs prioritize the selected choice over optional help.
+
+### Command palette
+
+![GoTUI command palette with searchable actions and help for the selected command](docs/screenshots/commands.png)
+
+### Customize
+
+![GoTUI Customize dialog with the Theme option highlighted](docs/screenshots/customize.png)
+
+*Screenshots were captured from the running app using a demo configuration and
+the Tokyo Night theme.*
+
+### Interface themes
+
+Use `/customize` → **Theme** to change the whole interface. Choices include the
+existing adaptive Default plus **Tokyo Night**, **Catppuccin Mocha**, **Kanagawa**,
+**Vesper**, **Osaka Jade**, **Rosé Pine**, **Vercel**, and **Tokyo Mocha**.
+Tokyo Mocha combines Tokyo Night's blue-black surfaces with Catppuccin Mocha's
+text, mauve accent, and pastel syntax colors. Named palettes are intentionally
+dark; Default continues to follow the terminal's light/dark appearance.
+
+Choosing a theme recolors the current session and is saved in the `theme` field
+of `config.json`, independently of startup art, composer style, models, or tools.
+The selected theme is restored the next time the TUI starts. Unknown names fall
+back to Default. Browse the [theme lab](docs/tui-lab/README.md) for palette studies and
+[upstream attribution](docs/tui-lab/SOURCES.md). The lab’s illustrations
+are separate from the live app captures above.
+
+### TUI renderer
+
+GoTUI is enabled by default. Set `MYAGENT_UI=legacy` before launching to use
+the previous renderer. For the widget architecture, layout, and rendering
+details, see [GOTUI.md](GOTUI.md).
+
+### TUI keybindings
+
+| Key                  | Action                                                |
+| -------------------- | ----------------------------------------------------- |
+| **Enter**            | Send (queue a follow-up if a turn is currently running) |
+| **Alt+Enter**        | Steer the currently running turn                      |
+| **Esc**              | Dismiss the open dialog or abort the current turn      |
+| **Ctrl+P**           | Open the searchable command palette                    |
+| **Ctrl+C**           | Clear the draft prompt (if any); press again to quit  |
+| **Ctrl+O**           | Expand / collapse tool blocks and retry error details |
+| **Up / Down**        | Browse submitted prompts when the input is empty      |
+| **PgUp / PgDn**      | Scroll transcript                                     |
+| **Mouse drag**       | Select displayed transcript text; release to copy     |
+| **Alt+V**            | Attach an image from the clipboard                    |
+| **Ctrl+V**           | Attach an image from the clipboard (often intercepted by the terminal) |
+| **Tab**              | Focus the input area                                  |
+
+#### Pasting images
+
+Use **Alt+V** to attach an image from the clipboard. On most terminals
+**Ctrl+V** does not work for this: the terminal intercepts the keystroke for
+its own text paste, so the image branch in `onKey` never runs. **Alt+V** is the
+binding that reliably reaches the app.
+
+If neither binding works, run the `/paste` slash command — it reads the
+clipboard through the same code path and is the dependable fallback.
+
+Attached images stay in memory and appear in a status row above the prompt. On
+an empty prompt, **Backspace** removes the most recent one.
+Limits: 6 images per message, 8 MiB each, 20 MiB total. You can also attach an image
+file by mentioning it with `@path` (PNG, JPEG, GIF, or WebP).
+
+### TUI slash commands
+
+Slash commands run locally in the TUI. They are not sent to the model or
+stored as user messages. Commands that change conversation state are available
+only while the agent is idle. Typing `/` opens the command list; continue
+typing to filter it, use **Up / Down** to select, **Tab** to complete, **Enter**
+to run, or **Esc** to dismiss it. **Ctrl+P** opens the same menu without
+touching the prompt; type to filter, then use **Enter** to run a command.
+
+| Command              | Action                                                  |
+| -------------------- | ------------------------------------------------------- |
+| `/help`              | Show available commands and keybindings                 |
+| `/init`              | Analyse the repository and write an `AGENTS.md`         |
+| `/models`            | Open the searchable model selector for configured providers |
+| `/models <provider/model-id>` | Select an exact model immediately |
+| `/effort`            | Open the reasoning-effort selector |
+| `/effort <level>`    | Set `default`, `low`, `medium`, `high`, `xhigh`, or `max` |
+| `/providers`         | Add API keys for compatible catalog providers |
+| `/customize`         | Choose the default text or animated orb startup style |
+| `/tools`             | Enable or disable tools the model can call             |
+| `/paste`             | Attach an image from the clipboard (fallback for Alt+V / Ctrl+V) |
+| `/compact`           | Force context compaction when a safe boundary exists    |
+| `/clear`             | Clear the visible transcript; retain conversation context |
+| `/new`               | Start a fresh persisted conversation                    |
+| `/resume`            | Open the session selector and resume a previous conversation |
+| `/rename <title>`    | Rename the current session                              |
+
+`/models` searches tool-capable models from [models.dev](https://models.dev) for
+all configured compatible providers. The normalized catalog is cached at
+`$MYAGENT_DIR/models.json`, refreshed at most every four hours, and remains
+usable offline. Choosing a model changes the active provider/model and persists
+the qualified reference as `default_model` for future sessions.
+
+`/providers` lists catalog providers supported by the current OpenAI-compatible
+transport. Providers already saved with an API key are marked `[x]`. Select any
+provider to enter or replace its key in the masked field, then press **Enter**
+to save it. The key is stored in `auth/providers.json`, leaving custom providers
+in `config.json` separate.
+`/customize` selects the empty-session welcome shown at startup and after
+`/new`. The default is the static `myagent` text; the optional dotted orb
+animates only while the empty welcome is visible. The choice is persisted in
+`config.json`.
+`/tools` lists every tool in the active registry — the built-ins `read`,
+`write`, `edit`, and `bash` plus any plugin shell tools — and lets you toggle
+each one. Disabled tools are removed from the registry and the system prompt,
+so the model never sees them. The choice is a deny list persisted in
+`config.json` as `disabledTools`; a plugin profile's allowlist is applied
+first and the deny list last, so a profile can never re-enable a disabled
+tool. Toggling is refused while a run is active.
+`/new` preserves the previous session file and makes the new session the one
+shown in the exit resume instructions. `/resume` lists previous sessions by
+timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
+navigate, resume, or cancel.
+`/rename <title>` sets a human-readable name for the current session. The
+session title is reflected in the terminal window title.
+
+`/init` starts a normal agent turn with a prepared instruction: the agent
+explores the repository with its own tools and writes an `AGENTS.md` at the
+root. An existing `AGENTS.md` is used as the base and corrected rather than
+overwritten, and rules already written for other agents (`.cursorrules`,
+`.github/copilot-instructions.md`, `CLAUDE.md`, …) are folded in. Because it is
+an ordinary turn, **Esc** aborts it and the result is part of the session.
+
+## Usage
+
+| Command                                      | What it does                                       |
+| -------------------------------------------- | -------------------------------------------------- |
+| `go run .`                                   | Enter the interactive TUI (default)                |
+| `go run . tui`                               | Same, explicit                                     |
+| `go run . auth`                              | Open the provider setup wizard                     |
+| `go run . -p "..."`                          | One-shot prompt; streams reply to stdout           |
+| `go run . -p "..." --provider=ollama`        | Use a configured provider for this run             |
+| `go run . -p "..." --model=qwen3`            | Override model within the selected provider        |
+| `go run . -p "..." --effort=high`            | Set reasoning effort for this run                  |
+| `go run . --continue`                        | Resume the most recently modified session          |
+| `go run . --resume ./path/session.jsonl`     | Resume by file path                                |
+| `go run . --resume-id <uuid>`                | Resume by session id                               |
+| `go run . sessions`                          | List persisted sessions, newest first              |
+| `go run . serve`                             | Run the WebSocket JSON-RPC server (see [Server mode](#server-mode))      |
+
+### Print-mode usage notes
+
+`-p` accepts both flag syntax (`-p "…"` or `-print "…"`) and a single
+trailing positional argument:
+
+```bash
+go run . -p "Write a haiku about Go."
+go run . --print "Write a haiku about Go."
+go run . "Write a haiku about Go."   # same thing
+```
 
 ## Configuration
 
@@ -246,147 +385,50 @@ the project ones last, so project guidance appears later in the system prompt
 and takes precedence. Missing, unreadable, or non-file `AGENTS.md` entries are
 ignored and never prevent a run.
 
----
+## Sessions
 
-## Usage
+Each run creates or resumes a JSONL file (format v4) under
+`$MYAGENT_DIR/sessions/<id>.jsonl`. The file is append-only: line 1 is a
+session header (`type`, `version`, `id`, `cwd`, `timestamp`); each
+following line is a message or compaction entry linked to the previous one
+by `id` / `parentId`. Killing myagent mid-run is safe — re-running with
+`--continue` (or `--resume-id <id>`) restores the full conversation.
 
-| Command                                      | What it does                                       |
-| -------------------------------------------- | -------------------------------------------------- |
-| `go run .`                                   | Enter the interactive TUI (default)                |
-| `go run . tui`                               | Same, explicit                                     |
-| `go run . auth`                              | Open the provider setup wizard                     |
-| `go run . -p "..."`                          | One-shot prompt; streams reply to stdout           |
-| `go run . -p "..." --provider=ollama`        | Use a configured provider for this run             |
-| `go run . -p "..." --model=qwen3`            | Override model within the selected provider        |
-| `go run . -p "..." --effort=high`            | Set reasoning effort for this run                  |
-| `go run . --continue`                        | Resume the most recently modified session          |
-| `go run . --resume ./path/session.jsonl`     | Resume by file path                                |
-| `go run . --resume-id <uuid>`                | Resume by session id                               |
-| `go run . sessions`                          | List persisted sessions, newest first              |
-| `go run . serve`                             | Run the WebSocket JSON-RPC server (see below)      |
+After leaving the interactive TUI, myagent prints the session's `--resume-id`
+and `--resume` commands. Session paths inside your home directory are shown
+with a `~` prefix.
 
-### Print-mode usage notes
+### Context compaction
 
-`-p` accepts both flag syntax (`-p "…"` or `-print "…"`) and a single
-trailing positional argument:
+Long sessions are automatically compacted before they overflow the model's
+context window. When the estimated context size nears **230 000 tokens**
+(the harness limit is 256 000, with a 26 000-token reserve), the agent
+summarizes the older conversation history using the same model and a
+dedicated summarization prompt (no tools), then replaces it with
+`[summary] + [recent messages]`. Approximately 20 000 tokens of recent
+context are kept verbatim so the agent retains its immediate working state.
 
-```bash
-go run . -p "Write a haiku about Go."
-go run . --print "Write a haiku about Go."
-go run . "Write a haiku about Go."   # same thing
-```
+The compaction is persisted to the session file as a `compaction` entry.
+On resume, only `[summary] + [kept messages]` are loaded — the compacted-away
+messages remain on disk for audit but are not sent to the model. Repeated
+compactions update the existing summary rather than re-summarizing from
+scratch.
 
-### TUI keybindings
-
-| Key                  | Action                                                |
-| -------------------- | ----------------------------------------------------- |
-| **Enter**            | Send (queue a follow-up if a turn is currently running) |
-| **Alt+Enter**        | Steer the currently running turn                      |
-| **Esc**              | Abort the current turn                                |
-| **Ctrl+C**           | Clear the draft prompt (if any); press again to quit  |
-| **Ctrl+O**           | Expand / collapse tool blocks and retry error details |
-| **Up / Down**        | Browse submitted prompts when the input is empty      |
-| **PgUp / PgDn**      | Scroll transcript                                     |
-| **Mouse drag**       | Select displayed transcript text; release to copy     |
-| **Alt+V**            | Attach an image from the clipboard                    |
-| **Ctrl+V**           | Attach an image from the clipboard (often intercepted by the terminal) |
-| **Tab**              | Focus the input area                                  |
-
-#### Pasting images
-
-Use **Alt+V** to attach an image from the clipboard. On most terminals
-**Ctrl+V** does not work for this: the terminal intercepts the keystroke for
-its own text paste, so the image branch in `onKey` never runs. **Alt+V** is the
-binding that reliably reaches the app.
-
-If neither binding works, run the `/paste` slash command — it reads the
-clipboard through the same code path and is the dependable fallback.
-
-Attached images stay in memory. The legacy renderer shows them above the prompt as
-`[image] N attached`; the default renderer does not draw an attachment row yet
-(see TUI renderer). On an empty prompt, **Backspace** removes the most recent one.
-Limits: 6 images per message, 8 MiB each, 20 MiB total. You can also attach an image
-file by mentioning it with `@path` (PNG, JPEG, GIF, or WebP).
-
-### TUI renderer
-
-The GoTUI renderer is the default. The pre-cutover Bubbletea frame remains
-available for one release as an escape hatch:
+List sessions (newest first by file mtime):
 
 ```bash
-MYAGENT_UI=legacy go run .
+$ go run . sessions
+ID                                     MSGS  MODIFIED             PREVIEW
+0192f3…                                12    2025-07-17 14:22:01  explain why this is fast
+0191d4…                                3     2025-07-17 13:11:14  Write a haiku about Go
 ```
 
-Only the exact value `legacy` opts out; unset and any other value use the
-default renderer. Panels that have not been migrated yet (sessions, effort,
-providers, customize, tools, export, image attachments, and queued follow-ups)
-still render only in the legacy frame, so use the escape hatch for those
-workflows until they land.
+If you just created sessions in a non-default `MYAGENT_DIR`, export the
+same var when listing:
 
-### TUI slash commands
-
-Slash commands run locally in the TUI. They are not sent to the model or
-stored as user messages. Commands that change conversation state are available
-only while the agent is idle. Typing `/` opens the command list; continue
-typing to filter it, use **Up / Down** to select, **Tab** to complete, **Enter**
-to run, or **Esc** to dismiss it. **Ctrl+P** opens the same menu without
-touching the prompt; type to filter, then use **Enter** to run a command.
-
-| Command              | Action                                                  |
-| -------------------- | ------------------------------------------------------- |
-| `/help`              | Show available commands and keybindings                 |
-| `/init`              | Analyse the repository and write an `AGENTS.md`         |
-| `/models`            | Open the searchable model selector for configured providers |
-| `/models <provider/model-id>` | Select an exact model immediately |
-| `/effort`            | Open the reasoning-effort selector |
-| `/effort <level>`    | Set `default`, `low`, `medium`, `high`, `xhigh`, or `max` |
-| `/providers`         | Add API keys for compatible catalog providers |
-| `/customize`         | Choose the default text or animated orb startup style |
-| `/tools`             | Enable or disable tools the model can call             |
-| `/paste`             | Attach an image from the clipboard (fallback for Alt+V / Ctrl+V) |
-| `/compact`           | Force context compaction when a safe boundary exists    |
-| `/clear`             | Clear the visible transcript; retain conversation context |
-| `/new`               | Start a fresh persisted conversation                    |
-| `/resume`            | Open the session selector and resume a previous conversation |
-| `/rename <title>`    | Rename the current session                              |
-
-`/models` searches tool-capable models from [models.dev](https://models.dev) for
-all configured compatible providers. The normalized catalog is cached at
-`$MYAGENT_DIR/models.json`, refreshed at most every four hours, and remains
-usable offline. Choosing a model changes the active provider/model and persists
-the qualified reference as `default_model` for future sessions.
-
-`/providers` lists catalog providers supported by the current OpenAI-compatible
-transport. Providers already saved with an API key are marked `[x]`. Select any
-provider to enter or replace its key in the masked field, then press **Enter**
-to save it. The key is stored in `auth/providers.json`, leaving custom providers
-in `config.json` separate.
-`/customize` selects the empty-session welcome shown at startup and after
-`/new`. The default is the static `myagent` text; the optional dotted orb
-animates only while the empty welcome is visible. The choice is persisted in
-`config.json`.
-`/tools` lists every tool in the active registry — the built-ins `read`,
-`write`, `edit`, and `bash` plus any plugin shell tools — and lets you toggle
-each one. Disabled tools are removed from the registry and the system prompt,
-so the model never sees them. The choice is a deny list persisted in
-`config.json` as `disabledTools`; a plugin profile's allowlist is applied
-first and the deny list last, so a profile can never re-enable a disabled
-tool. Toggling is refused while a run is active.
-`/new` preserves the previous session file and makes the new session the one
-shown in the exit resume instructions. `/resume` lists previous sessions by
-timestamp, ID, and prompt preview; use **Up / Down**, **Enter**, or **Esc** to
-navigate, resume, or cancel.
-`/rename <title>` sets a human-readable name for the current session. The
-session title is reflected in the terminal window title.
-
-`/init` starts a normal agent turn with a prepared instruction: the agent
-explores the repository with its own tools and writes an `AGENTS.md` at the
-root. An existing `AGENTS.md` is used as the base and corrected rather than
-overwritten, and rules already written for other agents (`.cursorrules`,
-`.github/copilot-instructions.md`, `CLAUDE.md`, …) are folded in. Because it is
-an ordinary turn, **Esc** aborts it and the result is part of the session.
-
----
+```bash
+MYAGENT_DIR=/tmp/foo go run . sessions
+```
 
 ## Server mode
 
@@ -509,55 +551,6 @@ go run scripts/ws-smoke.go "ws://127.0.0.1:8765/ws?token=dev" "Say hello."
 It creates a session, streams the reply, and exits on `session.done`. The
 created session appears in `myagent sessions` and can be resumed in the TUI.
 
----
-
-## Sessions
-
-Each run creates or resumes a JSONL file (format v4) under
-`$MYAGENT_DIR/sessions/<id>.jsonl`. The file is append-only: line 1 is a
-session header (`type`, `version`, `id`, `cwd`, `timestamp`); each
-following line is a message or compaction entry linked to the previous one
-by `id` / `parentId`. Killing myagent mid-run is safe — re-running with
-`--continue` (or `--resume-id <id>`) restores the full conversation.
-
-After leaving the interactive TUI, myagent prints the session's `--resume-id`
-and `--resume` commands. Session paths inside your home directory are shown
-with a `~` prefix.
-
-### Context compaction
-
-Long sessions are automatically compacted before they overflow the model's
-context window. When the estimated context size nears **230 000 tokens**
-(the harness limit is 256 000, with a 26 000-token reserve), the agent
-summarizes the older conversation history using the same model and a
-dedicated summarization prompt (no tools), then replaces it with
-`[summary] + [recent messages]`. Approximately 20 000 tokens of recent
-context are kept verbatim so the agent retains its immediate working state.
-
-The compaction is persisted to the session file as a `compaction` entry.
-On resume, only `[summary] + [kept messages]` are loaded — the compacted-away
-messages remain on disk for audit but are not sent to the model. Repeated
-compactions update the existing summary rather than re-summarizing from
-scratch.
-
-List sessions (newest first by file mtime):
-
-```bash
-$ go run . sessions
-ID                                     MSGS  MODIFIED             PREVIEW
-0192f3…                                12    2025-07-17 14:22:01  explain why this is fast
-0191d4…                                3     2025-07-17 13:11:14  Write a haiku about Go
-```
-
-If you just created sessions in a non-default `MYAGENT_DIR`, export the
-same var when listing:
-
-```bash
-MYAGENT_DIR=/tmp/foo go run . sessions
-```
-
----
-
 ## Project layout
 
 ```
@@ -583,7 +576,7 @@ MYAGENT_DIR=/tmp/foo go run . sessions
 │   ├── setup/           # first-run setup + provider manager wizard
 │   ├── terminal/        # terminal capability helpers
 │   ├── tools/           # read / write / edit / bash tools + truncation utils
-│   ├── tui/             # legacy Charm-based UI: transcript, input, footer
+│   ├── tui/             # TUI model, transcript, input, and legacy renderer
 │   ├── ui/
 │   │   ├── kit/         # GoTUI widget toolkit: layout, hit registry, dialogs, compositor
 │   │   └── app/         # GoTUI shell: home, transcript, composer, pickers, chrome
@@ -689,23 +682,6 @@ Either none exist yet (run an interactive session first), or
 `MYAGENT_DIR` differs between the runs/lists. Use the same value or
 `myagent sessions` (with the var set) to confirm.
 
----
-
 ## License
 
-No license file yet — all rights reserved until one is added.
-
-### Interface themes
-
-Use `/customize` → **Theme** to change the whole interface. Choices include the
-existing adaptive Default plus **Tokyo Night**, **Catppuccin Mocha**, **Kanagawa**,
-**Vesper**, **Osaka Jade**, **Rosé Pine**, **Vercel**, and **Tokyo Mocha**.
-Tokyo Mocha combines Tokyo Night's blue-black surfaces with Catppuccin Mocha's
-text, mauve accent, and pastel syntax colors. Named palettes are intentionally
-dark; Default continues to follow the terminal's light/dark appearance.
-
-Choosing a theme recolors the current session and is saved in the `theme` field
-of `config.json`, independently of startup art, composer style, models, or tools.
-The selected theme is restored the next time the TUI starts. Unknown names fall
-back to Default. Theme previews and upstream attribution are in
-`docs/tui-lab/` and `THIRD_PARTY_NOTICES.md`.
+See [LICENSE](LICENSE).
