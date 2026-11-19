@@ -363,3 +363,26 @@ func equalInts(a, b []int) bool {
 	}
 	return true
 }
+
+func TestScrollBoxUpdatesHitBoundsOnlyWhenViewportMoves(t *testing.T) {
+	first, second := newCountWidget("first"), newCountWidget("second")
+	box := NewScrollBox(ScrollItem{W: first, H: 4}, ScrollItem{W: second, H: 4})
+	box.Start = EdgeTop
+	root := NewRoot(box)
+	root.Render(10, 4)
+	if hit, ok := root.hits.Hit(0, 0); !ok || hit.Widget != first {
+		t.Fatalf("initial hit = %#v, want first item", hit)
+	}
+
+	box.ScrollBy(4)
+	root.Render(10, 4)
+	if hit, ok := root.hits.Hit(0, 0); !ok || hit.Widget != second {
+		t.Fatalf("hit after scroll = %#v, want second item", hit)
+	}
+	count := root.ComposeCount()
+	box.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	root.Render(10, 4)
+	if root.ComposeCount() != count {
+		t.Fatal("scrolling against the viewport edge recomposed the frame")
+	}
+}

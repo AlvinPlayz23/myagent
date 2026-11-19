@@ -9,9 +9,9 @@
 
   block line a
   block line b
-                                 Reasoning effort                                   esc
+                                 Reasoning effort
 
-                                 ↑/↓ select, enter saves as myagent default, esc cancel
+                                 ↑/↓ select, enter saves as myagent default
                                    Low
                                  ● Medium
                                    High

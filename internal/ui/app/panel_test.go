@@ -50,7 +50,7 @@ func panelState() tui.KitPickerState {
 		Kind:       "effort",
 		Mode:       tui.KitPickerList,
 		Title:      "Reasoning effort",
-		Hint:       "↑/↓ select, enter saves as myagent default, esc cancel",
+		Hint:       "↑/↓ select, enter saves as myagent default",
 		SelectedID: "1",
 		Items: []tui.KitPickerItem{
 			{ID: "0", Title: "Low", Desc: "fast, lightweight reasoning"},
@@ -169,6 +169,21 @@ func TestShellPanelWheelMovesSelection(t *testing.T) {
 	}
 }
 
+func TestPanelListKeepsChoiceVisibleInOneLineBody(t *testing.T) {
+	host := newPanelHost(panelState())
+	s := newShell(host)
+	body := newPanelListBody(s, host.state)
+	body.Layout(kit.Rect{W: 40, H: 1})
+
+	got := ansi.Strip(body.Render(40, 1))
+	if !strings.Contains(got, "Medium") {
+		t.Fatalf("one-line panel hides selected choice: %q", got)
+	}
+	if bounds := body.list.Bounds(); bounds.H != 1 {
+		t.Fatalf("one-line panel list height = %d, want 1", bounds.H)
+	}
+}
+
 func TestShellPanelBackdropCancel(t *testing.T) {
 	host := newPanelHost(panelState())
 	s := newShell(host)
@@ -193,7 +208,7 @@ func TestShellPanelInputForwardsKeysAndHidesText(t *testing.T) {
 		Title:        "Configure Example",
 		Input:        "••••",
 		Masked:       true,
-		Hint:         "enter saves, esc cancels",
+		Hint:         "enter saves",
 		ConfirmLabel: "save",
 	})
 	s := newShell(host)
@@ -239,7 +254,7 @@ func TestShellPanelConfirmUsesDialogActions(t *testing.T) {
 			Kind:         "export-overwrite",
 			Mode:         tui.KitPickerConfirm,
 			Title:        "Export",
-			Body:         "File exists — enter overwrite, ↑/↓ return to name, esc cancel",
+			Body:         "File exists — enter overwrite, ↑/↓ return to name",
 			Hint:         "↑/↓ return to name",
 			ConfirmLabel: "overwrite",
 			CancelLabel:  "cancel",
@@ -304,7 +319,7 @@ func TestShellPanelConfirmUsesDialogActions(t *testing.T) {
 			Mode:         tui.KitPickerInput,
 			Title:        "Export as Markdown",
 			Input:        "session.md",
-			Hint:         "enter export, esc cancel",
+			Hint:         "enter export",
 			ConfirmLabel: "export",
 		}
 		s.Sync()
