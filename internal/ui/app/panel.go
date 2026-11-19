@@ -309,6 +309,37 @@ func (s *Shell) syncPanel(state tui.KitPickerState) {
 	s.panelSig = sig
 }
 
+// openEffortInPalette replaces the command palette's contents in place.
+func (s *Shell) openEffortInPalette(state tui.KitPickerState) {
+	layout := s.pickerLayout
+	s.panelList = newPanelListBody(s, state)
+	s.panelInput = nil
+	s.panelKind, s.panelMode = state.Kind, state.Mode
+	s.panelSig = pickerSignature(state)
+	s.panelOpen = true
+	s.panelFooter = kit.NewDialogFooter(
+		kit.DialogButton{Label: panelCancelLabel(state), Key: "esc", Action: func() bool {
+			s.cancelPanel()
+			return true
+		}},
+		kit.DialogButton{Label: panelConfirmLabel(state), Key: "enter", Primary: true, Action: func() bool {
+			s.emit(s.host.KitKey(tea.KeyPressMsg{Code: tea.KeyEnter}))
+			return true
+		}},
+	)
+	layout.Body = s.panelList
+	layout.Footer = s.panelFooter
+	layout.SetTitle(state.Title)
+	layout.OnDismiss = s.panelDismissed
+	layout.MarkDirty()
+	s.panelLayout = layout
+	s.picker = nil
+	s.pickerLayout = nil
+	s.pickerOpen = false
+	s.pickerSig, s.pickerKind = "", ""
+	s.layoutDirty = true
+}
+
 // openPanel builds the dialog surface for the active non-select panel.
 func (s *Shell) openPanel(state tui.KitPickerState, sig string) {
 	s.panelKind = state.Kind

@@ -367,12 +367,14 @@ var effortChoices = []effortChoice{
 }
 
 type effortPicker struct {
-	active bool
-	sel    int
+	active      bool
+	fromPalette bool
+	sel         int
 }
 
 func (p *effortPicker) open(current llm.Effort) {
 	p.active = true
+	p.fromPalette = false
 	p.sel = 0
 	for i, choice := range effortChoices {
 		if choice.effort == current {
@@ -1108,9 +1110,9 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.effort.active {
 		switch ks {
-		case "up":
+		case "up", "left":
 			m.effort.move(-1)
-		case "down":
+		case "down", "right":
 			m.effort.move(1)
 		case "enter":
 			return m.applyEffort(m.effort.selected().effort)
@@ -2355,7 +2357,7 @@ func (m *model) openEffortPicker(value string) (tea.Model, tea.Cmd) {
 		return m.applyEffort(effort)
 	}
 	m.effort.open(m.runner.cfg.Effort)
-	m.statusMsg = "Choose reasoning effort — saved as the myagent default."
+	m.statusMsg = "Choose reasoning effort — Enter saves it as the myagent default."
 	m.updateLayout()
 	return m, nil
 }
