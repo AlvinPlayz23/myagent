@@ -12,16 +12,16 @@ import (
 // ComposerFooterOpts configures the composer status row.
 type ComposerFooterOpts struct {
 	ID string
-	// Animations toggles the one-cell spinner; false holds the ▪ fallback.
+	// Animations toggles the loading comet; false holds the ▪ fallback.
 	Animations bool
 }
 
-// ComposerFooter is the 1-row composer chrome below the textarea: a one-cell
-// spinner and cwd on the left, a file-context chip on the right. It is the
+// ComposerFooter is the 1-row composer chrome below the textarea: a loading
+// comet and cwd on the left, a file-context chip on the right. It is the
 // OpenCode footer anatomy (§3.0.D) without reaching into the textarea.
 //
 // OpenTUI counterpart: a space-between flex row. OpenCode counterpart: the
-// composer footer (left spinner/cwd, right file-context chip).
+// composer footer (left loading comet/cwd, right file-context chip).
 type ComposerFooter struct {
 	WidgetBase
 
@@ -31,17 +31,17 @@ type ComposerFooter struct {
 	FilePending bool
 	Hint        string
 
-	spinner *OneCellSpinner
-	cache   RenderCache
+	wave  *LoadingWave
+	cache RenderCache
 }
 
-// NewComposerFooter builds the row with the SEED one-cell spinner.
+// NewComposerFooter builds the row with the traveling loading comet.
 func NewComposerFooter(opts ComposerFooterOpts) *ComposerFooter {
 	f := &ComposerFooter{
 		WidgetBase: NewWidgetBase(opts.ID),
-		spinner:    NewOneCellSpinner(SeedMotion()),
+		wave:       NewLoadingWave(),
 	}
-	f.spinner.SetAnimations(opts.Animations)
+	f.wave.SetAnimations(opts.Animations)
 	return f
 }
 
@@ -54,21 +54,21 @@ func (f *ComposerFooter) SetState(busy bool, cwd, file string, pending bool, hin
 	f.MarkDirty()
 }
 
-// SetAnimations toggles the spinner motion.
+// SetAnimations toggles the loading motion.
 func (f *ComposerFooter) SetAnimations(on bool) {
-	if f.spinner != nil {
-		f.spinner.SetAnimations(on)
+	if f.wave != nil {
+		f.wave.SetAnimations(on)
 		f.MarkDirty()
 	}
 }
 
-// Advance drives the spinner clock from the app tick. A painted change bumps
-// the footer revision so its render cache notices the child-only mutation.
+// Advance drives the comet clock from the app tick. A painted change bumps the
+// footer revision so its render cache notices the child-only mutation.
 func (f *ComposerFooter) Advance(d time.Duration) bool {
-	if f.spinner == nil || !f.Busy {
+	if f.wave == nil || !f.Busy {
 		return false
 	}
-	changed := f.spinner.Advance(d)
+	changed := f.wave.Advance(d)
 	if changed {
 		f.MarkDirty()
 	}
@@ -93,13 +93,11 @@ func (f *ComposerFooter) Render(w, h int) string {
 		th := DefaultTheme()
 		cv := lipgloss.NewCanvas(w, h)
 		x := 0
-		if f.Busy && f.spinner != nil {
-			fg := tokenOr(f.spinner.Fg, th.Text.Action.Primary).Color()
-			if level := f.spinner.Level(); level > 0 && level < 1 {
-				fg = blendToward(fg, th.Background.Base.Color(), 1-level)
-			}
-			putGlyph(cv, 0, 0, f.spinner.Glyph(), fg)
-			x = 2
+		if f.Busy && f.wave != nil {
+			waveW := min(f.wave.Width(), w)
+			f.wave.Layout(Rect{X: 0, Y: 0, W: waveW, H: 1})
+			drawWidget(cv, f.wave, Rect{X: 0, Y: 0, W: waveW, H: 1}, Rect{})
+			x = waveW + 1
 		}
 		right := ""
 		if f.File != "" {

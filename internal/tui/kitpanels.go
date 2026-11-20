@@ -264,12 +264,10 @@ func (m *model) kitEffortPicker() KitPickerState {
 		def = current
 	}
 	state := KitPickerState{
-		Kind:         "effort",
-		Mode:         KitPickerList,
-		Title:        "Reasoning effort",
-		Hint:         "↑/↓ select, enter saves as myagent default",
-		SelectedID:   strconv.Itoa(m.effort.sel),
-		ConfirmLabel: "save",
+		Kind:       "effort",
+		Mode:       KitPickerSlider,
+		Title:      "Reasoning effort",
+		SelectedID: strconv.Itoa(m.effort.sel),
 	}
 	for i, choice := range effortChoices {
 		isCurrent := choice.effort == current

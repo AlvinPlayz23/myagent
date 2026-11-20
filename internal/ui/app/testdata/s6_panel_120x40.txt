@@ -9,19 +9,19 @@
 
   block line a
   block line b
-                                 Reasoning effort
+                                 Reasoning effort                                   esc
 
-                                 ↑/↓ select, enter saves as myagent default
-                                   Low
-                                 ● Medium
-                                   High
-                                   Max
-                                 ──────────────────────────────────────────────────────
-                                 balanced reasoning  (current)
+                                                 Medium
+                                  ─│───────────────┃────────────────│───────────────│─
 
 
 
-                                  cancel esc                                save enter
+
+
+
+
+
+
 
 
 

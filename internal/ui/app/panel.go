@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -180,6 +181,80 @@ func (b *panelListBody) Mouse(ev tea.MouseMsg, r kit.Rect) bool {
 
 func (b *panelListBody) FocusTarget() *kit.FocusTarget { return nil }
 
+// panelSliderBody is the host-authoritative scale body: the effort panel's pill
+// slider. It paints only the caption and the track — no description line and no
+// action row — so the panel reads as a single control. Every key forwards to
+// the legacy onKey path; a track click maps to the nearest stop and goes
+// through KitPickerAccept (select-then-activate, matching the list rows).
+type panelSliderBody struct {
+	kit.WidgetBase
+
+	shell  *Shell
+	slider *kit.Slider
+}
+
+func newPanelSliderBody(s *Shell, state tui.KitPickerState) *panelSliderBody {
+	b := &panelSliderBody{
+		WidgetBase: kit.NewWidgetBase("kit.panel.slider"),
+		shell:      s,
+		slider:     kit.NewSlider(kit.SliderOpts{ID: "kit.panel.slider.track"}),
+	}
+	b.apply(state)
+	return b
+}
+
+// apply re-feeds the stops, caption, and selection.
+func (b *panelSliderBody) apply(state tui.KitPickerState) {
+	stops := make([]string, len(state.Items))
+	for i, item := range state.Items {
+		stops[i] = item.Title
+	}
+	value, err := strconv.Atoi(state.SelectedID)
+	if err != nil {
+		value = 0
+	}
+	b.slider.SetState(stops, value)
+	b.MarkDirty()
+}
+
+// PreferredHeight is the slider alone.
+func (b *panelSliderBody) PreferredHeight(_, _ int) int { return 2 }
+
+func (b *panelSliderBody) Layout(r kit.Rect) {
+	b.SetBounds(r)
+	b.slider.Layout(kit.Rect{X: r.X, Y: r.Y, W: r.W, H: min(2, r.H)})
+}
+
+func (b *panelSliderBody) Render(w, h int) string {
+	if !b.Visible || w <= 0 || h <= 0 {
+		return ""
+	}
+	return fitBlock(b.slider.Render(w, min(2, h)), w, h)
+}
+
+func (b *panelSliderBody) Key(ev tea.KeyPressMsg) bool {
+	b.shell.emit(b.shell.host.KitKey(ev))
+	return true
+}
+
+// Mouse selects the nearest stop on a track click. A click on the already
+// selected stop activates it, exactly like the list rows.
+func (b *panelSliderBody) Mouse(ev tea.MouseMsg, _ kit.Rect) bool {
+	click, ok := ev.(tea.MouseClickMsg)
+	if !ok || click.Button != tea.MouseLeft {
+		return false
+	}
+	track := b.slider.Bounds()
+	if click.Y < track.Y || click.Y >= track.Y+min(2, track.H) {
+		return false
+	}
+	id := strconv.Itoa(b.slider.IndexAtX(click.X - track.X))
+	b.shell.emit(b.shell.host.KitPickerAccept(id))
+	return true
+}
+
+func (b *panelSliderBody) FocusTarget() *kit.FocusTarget { return nil }
+
 // panelInputBody is the host-authoritative input body. The legacy textinput
 // keeps the cursor and masking; the dialog only paints its View().
 type panelInputBody struct {
@@ -305,6 +380,9 @@ func (s *Shell) syncPanel(state tui.KitPickerState) {
 	if s.panelInput != nil {
 		s.panelInput.apply(state)
 	}
+	if s.panelSlider != nil {
+		s.panelSlider.apply(state)
+	}
 	s.setPanelButtons(state)
 	s.panelSig = sig
 }
@@ -325,27 +403,36 @@ func (s *Shell) openPanel(state tui.KitPickerState, sig string) {
 	switch state.Mode {
 	case tui.KitPickerList:
 		s.panelList = newPanelListBody(s, state)
-		s.panelInput = nil
+		s.panelInput, s.panelSlider = nil, nil
 		body = s.panelList
 	case tui.KitPickerInput:
 		s.panelInput = newPanelInputBody(s, state)
-		s.panelList = nil
+		s.panelList, s.panelSlider = nil, nil
 		body = s.panelInput
+	case tui.KitPickerSlider:
+		s.panelSlider = newPanelSliderBody(s, state)
+		s.panelList, s.panelInput = nil, nil
+		body = s.panelSlider
 	default:
 		s.panelOpen = false
 		return
 	}
 
-	footer := kit.NewDialogFooter(
-		kit.DialogButton{Label: panelCancelLabel(state), Key: "esc", Action: func() bool {
-			s.cancelPanel()
-			return true
-		}},
-		kit.DialogButton{Label: panelConfirmLabel(state), Key: "enter", Primary: true, Action: func() bool {
-			s.emit(s.host.KitKey(tea.KeyPressMsg{Code: tea.KeyEnter}))
-			return true
-		}},
-	)
+	// The slider owns the whole panel: no action row under it, since enter and
+	// esc already route through the body to the legacy keys.
+	var footer *kit.DialogFooter
+	if state.Mode != tui.KitPickerSlider {
+		footer = kit.NewDialogFooter(
+			kit.DialogButton{Label: panelCancelLabel(state), Key: "esc", Action: func() bool {
+				s.cancelPanel()
+				return true
+			}},
+			kit.DialogButton{Label: panelConfirmLabel(state), Key: "enter", Primary: true, Action: func() bool {
+				s.emit(s.host.KitKey(tea.KeyPressMsg{Code: tea.KeyEnter}))
+				return true
+			}},
+		)
+	}
 	layout := kit.NewDialogLayout(kit.DialogLayoutOpts{
 		ID:     "kit.panel.dialog",
 		Title:  state.Title,
@@ -438,6 +525,7 @@ func (s *Shell) closePanel() {
 	s.suppressPanelCancel = false
 	s.panelList = nil
 	s.panelInput = nil
+	s.panelSlider = nil
 	s.panelLayout = nil
 	s.panelFooter = nil
 	s.panelOpen = false
@@ -464,6 +552,7 @@ func (s *Shell) panelDismissed() {
 	kind := s.panelKind
 	s.panelList = nil
 	s.panelInput = nil
+	s.panelSlider = nil
 	s.panelLayout = nil
 	s.panelFooter = nil
 	s.panelOpen = false

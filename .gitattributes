@@ -1,0 +1,5 @@
+# Golden-frame testdata is compared byte-for-byte against renderer output,
+# which always emits LF. Without this, a checkout with core.autocrlf=true
+# rewrites these files to CRLF and every snapshot test fails on line endings
+# alone. Normalize on commit and check out as LF on every platform.
+**/testdata/*.txt text eol=lf

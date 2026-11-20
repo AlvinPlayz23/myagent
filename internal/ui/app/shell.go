@@ -76,6 +76,7 @@ type Shell struct {
 	// panel kind uses this dialog body and forwards keys to the legacy path.
 	panelList           *panelListBody
 	panelInput          *panelInputBody
+	panelSlider         *panelSliderBody
 	panelLayout         *kit.DialogLayout
 	panelFooter         *kit.DialogFooter
 	panelOpen           bool

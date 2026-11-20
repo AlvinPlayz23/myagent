@@ -111,6 +111,9 @@ const (
 	KitPickerList
 	KitPickerInput
 	KitPickerConfirm
+	// KitPickerSlider is a horizontal scale over the Items (the effort panel).
+	// SelectedID carries the stop index; the shell paints it with kit.Slider.
+	KitPickerSlider
 )
 
 // KitPickerItem is one dialog-select/list row bridged from an existing picker.
@@ -617,17 +620,7 @@ func (m *model) renderComposerAt(width int) string {
 		}
 		lines = append(lines, row(""), row(label))
 		cap := accent.Render("╹") + lipgloss.NewStyle().Foreground(t.Background.Raised.Base.Color()).Render(strings.Repeat("▀", contentW))
-		shortcuts := "enter send  shift+enter newline  / commands"
-		if width < 56 {
-			shortcuts = "enter send  / commands"
-		}
-		hint := strings.Repeat(" ", 1+padding) + shortcuts
-		if m.KitShowWelcome() && width >= 56 {
-			shortcuts = "/ commands"
-			cwd := ansi.Truncate(m.cwd, max(0, width-len(shortcuts)-3), "…")
-			hint = cwd + strings.Repeat(" ", max(1, width-ansi.StringWidth(cwd)-len(shortcuts))) + shortcuts
-		}
-		lines = append(lines, cap, muted.Width(width).Render(ansi.Truncate(hint, width, "")))
+		lines = append(lines, cap)
 		return strings.Join(lines, "\n")
 	}
 

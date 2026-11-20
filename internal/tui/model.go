@@ -935,7 +935,7 @@ func (m *model) composerHeight() int {
 	if m.promptStyle == promptRuled {
 		return m.input.Height() + composerChromeRows
 	}
-	return m.input.Height() + 5
+	return m.input.Height() + 4
 }
 
 // fixedHeight is the part of the layout the transcript can never use. The
@@ -1108,10 +1108,14 @@ func (m *model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.effort.active {
 		switch ks {
-		case "up":
+		case "up", "left":
 			m.effort.move(-1)
-		case "down":
+		case "down", "right":
 			m.effort.move(1)
+		case "home":
+			m.effort.sel = 0
+		case "end":
+			m.effort.sel = len(effortChoices) - 1
 		case "enter":
 			return m.applyEffort(m.effort.selected().effort)
 		case "esc":
@@ -2178,7 +2182,7 @@ func (m *model) composerGrowthLimit() int {
 	}
 	chrome := composerChromeRows
 	if m.promptStyle != promptRuled {
-		chrome = 5
+		chrome = 4
 	}
 	budget := m.height - chromeHeight - chrome - composerReserve
 	return max(composerMinRows, min(composerMaxRows, budget))

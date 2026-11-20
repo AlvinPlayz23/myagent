@@ -5,19 +5,19 @@
   block line b
 
   block li
-  block li   Reasoning effort
+  block li   Reasoning effort                                   esc
 
-  block li   ↑/↓ select, enter saves as myagent default
-  block li     Low
-             ● Medium
-               High
-               Max
-             ──────────────────────────────────────────────────────
-             balanced reasoning  (current)
+  block li                   Medium
+  block li    ─│───────────────┃────────────────│───────────────│─
 
 
 
-              cancel esc                                save enter
+
+
+
+
+
+
 
 
   > draft prompt

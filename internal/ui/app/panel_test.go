@@ -45,12 +45,12 @@ func (h *panelTestHost) KitPickerCancel() tea.Cmd {
 	return nil
 }
 
+// panelState is the effort panel: a slider over the effort stops.
 func panelState() tui.KitPickerState {
 	return tui.KitPickerState{
 		Kind:       "effort",
-		Mode:       tui.KitPickerList,
+		Mode:       tui.KitPickerSlider,
 		Title:      "Reasoning effort",
-		Hint:       "↑/↓ select, enter saves as myagent default",
 		SelectedID: "1",
 		Items: []tui.KitPickerItem{
 			{ID: "0", Title: "Low", Desc: "fast, lightweight reasoning"},
@@ -58,8 +58,15 @@ func panelState() tui.KitPickerState {
 			{ID: "2", Title: "High", Desc: "deeper reasoning"},
 			{ID: "3", Title: "Max", Desc: "maximum reasoning"},
 		},
-		ConfirmLabel: "save",
 	}
+}
+
+// listPanelState is a list-kind panel for the list-body bridge tests.
+func listPanelState() tui.KitPickerState {
+	state := panelState()
+	state.Kind, state.Mode = "tools", tui.KitPickerList
+	state.Title, state.Hint = "Tools", "enter toggles"
+	return state
 }
 
 func newPanelHost(state tui.KitPickerState) *panelTestHost {
@@ -75,7 +82,7 @@ func newPanelHost(state tui.KitPickerState) *panelTestHost {
 }
 
 func TestShellPanelListSelectionAndKeys(t *testing.T) {
-	host := newPanelHost(panelState())
+	host := newPanelHost(listPanelState())
 	host.onKey = func(ev tea.KeyPressMsg) tea.Cmd {
 		if ev.String() == "down" {
 			host.state.SelectedID = "2"
@@ -120,7 +127,7 @@ func TestShellPanelListSelectionAndKeys(t *testing.T) {
 }
 
 func TestShellPanelClickSelectsThenActivates(t *testing.T) {
-	host := newPanelHost(panelState())
+	host := newPanelHost(listPanelState())
 	s := newShell(host)
 	s.Resize(80, 24)
 	s.Render(80, 24)
@@ -148,7 +155,7 @@ func TestShellPanelClickSelectsThenActivates(t *testing.T) {
 }
 
 func TestShellPanelWheelMovesSelection(t *testing.T) {
-	host := newPanelHost(panelState())
+	host := newPanelHost(listPanelState())
 	host.onAccept = func(id string) { host.state.SelectedID = id }
 	s := newShell(host)
 	s.Resize(80, 24)
@@ -451,7 +458,7 @@ func TestCustomizeThemeChoicesResizePanel(t *testing.T) {
 }
 
 func TestMenusExpandOnlySelectedDescriptionExceptFiles(t *testing.T) {
-	for _, kind := range []string{"customize", "effort", "tools", "providers", "sessions", "files"} {
+	for _, kind := range []string{"customize", "tools", "providers", "sessions", "files"} {
 		t.Run(kind, func(t *testing.T) {
 			host := &fakeHost{composerH: 2, pickerActive: true, picker: tui.KitPickerState{Kind: kind, Mode: tui.KitPickerList, Title: "Options", SelectedID: "one", Items: []tui.KitPickerItem{
 				{ID: "one", Title: "First item", Desc: "First description"}, {ID: "two", Title: "Second item", Desc: "Second description"},
@@ -475,5 +482,78 @@ func TestMenusExpandOnlySelectedDescriptionExceptFiles(t *testing.T) {
 				t.Fatal("detail did not track highlight")
 			}
 		})
+	}
+}
+
+func TestEffortPanelSliderStepsAndClicks(t *testing.T) {
+	host := newPanelHost(panelState())
+	host.onAccept = func(id string) { host.state.SelectedID = id }
+	s := newShell(host)
+	s.Resize(80, 24)
+	frame := ansi.Strip(s.Render(80, 24))
+
+	if s.panelSlider == nil || s.panelList != nil {
+		t.Fatalf("effort body = slider %v list %v, want slider only", s.panelSlider != nil, s.panelList != nil)
+	}
+	for _, want := range []string{"Reasoning effort", "Medium", "┃", "─"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("effort slider missing %q:\n%s", want, frame)
+		}
+	}
+	// The panel is the control only: no description line and no action row.
+	for _, absent := range []string{"balanced reasoning", "enter saves", "save", "cancel"} {
+		if strings.Contains(frame, absent) {
+			t.Fatalf("effort slider still shows %q:\n%s", absent, frame)
+		}
+	}
+	if s.panelFooter != nil {
+		t.Fatalf("effort slider footer = %v, want none", s.panelFooter)
+	}
+
+	if !s.Key(tea.KeyPressMsg{Code: tea.KeyRight}) {
+		t.Fatal("right not consumed by the slider body")
+	}
+	if got := host.keys; len(got) != 1 || got[0] != "right" {
+		t.Fatalf("forwarded keys = %v, want [right]", got)
+	}
+
+	// Enter and esc still work without the footer buttons that used to name them.
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyEsc}} {
+		if !s.Key(key) {
+			t.Fatalf("%s not consumed by the slider body", key.String())
+		}
+	}
+	if got := host.keys; len(got) != 3 || got[1] != "enter" || got[2] != "esc" {
+		t.Fatalf("forwarded keys = %v, want [right enter esc]", got)
+	}
+
+	// A click on the last stop moves the selection through the host.
+	track := s.panelSlider.slider.Bounds()
+	if !s.Mouse(tea.MouseClickMsg{X: track.X + track.W - 3, Y: track.Y + 1, Button: tea.MouseLeft}) {
+		t.Fatal("slider track click not consumed")
+	}
+	if host.accepted != "3" {
+		t.Fatalf("track click accepted %q, want 3", host.accepted)
+	}
+}
+
+func TestSliderTabTracksTheThumb(t *testing.T) {
+	s := kit.NewSlider(kit.SliderOpts{ID: "s", Stops: []string{"Low", "Medium", "High", "Max"}})
+	s.Layout(kit.Rect{X: 0, Y: 0, W: 40, H: 2})
+	low := ansi.Strip(s.Render(40, 2))
+	if !strings.Contains(low, "─") || !strings.Contains(low, "┃") || !strings.Contains(low, "Low") {
+		t.Fatalf("slider render missing chrome:\n%s", low)
+	}
+	if strings.ContainsAny(low, "╭╮╰╯") {
+		t.Fatalf("slider still draws a rounded frame:\n%s", low)
+	}
+	s.SetState(s.Stops, 3)
+	high := ansi.Strip(s.Render(40, 2))
+	lowLine := strings.Split(low, "\n")[1]
+	highLine := strings.Split(high, "\n")[1]
+	lowAt := strings.IndexRune(lowLine, '┃')
+	highAt := strings.IndexRune(highLine, '┃')
+	if highAt <= lowAt {
+		t.Fatalf("thumb did not move right: low=%d high=%d\n%s\n%s", lowAt, highAt, low, high)
 	}
 }

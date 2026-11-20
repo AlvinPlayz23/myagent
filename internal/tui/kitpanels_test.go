@@ -76,11 +76,12 @@ func TestKitPanelKindPrecedence(t *testing.T) {
 func TestKitPanelProjections(t *testing.T) {
 	t.Run("effort", func(t *testing.T) {
 		m := newPanelModel()
+		m.modelID = "test-model"
 		m.runner = newRunner(agent.Config{Effort: llm.EffortHigh}, newMsgQueue(), nil)
 		m.effort.open(llm.EffortHigh)
 		state, ok := m.KitPicker()
-		if !ok || state.Kind != "effort" || state.Mode != KitPickerList {
-			t.Fatalf("state = %+v ok=%v, want effort/list", state, ok)
+		if !ok || state.Kind != "effort" || state.Mode != KitPickerSlider {
+			t.Fatalf("state = %+v ok=%v, want effort/slider", state, ok)
 		}
 		if len(state.Items) != len(effortChoices) || state.SelectedID != "4" {
 			t.Fatalf("items/selected = %d/%q, want %d/4", len(state.Items), state.SelectedID, len(effortChoices))

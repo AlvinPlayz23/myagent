@@ -3,7 +3,6 @@ package kit
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -220,7 +219,7 @@ func TestTodoBlockStatesAndOverflow(t *testing.T) {
 	}
 }
 
-func TestComposerFooterStateAndSpinner(t *testing.T) {
+func TestComposerFooterStateAndLoadingWave(t *testing.T) {
 	f := NewComposerFooter(ComposerFooterOpts{ID: "footer", Animations: true})
 	if f.Any() {
 		t.Fatal("empty footer should not claim a row")
@@ -235,22 +234,25 @@ func TestComposerFooterStateAndSpinner(t *testing.T) {
 		t.Fatal("busy footer should claim a row")
 	}
 	plain := ansi.Strip(f.Render(40, 1))
-	if !strings.Contains(plain, OneCellStillGlyph) {
-		t.Fatalf("footer = %q, want spinner cell", plain)
+	if !strings.Contains(plain, LoadingWaveGlyph) {
+		t.Fatalf("footer = %q, want loading comet", plain)
 	}
 	if !strings.Contains(plain, "~/src/myagent") || !strings.Contains(plain, "main.go") {
 		t.Fatalf("footer = %q, want cwd and file chip", plain)
 	}
 
-	if !f.Advance(40 * time.Millisecond) {
-		t.Fatal("busy spinner did not advance")
+	if !f.Advance(LoadingWaveInterval) {
+		t.Fatal("busy loading wave did not advance")
 	}
 	if f.Advance(0) {
 		t.Fatal("zero-duration advance reported a painted change")
 	}
 	f.SetAnimations(false)
-	if f.Advance(40 * time.Millisecond) {
-		t.Fatal("disabled spinner still advanced")
+	if f.Advance(LoadingWaveInterval) {
+		t.Fatal("disabled loading wave still advanced")
+	}
+	if got := ansi.Strip(f.Render(40, 1)); !strings.Contains(got, OneCellStillGlyph) {
+		t.Fatalf("still footer = %q, want the ▪ fallback", got)
 	}
 
 	f.SetState(false, "", "", false, "ctrl+j newline")
